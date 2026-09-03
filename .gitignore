@@ -216,3 +216,39 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific credentials and runtime artifacts
+.env.*
+!.env.example
+*.pem
+*.key
+.secrets/
+credentials.json
+credentials-*.json
+token.txt
+secret.txt
+output/
+projects/*/.fanglei/cache/
+projects/*/.fanglei/failed/
+*.tmp
+*.temp
+
+# Audio, video, subtitles, and rendered visual intermediates
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.mov
+*.avi
+*.mkv
+*.webm
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.srt
+*.ass
+!assets/.gitkeep
