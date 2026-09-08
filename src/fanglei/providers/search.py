@@ -89,5 +89,5 @@ class TavilySearchProvider:
                 if isinstance(item, dict) and item.get("url")
             ]
         except Exception as error:
-            raise ProviderError(f"Tavily search failed (retryable): {error}") from error
+            raise ProviderError(f"Tavily search failed (retryable): {error}") from None
         return SearchResponse(query=request.query, provider=self.name, results=results)

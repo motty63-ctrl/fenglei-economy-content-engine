@@ -93,6 +93,21 @@ def test_fetch_network_failure_resumes_without_repeating_search(tmp_path: Path) 
     assert recovered["stages"]["source_fetch"]["attempts"] == 2
 
 
+def test_source_fetch_records_one_bad_url_and_keeps_successful_pages(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+
+    class PartiallyBrokenFetcher(FakeFetcher):
+        def fetch(self, source_id, url, title):
+            if "source1.example" in url:
+                raise RuntimeError("HTTP 404")
+            return super().fetch(source_id, url, title)
+
+    run_v02_pipeline(run.name, tmp_path, FakeSearch(), PartiallyBrokenFetcher(), stop_after="source_fetch")
+    index = json.loads((run / "source_documents" / "index.json").read_text(encoding="utf-8"))
+    assert len(index["documents"]) == 2
+    assert index["fetch_errors"][0]["url"] == "https://source1.example/data"
+
+
 def test_force_upstream_stage_rebuilds_stale_descendants(tmp_path: Path) -> None:
     run = _analyzed_run(tmp_path)
     class ChangingSearch(FakeSearch):
@@ -143,3 +158,32 @@ def test_insufficient_run_sources_never_verify_high_risk_claim(tmp_path: Path) -
     run_v02_pipeline(run.name, tmp_path, TwoSearch(), FakeFetcher())
     facts = json.loads((run / "facts.json").read_text(encoding="utf-8"))
     assert all(c["verification_status"] == "unverified" for c in facts["claims"])
+
+
+def test_search_query_includes_verification_claim_and_named_authorities(tmp_path: Path) -> None:
+    run = ingest_text(
+        "2024 US Real GDP Growth\nWhat was the rate, and do BEA, World Bank, IMF, and OECD data agree?",
+        tmp_path,
+    )
+    analyze_run(run.name, tmp_path, MockAnalysisProvider())
+
+    class CapturingSearch:
+        name = "capture"
+        def __init__(self):
+            self.requests = []
+        def search(self, request):
+            self.requests.append(request)
+            return SearchResponse(request.query, self.name, [])
+
+    provider = CapturingSearch()
+    run_v02_pipeline(run.name, tmp_path, provider, FakeFetcher(), stop_after="search")
+    assert all("2024 US Real GDP Growth" in request.query for request in provider.requests)
+    assert all("annual real GDP growth rate" in request.query for request in provider.requests)
+    assert all("The research question is:" not in request.query for request in provider.requests)
+    bea_request = next(request for request in provider.requests if request.include_domains == ["bea.gov"])
+    world_bank_request = next(request for request in provider.requests if request.include_domains == ["data.worldbank.org"])
+    assert "fourth quarter and year 2024" in bea_request.query
+    assert "GDP growth (annual %)" in world_bank_request.query
+    assert {tuple(request.include_domains) for request in provider.requests} == {
+        ("bea.gov",), ("data.worldbank.org",), ("imf.org",), ("oecd.org",)
+    }

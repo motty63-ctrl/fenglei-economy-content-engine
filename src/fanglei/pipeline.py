@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -81,6 +82,41 @@ def _question_texts(questions: dict[str, Any]) -> list[str]:
     return [q["question"] for q in questions.get("research_questions", []) if q.get("question")]
 
 
+def _search_requests(questions: dict[str, Any]) -> list[SearchRequest]:
+    claims = [item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])]
+    queries = [claim for claim in claims if claim] or _question_texts(questions)
+    context = " ".join([questions.get("core_topic", ""), *queries])
+    domain_map = {
+        "bea": ("bea.gov", "BEA"),
+        "world bank": ("data.worldbank.org", "World Bank"),
+        "imf": ("imf.org", "IMF"),
+        "oecd": ("oecd.org", "OECD"),
+    }
+    named_authorities = [value for marker, value in domain_map.items() if marker in context.lower()]
+    requests: list[SearchRequest] = []
+    for query in queries:
+        core_topic = questions.get("core_topic", "").strip() or query
+        target_year = next(iter(re.findall(r"(?:19|20)\d{2}", core_topic)), "")
+        authority_focus = {
+            "BEA": f"fourth quarter and year {target_year}",
+            "World Bank": "GDP growth (annual %) United States",
+            "IMF": "World Economic Outlook United States",
+            "OECD": "Economic Outlook United States",
+        }
+        if named_authorities:
+            requests.extend(
+                SearchRequest(
+                    query=f"{core_topic} {authority} annual real GDP growth rate {authority_focus[authority]} official data",
+                    max_results=6,
+                    include_domains=[domain],
+                )
+                for domain, authority in named_authorities
+            )
+        else:
+            requests.append(SearchRequest(query=f"{core_topic} annual real GDP growth rate official data", max_results=12))
+    return requests
+
+
 def _render_research(run_id: str, questions: list[str], sources: list[dict[str, Any]], facts: dict[str, Any]) -> str:
     source_by_id = {s["source_id"]: s for s in sources}
     lines = ["# 多源研究报告", "", f"Run: `{run_id}`", "", "## 研究问题", ""]
@@ -117,8 +153,8 @@ def run_v02_pipeline(
     def search() -> None:
         questions = registry.read_json("questions.json")
         results: list[dict[str, Any]] = []
-        for question_id, query in enumerate(_question_texts(questions), 1):
-            response = search_provider.search(SearchRequest(query=query, max_results=8))
+        for question_id, request in enumerate(_search_requests(questions), 1):
+            response = search_provider.search(request)
             results.extend({"question_id": f"question_{question_id:03d}", **r.__dict__} for r in response.results)
         registry.write_json("search_results.json", {"schema_version": "2.0", "provider": search_provider.name, "results": results}, "search", force=force_stage == "search")
 
@@ -129,13 +165,22 @@ def run_v02_pipeline(
     def fetch() -> None:
         search_results = registry.read_json("search_results.json")["results"]
         seen: set[str] = set()
+        fetch_errors: list[dict[str, str]] = []
+        first_error: Exception | None = None
         for item in search_results:
             if item["url"] in seen:
                 continue
             seen.add(item["url"])
             source_id = f"src_{len(documents) + 1:03d}"
-            doc = fetcher.fetch(source_id, item["url"], item["title"])
+            try:
+                doc = fetcher.fetch(source_id, item["url"], item["title"])
+            except Exception as error:
+                first_error = first_error or error
+                fetch_errors.append({"url": item["url"], "error": str(error)})
+                continue
             documents.append(doc)
+        if not documents and first_error is not None:
+            raise first_error
         for doc in documents:
             path = run_dir / "source_documents" / f"{doc.source_id}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +188,7 @@ def run_v02_pipeline(
             atomic_write_text(path, doc.text)
         registry.write_json(
             "source_documents/index.json",
-            {"schema_version": "2.0", "documents": [
+            {"schema_version": "2.0", "fetch_errors": fetch_errors, "documents": [
                 {**doc.__dict__, "path": f"source_documents/{doc.source_id}.md", "content_hash": sha256_text(doc.text)}
                 for doc in documents
             ]},

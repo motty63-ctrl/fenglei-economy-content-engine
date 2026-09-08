@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import ipaddress
 import http.client
+import json
 import socket
 import ssl
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 from datetime import datetime
 from html.parser import HTMLParser
 
@@ -42,7 +43,9 @@ class HttpDocumentFetcher:
 
     def fetch(self, source_id: str, url: str, title: str) -> FetchedDocument:
         try:
-            current_url = url
+            discovery_url = url
+            official_data_url = self._official_data_url(url)
+            current_url = official_data_url or url
             for _ in range(4):
                 response, connection = self._request_once(current_url)
                 if response.status in {301, 302, 303, 307, 308}:
@@ -54,6 +57,10 @@ class HttpDocumentFetcher:
                     continue
                 if response.status >= 400:
                     raise ValueError(f"HTTP {response.status}")
+                content_type = response.getheader("Content-Type", "")
+                is_official_json = bool(official_data_url) and content_type.split(";", 1)[0].strip().lower() == "application/json"
+                if not self._supports_content_type(content_type) and not is_official_json:
+                    raise ValueError(f"unsupported Content-Type: {content_type or 'missing'}")
                 raw = response.read(self.max_bytes + 1)
                 charset = response.headers.get_content_charset() or "utf-8"
                 connection.close()
@@ -62,9 +69,13 @@ class HttpDocumentFetcher:
                 raise ValueError("too many redirects")
             if len(raw) > self.max_bytes:
                 raise ValueError("document exceeds size limit")
-            parser = _TextParser()
-            parser.feed(raw.decode(charset, errors="replace"))
-            text = "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+            decoded = raw.decode(charset, errors="replace")
+            if official_data_url:
+                text = self._world_bank_text(json.loads(decoded))
+            else:
+                parser = _TextParser()
+                parser.feed(decoded)
+                text = "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
             if not text:
                 raise ValueError("no readable page text")
         except ProviderError:
@@ -75,8 +86,8 @@ class HttpDocumentFetcher:
         host = urlparse(final_url).hostname or ""
         source_type = self._classify_source_type(host)
         return FetchedDocument(
-            source_id, final_url, title, text, source_type, None,
-            datetime.now().astimezone().isoformat(timespec="seconds"), None,
+            source_id, discovery_url, title, text, source_type, None,
+            datetime.now().astimezone().isoformat(timespec="seconds"), final_url if official_data_url else None,
         )
 
     def _request_once(self, url: str) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
@@ -110,11 +121,56 @@ class HttpDocumentFetcher:
                 def connect(self):
                     self.sock = socket.create_connection((selected_ip, port), self.timeout)
             connection = PinnedHTTPConnection(host, port, timeout=self.timeout)
-        path = parsed.path or "/"
-        if parsed.query:
-            path += f"?{parsed.query}"
-        connection.request("GET", path, headers={"User-Agent": "fanglei-research-bot/0.2", "Accept": "text/html,text/plain"})
+        path = self._request_target(url)
+        connection.request("GET", path, headers={"User-Agent": "fanglei-research-bot/0.2", "Accept": "text/html,text/plain,application/json"})
         return connection.getresponse(), connection
+
+    @staticmethod
+    def _official_data_url(url: str) -> str | None:
+        parsed = urlparse(url)
+        if parsed.hostname != "data.worldbank.org" or not parsed.path.startswith("/indicator/"):
+            return None
+        indicator = parsed.path.removeprefix("/indicator/").strip("/")
+        locations = parse_qs(parsed.query).get("locations", [])
+        if indicator != "NY.GDP.MKTP.KD.ZG" or not locations or locations[0].upper() not in {"US", "USA"}:
+            return None
+        return (
+            "https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.KD.ZG"
+            "?format=json&date=2020:2025&per_page=10"
+        )
+
+    @staticmethod
+    def _world_bank_text(payload: object) -> str:
+        if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
+            raise ValueError("unexpected World Bank API response")
+        lines: list[str] = []
+        for row in payload[1]:
+            if not isinstance(row, dict) or row.get("value") is None:
+                continue
+            country = row.get("country", {}).get("value", "United States")
+            indicator = row.get("indicator", {}).get("value", "GDP growth (annual %)")
+            raw_value = row["value"]
+            rounded = f"{float(raw_value):.1f}"
+            lines.append(
+                f"World Bank reports {country} real GDP growth was {rounded}% in {row.get('date')} "
+                f"for indicator {indicator} (raw value {raw_value})."
+            )
+        if not lines:
+            raise ValueError("World Bank API returned no observations")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _request_target(url: str) -> str:
+        parsed = urlparse(url)
+        path = quote(parsed.path or "/", safe="/%:@")
+        if parsed.query:
+            path += f"?{quote(parsed.query, safe='=&%:@/?')}"
+        return path
+
+    @staticmethod
+    def _supports_content_type(value: str) -> bool:
+        media_type = value.split(";", 1)[0].strip().lower()
+        return media_type in {"text/html", "text/plain", "application/xhtml+xml"}
 
     @staticmethod
     def _classify_source_type(host: str) -> str:

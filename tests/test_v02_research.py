@@ -28,8 +28,10 @@ def test_tavily_network_failure_is_retryable_and_does_not_write_artifacts() -> N
     def fail(_payload):
         raise OSError("offline")
 
-    with pytest.raises(ProviderError, match="retryable"):
+    with pytest.raises(ProviderError, match="retryable") as captured:
         TavilySearchProvider(api_key="x", transport=fail).search(SearchRequest(query="GDP"))
+    assert captured.value.__suppress_context__ is True
+    assert captured.value.__cause__ is None
 
 
 def test_republication_and_uncertain_origin_are_not_independent() -> None:
@@ -52,6 +54,22 @@ def test_same_institution_pages_count_once() -> None:
     ]
     selected = deduplicate_sources(docs)
     assert sum(row["counts_as_independent"] for row in selected) == 1
+
+
+def test_same_institution_subdomains_count_once() -> None:
+    docs = [
+        FetchedDocument(
+            "a", "https://data.worldbank.org/indicator/x", "Data page", "GDP 2.8%",
+            "international_organization", None, "now", "https://api.worldbank.org/v2/data/x",
+        ),
+        FetchedDocument(
+            "b", "https://data.worldbank.org/country/us", "Country page", "GDP data table",
+            "international_organization", None, "now", None,
+        ),
+    ]
+    selected = deduplicate_sources(docs)
+    assert sum(row["counts_as_independent"] for row in selected) == 1
+    assert selected[0]["independence_key"] == selected[1]["independence_key"]
 
 
 def test_identical_authoritative_copies_count_once_across_domains() -> None:
@@ -78,6 +96,46 @@ def test_evidence_points_to_declared_original_url() -> None:
     )
     evidence = RuleBasedEvidenceExtractor().extract([doc], ["GDP增长是多少？"])
     assert evidence[0]["original_url"] == "https://publisher.example/original"
+
+
+def test_extractor_rejects_numeric_noise_and_bare_metric_names() -> None:
+    doc = FetchedDocument(
+        "a", "https://a.gov/x", "A", "Contact 301-278-9003.\nGDP\n%PDF-1.5 320 0 obj\nReal GDP increased 2.8 percent in 2024.",
+        "official", None, "now", None,
+    )
+    evidence = RuleBasedEvidenceExtractor().extract([doc], ["What was US real GDP growth in 2024?"])
+    assert [item["evidence_text"] for item in evidence] == ["Real GDP increased 2.8 percent in 2024."]
+
+
+def test_annual_real_gdp_wording_variants_share_claim_key() -> None:
+    docs = [
+        FetchedDocument("a", "https://a.gov/x", "A", "Real GDP increased 2.8 percent in 2024.", "official", None, "now", None),
+        FetchedDocument("b", "https://b.org/x", "B", "United States real GDP growth was 2.8% in 2024.", "international_organization", None, "now", None),
+    ]
+    evidence = RuleBasedEvidenceExtractor().extract(docs, ["What was US real GDP growth in 2024?"])
+    facts = verify_claims(evidence, {"a": True, "b": True})
+    assert len(facts["claims"]) == 1
+    assert facts["claims"][0]["verification_status"] == "verified"
+
+
+def test_comparative_annual_sentence_extracts_target_year_claim() -> None:
+    doc = FetchedDocument(
+        "a",
+        "https://bea.gov/x",
+        "A",
+        "Real GDP increased 2.2 percent in 2025, compared with an increase of 2.8 percent in 2024.",
+        "official",
+        None,
+        "now",
+        None,
+    )
+    evidence = RuleBasedEvidenceExtractor().extract([doc], ["What was US real GDP growth in 2024?"])
+    target = [item for item in evidence if item.get("claim_key") == "us|annual_real_gdp_growth|2024"]
+    assert len(target) == 1
+    assert target[0]["claim_values"] == ["2.8"]
+    facts = verify_claims(target, {"a": True})
+    assert facts["claims"][0]["claim_text"] == "United States real GDP grew 2.8% in 2024."
+    assert facts["claims"][0]["evidence"][0]["evidence_text"].startswith("Real GDP increased 2.2 percent")
 
 
 def test_fact_claim_contains_evidence_level_traceability() -> None:
