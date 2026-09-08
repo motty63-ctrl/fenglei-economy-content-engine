@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fanglei-economy-content-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "Artifact-first CLI for economic explainer research workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,3 +27,4 @@ packages = ["src/fanglei"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = ["integration: requires real external provider credentials and network"]

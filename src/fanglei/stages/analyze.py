@@ -40,7 +40,7 @@ def _fingerprint(source_document: str, provider: AnalysisProvider) -> str:
 def _outputs_match(run_dir: Path, output_hashes: str | dict[str, str] | None) -> bool:
     if not isinstance(output_hashes, dict):
         return False
-    for name in ("questions.json", "research.md"):
+    for name in ("questions.json",):
         path = run_dir / name
         if not path.is_file():
             return False
@@ -54,7 +54,7 @@ def _outputs_match(run_dir: Path, output_hashes: str | dict[str, str] | None) ->
 
 
 def _snapshot_outputs(run_dir: Path, attempt: int) -> None:
-    existing = [run_dir / name for name in ("questions.json", "research.md") if (run_dir / name).is_file()]
+    existing = [run_dir / name for name in ("questions.json",) if (run_dir / name).is_file()]
     if not existing:
         return
     history_root = run_dir / ".history" / "analyze"
@@ -202,9 +202,7 @@ def analyze_run(
             **result.model_dump(mode="json"),
             "generated_at": generated_at,
         }
-        research = _render_research(result)
         atomic_write_json(run_dir / "questions.json", questions)
-        atomic_write_text(run_dir / "research.md", research)
     except ArtifactConflictError as error:
         failed_at = _now()
         manifest.status = "failed"
@@ -241,7 +239,7 @@ def analyze_run(
     finished_at = _now()
     output_hashes = {
         name: sha256_text((run_dir / name).read_text(encoding="utf-8"))
-        for name in ("questions.json", "research.md")
+        for name in ("questions.json",)
     }
     manifest.status = "analyzed"
     manifest.updated_at = finished_at

@@ -28,7 +28,7 @@ def test_cli_ingest_file_then_analyze(tmp_path: Path) -> None:
     run_dir = runs_dir / run_id
     assert (run_dir / "source.md").is_file()
     assert (run_dir / "questions.json").is_file()
-    assert (run_dir / "research.md").is_file()
+    assert not (run_dir / "research.md").exists()
     assert (run_dir / "run.json").is_file()
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["status"] == "analyzed"
 
@@ -90,3 +90,13 @@ def test_cli_reports_corrupt_manifest_with_stable_exit_code(tmp_path: Path) -> N
 
     assert analyze.exit_code == 6
     assert "run.json" in analyze.output
+
+
+def test_cli_research_with_mock_provider(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    ingest = runner.invoke(app, ["--runs-dir", str(runs_dir), "ingest", "--text", "GDP增长5.0%。"])
+    run_id = _run_id(ingest.output)
+    assert runner.invoke(app, ["--runs-dir", str(runs_dir), "analyze", run_id]).exit_code == 0
+    result = runner.invoke(app, ["--runs-dir", str(runs_dir), "research", run_id, "--provider", "mock"])
+    assert result.exit_code == 0, result.output
+    assert (runs_dir / run_id / "facts.json").is_file()

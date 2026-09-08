@@ -8,6 +8,16 @@ from pydantic import BaseModel, Field
 
 
 StageStatus = Literal["pending", "running", "succeeded", "failed", "stale"]
+ArtifactStatus = Literal["missing", "valid", "stale", "failed"]
+
+
+class ArtifactState(BaseModel):
+    owner: str
+    status: ArtifactStatus = "missing"
+    content_hash: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    dependencies: dict[str, str] = Field(default_factory=dict)
 
 
 class StageError(BaseModel):
@@ -34,7 +44,7 @@ class InputInfo(BaseModel):
 
 
 class RunManifest(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
     run_id: str
     created_at: str
     updated_at: str
@@ -46,6 +56,7 @@ class RunManifest(BaseModel):
             "analyze": StageState(),
         }
     )
+    artifacts: dict[str, ArtifactState] = Field(default_factory=dict)
 
 
 class ProviderInfo(BaseModel):

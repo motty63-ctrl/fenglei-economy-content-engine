@@ -21,13 +21,12 @@ def _create_run(tmp_path: Path) -> tuple[Path, Path]:
     return runs_dir, run_dir
 
 
-def test_analyze_writes_structured_questions_and_research(tmp_path: Path) -> None:
+def test_analyze_writes_structured_questions_only(tmp_path: Path) -> None:
     runs_dir, run_dir = _create_run(tmp_path)
 
     analyze_run(run_dir.name, runs_dir, MockAnalysisProvider())
 
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
-    research = (run_dir / "research.md").read_text(encoding="utf-8")
     manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert questions["core_topic"] == "Interest Rates and Households"
     assert questions["key_facts"]
@@ -35,10 +34,7 @@ def test_analyze_writes_structured_questions_and_research(tmp_path: Path) -> Non
     assert questions["claims_requiring_external_verification"]
     assert questions["research_questions"]
     assert questions["single_source_dependency_risks"]
-    assert "## 研究问题 1：" in research
-    assert "未进行外部事实核查" in research
-    repeated_clue = "- The author argues that lower rates improve household cash flow."
-    assert research.count(repeated_clue) == len(questions["research_questions"])
+    assert not (run_dir / "research.md").exists()
     assert manifest["status"] == "analyzed"
     assert manifest["stages"]["analyze"]["status"] == "succeeded"
 
@@ -48,13 +44,12 @@ def test_analyze_reuses_valid_outputs_without_rewriting(tmp_path: Path) -> None:
     provider = MockAnalysisProvider()
     analyze_run(run_dir.name, runs_dir, provider)
     first_questions = (run_dir / "questions.json").read_bytes()
-    first_research = (run_dir / "research.md").read_bytes()
     first_manifest = (run_dir / "run.json").read_bytes()
 
     analyze_run(run_dir.name, runs_dir, provider)
 
     assert (run_dir / "questions.json").read_bytes() == first_questions
-    assert (run_dir / "research.md").read_bytes() == first_research
+    assert not (run_dir / "research.md").exists()
     assert (run_dir / "run.json").read_bytes() == first_manifest
 
 
@@ -68,7 +63,7 @@ def test_force_analyze_snapshots_previous_outputs(tmp_path: Path) -> None:
     snapshots = list((run_dir / ".history" / "analyze").glob("*"))
     assert len(snapshots) == 1
     assert (snapshots[0] / "questions.json").is_file()
-    assert (snapshots[0] / "research.md").is_file()
+    assert not (snapshots[0] / "research.md").exists()
 
 
 def test_analyze_rejects_unsafe_or_missing_run_ids(tmp_path: Path) -> None:
@@ -82,7 +77,7 @@ def test_modified_output_requires_force(tmp_path: Path) -> None:
     runs_dir, run_dir = _create_run(tmp_path)
     provider = MockAnalysisProvider()
     analyze_run(run_dir.name, runs_dir, provider)
-    (run_dir / "research.md").write_text("manual edit", encoding="utf-8")
+    (run_dir / "questions.json").write_text("manual edit", encoding="utf-8")
 
     with pytest.raises(ArtifactConflictError):
         analyze_run(run_dir.name, runs_dir, provider)

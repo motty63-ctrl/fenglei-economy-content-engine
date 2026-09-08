@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,10 @@ from fanglei.errors import FangleiError
 from fanglei.providers.mock import MockAnalysisProvider
 from fanglei.stages.analyze import analyze_run
 from fanglei.stages.ingest import ingest_file, ingest_text
+from fanglei.pipeline import run_v02_pipeline
+from fanglei.providers.http_fetch import HttpDocumentFetcher
+from fanglei.providers.search import TavilySearchProvider
+from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvider
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -74,4 +79,44 @@ def analyze_command(
     else:
         typer.echo(f"Analyzed run: {run_id}")
     typer.echo(f"Artifact: {run_dir / 'questions.json'}")
-    typer.echo(f"Artifact: {run_dir / 'research.md'}")
+
+
+@app.command("research")
+def research_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Existing analyzed run ID.")],
+    stop_after: Annotated[
+        str | None,
+        typer.Option("--stop-after", help="Stop after search, source_fetch, source_selection, factcheck, or research_synthesis."),
+    ] = None,
+    force_stage: Annotated[
+        str | None,
+        typer.Option("--force-stage", help="Explicitly rerun one owner stage and invalidate descendants."),
+    ] = None,
+    provider_name: Annotated[str, typer.Option("--provider", help="tavily (default) or mock.")] = "tavily",
+) -> None:
+    stages = {"search", "source_fetch", "source_selection", "factcheck", "research_synthesis"}
+    if stop_after is not None and stop_after not in stages:
+        typer.echo("Error: invalid --stop-after stage", err=True)
+        raise typer.Exit(code=2)
+    if force_stage is not None and force_stage not in stages:
+        typer.echo("Error: invalid --force-stage stage", err=True)
+        raise typer.Exit(code=2)
+    if provider_name not in {"tavily", "mock"}:
+        typer.echo("Error: --provider must be tavily or mock", err=True)
+        raise typer.Exit(code=2)
+    try:
+        provider = MockSearchProvider() if provider_name == "mock" else TavilySearchProvider(os.environ.get("TAVILY_API_KEY", ""))
+        fetcher = MockDocumentFetcher() if provider_name == "mock" else HttpDocumentFetcher()
+        run_dir = run_v02_pipeline(
+            run_id,
+            ctx.obj["runs_dir"],
+            provider,
+            fetcher,
+            stop_after=stop_after,
+            force_stage=force_stage,
+        )
+    except FangleiError as error:
+        _fail(error)
+    typer.echo(f"Research pipeline current: {run_id}")
+    typer.echo(f"Run directory: {run_dir.resolve()}")
