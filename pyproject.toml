@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fanglei-economy-content-engine"
+version = "0.1.0"
+description = "Artifact-first CLI for economic explainer research workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.8,<3",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+]
+
+[project.scripts]
+fanglei = "fanglei.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fanglei"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

@@ -228,6 +228,7 @@ credentials-*.json
 token.txt
 secret.txt
 output/
+runs/
 projects/*/.fanglei/cache/
 projects/*/.fanglei/failed/
 *.tmp
