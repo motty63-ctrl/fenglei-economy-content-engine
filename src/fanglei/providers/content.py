@@ -1,4 +1,5 @@
 """Provider boundary and deterministic V0.3 mock."""
+import re
 from typing import Protocol
 from pydantic import BaseModel
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
@@ -34,6 +35,18 @@ class MockContentPlanningProvider:
     angle_prompt_version = "angles-v1"
     script_prompt_version = "script-v1"
 
+    @staticmethod
+    def _spoken_fact(claim_text: str) -> str:
+        match = re.search(
+            r"United States real GDP grew\s+(\d+(?:\.\d+)?)%\s+in\s+((?:19|20)\d{2})",
+            claim_text,
+            re.I,
+        )
+        if match:
+            value, year = match.groups()
+            return f"美国{year}年实际GDP增长{value}%。"
+        return claim_text
+
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
         claim_id = request.fact_palette[0].claim_id
         rows = [
@@ -51,7 +64,7 @@ class MockContentPlanningProvider:
         claim = request.fact_palette[0]
         texts = [
             ("hook", "interpretation", "同一个增长率，为什么会出现两种写法？"),
-            ("phenomenon", "verified_fact", claim.claim_text),
+            ("phenomenon", "verified_fact", self._spoken_fact(claim.claim_text)),
             ("mechanism", "explanation", "先别急着判断谁对谁错，第一步是把指标、年份和计算范围对齐。"),
             ("mechanism", "explanation", "如果这些条件相同，差别往往只是结果展示时保留了几位小数。"),
             ("mechanism", "analogy", "这就像同一段距离，一个人说大约三公里，另一个人写到具体米数。"),

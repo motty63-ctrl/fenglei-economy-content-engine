@@ -22,10 +22,11 @@ def _prepared_run(tmp_path: Path) -> Path:
     _write_json(registry, "source_documents/index.json", {"documents": []}, "source_fetch")
     _write_json(registry, "sources.json", {"sources": []}, "source_selection")
     _write_json(registry, "facts.json", {"claims": [{
-        "claim_id": "claim_007", "claim_text": "美国2024年实际GDP增长2.8%", "claim_type": "fact",
+        "claim_id": "claim_007", "claim_text": "United States real GDP grew 2.8% in 2024.", "claim_type": "fact",
         "verification_status": "verified", "allowed_downstream": True,
         "source_ids": ["bea", "worldbank", "oecd"],
-        "evidence": [{"source_id": "worldbank", "evidence_eligible": True, "observation": 2.7938}],
+        "evidence": [{"source_id": "worldbank", "original_url": "https://api.worldbank.test/data",
+                      "evidence_eligible": True, "observation": 2.7938}],
     }]}, "factcheck")
     registry.write_text("research.md", "# 研究\n两个值来自相同年度指标，显示精度不同。", "research_synthesis")
     registry.save_manifest()
@@ -44,6 +45,7 @@ def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: 
     assert script["speaking_rate_chars_per_second"] == 4.0
     assert 60 <= script["estimated_duration_seconds"] <= 90
     assert script["sentences"][1]["claim_ids"] == ["claim_007"]
+    assert script["sentences"][1]["text"] == "美国2024年实际GDP增长2.8%。"
     spoken = (run / "script.md").read_text(encoding="utf-8")
     assert "claim_" not in spoken and "sentence_" not in spoken
     assert manifest_status(run, "script.md") == "valid"

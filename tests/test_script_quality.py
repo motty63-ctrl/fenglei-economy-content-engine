@@ -13,7 +13,9 @@ def _angle() -> AngleCandidate:
 def _facts() -> dict:
     return {"claims": [{"claim_id": "claim_007", "claim_text": "美国2024年实际GDP增长2.8%",
         "claim_type": "fact", "verification_status": "verified", "allowed_downstream": True,
-        "evidence": [{"evidence_eligible": True, "evidence_text": "2024 real GDP grew 2.8 percent", "observation": 2.7938}]}]}
+        "source_ids": ["src_1"],
+        "evidence": [{"evidence_eligible": True, "evidence_text": "2024 real GDP grew 2.8 percent",
+                      "source_id": "src_1", "original_url": "https://example.test/data", "observation": 2.7938}]}]}
 
 
 def _draft(extra: str = "") -> ScriptDraft:
@@ -48,3 +50,94 @@ def test_unsupported_number_and_bad_rate_fail_quality_gate() -> None:
     assert result.passed is False
     assert "UNDECLARED_FACT" in {issue.code for issue in result.issues}
     assert lint_script(_draft(), _angle(), _facts(), "原文", speaking_rate=2.0).passed is False
+
+
+def test_originality_gate_excludes_traceable_verified_fact_wording() -> None:
+    result = lint_script(_draft(), _angle(), _facts(), "美国2024年实际GDP增长2.8%", speaking_rate=4.0)
+    assert "SOURCE_REUSE" not in {issue.code for issue in result.issues}
+
+
+def test_originality_gate_still_blocks_distinctive_copy_inside_verified_fact() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "美国2024年实际GDP增长2.8%，这串数字像一面照进普通人钱包冷暖的镜子。"
+    source = "美国2024年实际GDP增长2.8%，这串数字像一面照进普通人钱包冷暖的镜子。"
+    result = lint_script(draft, _angle(), _facts(), source, speaking_rate=4.0)
+    assert "SOURCE_REUSE" in {issue.code for issue in result.issues}
+
+
+def test_verified_fact_requires_evidence_source_and_original_url() -> None:
+    facts = _facts()
+    del facts["claims"][0]["evidence"][0]["original_url"]
+    result = lint_script(_draft(), _angle(), facts, "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_claim_number_match_uses_whole_values_not_substrings() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "美国2024年实际GDP增长8%。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_verified_fact_entities_must_be_supported_by_bound_claim() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "IMF称中国2024年通胀率为2.8%。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_evidence_source_must_belong_to_claim_sources() -> None:
+    facts = _facts()
+    facts["claims"][0]["evidence"][0]["source_id"] = "src_other"
+    result = lint_script(_draft(), _angle(), facts, "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_verified_fact_preserves_direction_sign_and_unit() -> None:
+    for text in ("美国2024年实际GDP下降2.8%。", "美国2024年实际GDP增长-2.8%。",
+                 "美国2024年实际GDP增长2.8个百分点。"):
+        draft = _draft()
+        draft.sentences[1].text = text
+        result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+        assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_unregistered_institution_country_and_metric_fail_closed() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "美联储称加拿大就业增长2.8%。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_currency_units_and_magnitudes_are_not_interchangeable() -> None:
+    facts = _facts()
+    facts["claims"][0]["claim_text"] = "金额为2.8元"
+    facts["claims"][0]["evidence"][0]["evidence_text"] = "金额为2.8元"
+    draft = _draft()
+    draft.sentences[1].text = "金额为2.8万亿美元。"
+    result = lint_script(draft, _angle(), facts, "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_values_cannot_be_swapped_between_bound_claims() -> None:
+    facts = {"claims": [
+        {"claim_id": "claim_007", "claim_text": "BEA reports growth of 2.8%", "claim_type": "fact",
+         "verification_status": "verified", "allowed_downstream": True, "source_ids": ["bea"],
+         "evidence": [{"source_id": "bea", "original_url": "https://bea.test", "evidence_text": "BEA 2.8%", "evidence_eligible": True}]},
+        {"claim_id": "claim_008", "claim_text": "World Bank reports growth of 2.7938%", "claim_type": "fact",
+         "verification_status": "verified", "allowed_downstream": True, "source_ids": ["wb"],
+         "evidence": [{"source_id": "wb", "original_url": "https://wb.test", "evidence_text": "World Bank 2.7938%", "evidence_eligible": True}]},
+    ]}
+    draft = _draft()
+    draft.sentences[1].claim_ids = ["claim_007", "claim_008"]
+    draft.sentences[1].text = "BEA显示增长2.7938%，世界银行显示增长2.8%。"
+    result = lint_script(draft, _angle(), facts, "完全不同的原始文章", speaking_rate=4.0)
+    assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
+
+
+def test_unknown_country_metric_and_title_case_institution_fail_closed() -> None:
+    for text in ("德国工资增长2.8%。", "European Central Bank said Brazil wages rose 2.8%."):
+        draft = _draft()
+        draft.sentences[1].text = text
+        result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+        assert "UNSUPPORTED_FACT" in {issue.code for issue in result.issues}
