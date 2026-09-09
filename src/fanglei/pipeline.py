@@ -13,6 +13,7 @@ from fanglei.artifacts import atomic_write_json, read_json, sha256_text
 from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
+from fanglei.providers.document import FetchContext
 from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims
 from fanglei.security import safe_error_message, sanitize_url
 
@@ -118,6 +119,18 @@ def _search_requests(questions: dict[str, Any]) -> list[SearchRequest]:
     return requests
 
 
+def _fetch_context(questions: dict[str, Any]) -> FetchContext:
+    text = " ".join([
+        questions.get("core_topic", ""),
+        *[item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])],
+        *_question_texts(questions),
+    ])
+    country = "USA" if re.search(r"\bUS\b|United States|美国", text, re.I) else None
+    years = tuple(sorted(set(re.findall(r"(?:19|20)\d{2}", text))))
+    indicators = ("real_gdp_growth",) if re.search(r"real\s+GDP|实际GDP|实际国内生产总值", text, re.I) else ()
+    return FetchContext(country=country, years=years, indicators=indicators, questions=tuple(_question_texts(questions)))
+
+
 def _render_research(run_id: str, questions: list[str], sources: list[dict[str, Any]], facts: dict[str, Any]) -> str:
     source_by_id = {s["source_id"]: s for s in sources}
     lines = ["# 多源研究报告", "", f"Run: `{run_id}`", "", "## 研究问题", ""]
@@ -164,6 +177,9 @@ def run_v02_pipeline(
 
     documents: list[FetchedDocument] = []
     def fetch() -> None:
+        questions = registry.read_json("questions.json")
+        if hasattr(fetcher, "with_context"):
+            fetcher.with_context(_fetch_context(questions))
         search_results = registry.read_json("search_results.json")["results"]
         seen: set[str] = set()
         fetch_errors: list[dict[str, str]] = []
@@ -187,12 +203,26 @@ def run_v02_pipeline(
             path.parent.mkdir(parents=True, exist_ok=True)
             from fanglei.artifacts import atomic_write_text
             atomic_write_text(path, doc.text)
+            if doc.raw_content is not None:
+                raw_path = run_dir / "source_documents" / "raw" / f"{doc.source_id}.json"
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(raw_path, doc.raw_content)
+        document_rows = []
+        for doc in documents:
+            row = {key: value for key, value in doc.__dict__.items() if key != "raw_content"}
+            row.update({"path": f"source_documents/{doc.source_id}.md", "content_hash": sha256_text(doc.text)})
+            files = [{"role": "normalized_text", "path": row["path"], "content_hash": row["content_hash"]}]
+            if doc.raw_content is not None:
+                files.append({
+                    "role": "raw_response",
+                    "path": f"source_documents/raw/{doc.source_id}.json",
+                    "content_hash": sha256_text(doc.raw_content),
+                })
+            row["files"] = files
+            document_rows.append(row)
         registry.write_json(
             "source_documents/index.json",
-            {"schema_version": "2.0", "fetch_errors": fetch_errors, "documents": [
-                {**doc.__dict__, "path": f"source_documents/{doc.source_id}.md", "content_hash": sha256_text(doc.text)}
-                for doc in documents
-            ]},
+            {"schema_version": "2.1", "fetch_errors": fetch_errors, "documents": document_rows},
             "source_fetch", force=force_stage == "source_fetch",
         )
 

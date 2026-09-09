@@ -14,6 +14,9 @@ from html.parser import HTMLParser
 from fanglei.errors import ProviderError
 from fanglei.research import FetchedDocument
 from fanglei.security import safe_error_message, sanitize_url
+from fanglei.artifacts import sha256_text
+from fanglei.providers.document import FetchContext
+from fanglei.providers.official import OfficialSourceRouter
 
 
 class _TextParser(HTMLParser):
@@ -41,11 +44,19 @@ class HttpDocumentFetcher:
     def __init__(self, timeout: int = 20, max_bytes: int = 2_000_000):
         self.timeout = timeout
         self.max_bytes = max_bytes
+        self.context: FetchContext | None = None
+        self.router = OfficialSourceRouter()
+
+    def with_context(self, context: FetchContext) -> "HttpDocumentFetcher":
+        self.context = context
+        return self
 
     def fetch(self, source_id: str, url: str, title: str) -> FetchedDocument:
         try:
             discovery_url = url
-            official_data_url = self._official_data_url(url)
+            plan = self.router.plan(url, self.context) if self.context else []
+            target = plan[0] if plan else None
+            official_data_url = target.url if target and target.method == "api" else None
             current_url = official_data_url or url
             for _ in range(4):
                 response, connection = self._request_once(current_url)
@@ -71,8 +82,16 @@ class HttpDocumentFetcher:
             if len(raw) > self.max_bytes:
                 raise ValueError("document exceeds size limit")
             decoded = raw.decode(charset, errors="replace")
-            if official_data_url:
-                text = self._world_bank_text(json.loads(decoded))
+            api_observations: list[dict[str, object]] = []
+            published_at = None
+            if official_data_url and target and target.adapter == "world_bank":
+                payload = json.loads(decoded)
+                text = self._world_bank_text(payload)
+                api_observations = self._world_bank_observations(payload)
+                if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                    published_at = payload[0].get("lastupdated")
+            elif official_data_url:
+                raise ValueError(f"API response normalizer unavailable for adapter {target.adapter if target else 'unknown'}")
             else:
                 parser = _TextParser()
                 parser.feed(decoded)
@@ -89,8 +108,17 @@ class HttpDocumentFetcher:
         host = urlparse(final_url).hostname or ""
         source_type = self._classify_source_type(host)
         return FetchedDocument(
-            source_id, discovery_url, title, text, source_type, None,
+            source_id, discovery_url, title, text, source_type, published_at,
             datetime.now().astimezone().isoformat(timespec="seconds"), final_url if official_data_url else None,
+            document_format="api" if official_data_url else "html",
+            retrieval_method="api" if official_data_url else "html",
+            evidence_eligible=True,
+            eligibility_reason="official_api_original_data" if official_data_url else "original_html",
+            document_hash=sha256_text(text),
+            api_endpoint=sanitize_url(final_url) if official_data_url else None,
+            request_fingerprint=target.request_fingerprint if target else None,
+            api_observations=api_observations,
+            raw_content=decoded if official_data_url else None,
         )
 
     def _request_once(self, url: str) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
@@ -161,6 +189,22 @@ class HttpDocumentFetcher:
         if not lines:
             raise ValueError("World Bank API returned no observations")
         return "\n".join(lines)
+
+    @staticmethod
+    def _world_bank_observations(payload: object) -> list[dict[str, object]]:
+        if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
+            raise ValueError("unexpected World Bank API response")
+        return [
+            {
+                "json_pointer": f"/1/{index}/value",
+                "observation": row["value"],
+                "year": row.get("date"),
+                "indicator": row.get("indicator", {}).get("id"),
+                "country": row.get("country", {}).get("id"),
+            }
+            for index, row in enumerate(payload[1])
+            if isinstance(row, dict) and row.get("value") is not None
+        ]
 
     @staticmethod
     def _request_target(url: str) -> str:

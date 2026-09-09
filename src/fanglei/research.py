@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from difflib import SequenceMatcher
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -20,6 +20,15 @@ class FetchedDocument:
     published_at: str | None
     retrieved_at: str
     original_url: str | None = None
+    document_format: str = "html"
+    retrieval_method: str = "html"
+    evidence_eligible: bool = True
+    eligibility_reason: str = "original_document"
+    document_hash: str | None = None
+    api_endpoint: str | None = None
+    request_fingerprint: str | None = None
+    api_observations: list[dict[str, Any]] = field(default_factory=list)
+    raw_content: str | None = None
 
 
 SOURCE_TIERS = {
@@ -141,7 +150,20 @@ class RuleBasedEvidenceExtractor:
                                 "original_url": doc.original_url or doc.url,
                                 "relation": "supports",
                                 "claim_type": claim_type,
+                                "document_hash": doc.document_hash,
+                                "document_format": doc.document_format,
+                                "evidence_origin": (
+                                    "official_api" if doc.document_format == "api" else "original_document"
+                                ),
                         }
+                        if doc.document_format == "api" and index <= len(doc.api_observations):
+                            observation = doc.api_observations[index - 1]
+                            base.update({
+                                "api_endpoint": doc.api_endpoint,
+                                "request_fingerprint": doc.request_fingerprint,
+                                "json_pointer": observation.get("json_pointer"),
+                                "observation": observation.get("observation"),
+                            })
                         if annual_real_gdp_context and targeted_pairs:
                             for value, year in targeted_pairs:
                                 evidence.append({

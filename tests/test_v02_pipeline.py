@@ -187,3 +187,24 @@ def test_search_query_includes_verification_claim_and_named_authorities(tmp_path
     assert {tuple(request.include_domains) for request in provider.requests} == {
         ("bea.gov",), ("data.worldbank.org",), ("imf.org",), ("oecd.org",)
     }
+
+
+def test_pipeline_passes_deterministic_research_context_to_fetcher(tmp_path: Path) -> None:
+    run = ingest_text(
+        "2024 US Real GDP Growth\nWhat was the rate, and do BEA and World Bank data agree?",
+        tmp_path,
+    )
+    analyze_run(run.name, tmp_path, MockAnalysisProvider())
+
+    class ContextFetcher(FakeFetcher):
+        context = None
+
+        def with_context(self, context):
+            self.context = context
+            return self
+
+    fetcher = ContextFetcher()
+    run_v02_pipeline(run.name, tmp_path, FakeSearch(), fetcher, stop_after="source_fetch")
+    assert fetcher.context.country == "USA"
+    assert fetcher.context.years == ("2024",)
+    assert fetcher.context.indicators == ("real_gdp_growth",)

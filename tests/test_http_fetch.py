@@ -1,7 +1,9 @@
 import pytest
+import json
 
 from fanglei.errors import ProviderError
 from fanglei.providers.http_fetch import HttpDocumentFetcher
+from fanglei.providers.document import FetchContext
 
 
 @pytest.mark.parametrize("url", [
@@ -55,3 +57,56 @@ def test_world_bank_api_is_normalized_without_losing_raw_value() -> None:
     text = HttpDocumentFetcher._world_bank_text(payload)
     assert "2.8% in 2024" in text
     assert "raw value 2.79318715363841" in text
+
+
+def test_official_api_fetch_retains_exact_json_observation_and_fingerprint() -> None:
+    payload = [
+        {"page": 1, "lastupdated": "2026-09-01"},
+        [{
+            "indicator": {"id": "NY.GDP.MKTP.KD.ZG", "value": "GDP growth (annual %)"},
+            "country": {"id": "US", "value": "United States"},
+            "date": "2024",
+            "value": 2.79318715363841,
+        }],
+    ]
+
+    class Headers:
+        def get_content_charset(self):
+            return "utf-8"
+
+    class Response:
+        status = 200
+        headers = Headers()
+
+        def getheader(self, name, default=""):
+            return "application/json" if name == "Content-Type" else default
+
+        def read(self, _limit):
+            return json.dumps(payload).encode("utf-8")
+
+    class Connection:
+        def close(self):
+            pass
+
+    class StubFetcher(HttpDocumentFetcher):
+        def _request_once(self, url):
+            self.requested_url = url
+            return Response(), Connection()
+
+    fetcher = StubFetcher().with_context(
+        FetchContext(country="USA", years=("2024",), indicators=("real_gdp_growth",), questions=())
+    )
+    doc = fetcher.fetch(
+        "src_001",
+        "https://data.worldbank.org/indicator/NY.GDP.MKTP.KD.ZG?locations=US",
+        "GDP growth",
+    )
+    assert doc.document_format == "api"
+    assert doc.api_endpoint == fetcher.requested_url
+    assert len(doc.request_fingerprint or "") == 64
+    assert doc.document_hash
+    observation = doc.api_observations[0]
+    assert observation["json_pointer"] == "/1/0/value"
+    assert observation["observation"] == 2.79318715363841
+    assert observation["year"] == "2024"
+    assert doc.raw_content and "2.79318715363841" in doc.raw_content
