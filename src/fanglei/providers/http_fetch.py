@@ -206,10 +206,12 @@ class HttpDocumentFetcher:
                 continue
             country = row.get("country", {}).get("value", "United States")
             indicator = row.get("indicator", {}).get("value", "GDP growth (annual %)")
+            indicator_id = row.get("indicator", {}).get("id")
+            metric = "real GDP growth" if indicator_id == "NY.GDP.MKTP.KD.ZG" else indicator
             raw_value = row["value"]
             rounded = f"{float(raw_value):.1f}"
             lines.append(
-                f"World Bank reports {country} real GDP growth was {rounded}% in {row.get('date')} "
+                f"World Bank reports {country} {metric} was {rounded}% in {row.get('date')} "
                 f"for indicator {indicator} (raw value {raw_value})."
             )
         if not lines:

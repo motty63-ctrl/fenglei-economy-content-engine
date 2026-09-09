@@ -59,6 +59,21 @@ def test_world_bank_api_is_normalized_without_losing_raw_value() -> None:
     assert "raw value 2.79318715363841" in text
 
 
+def test_world_bank_normalizer_does_not_relabel_per_capita_as_real_gdp() -> None:
+    payload = [
+        {"page": 1},
+        [{
+            "indicator": {"id": "NY.GDP.PCAP.KD.ZG", "value": "GDP per capita growth (annual %)"},
+            "country": {"value": "United States"},
+            "date": "2024",
+            "value": 1.81099561417319,
+        }],
+    ]
+    text = HttpDocumentFetcher._world_bank_text(payload)
+    assert "GDP per capita growth (annual %) was 1.8% in 2024" in text
+    assert "real GDP growth" not in text
+
+
 def test_official_api_fetch_retains_exact_json_observation_and_fingerprint() -> None:
     payload = [
         {"page": 1, "lastupdated": "2026-09-01"},

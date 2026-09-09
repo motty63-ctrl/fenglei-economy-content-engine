@@ -2,6 +2,7 @@ import json
 
 from fanglei.artifacts import sha256_bytes, sha256_text
 from fanglei.evidence_policy import gate_evidence, is_script_ready
+from fanglei.providers.official import request_fingerprint
 from fanglei.research import FetchedDocument, verify_claims
 
 
@@ -16,7 +17,7 @@ def _api_document() -> FetchedDocument:
         "international_organization", None, "2026-09-09T00:00:00+08:00",
         "https://api.worldbank.org/v2/x", document_format="api", retrieval_method="api",
         document_hash=sha256_text(raw), api_endpoint="https://api.worldbank.org/v2/x",
-        request_fingerprint="f" * 64,
+        request_fingerprint=request_fingerprint("https://api.worldbank.org/v2/x"),
         api_observations=[{"json_pointer": "/1/0/value", "observation": 2.79318715363841}],
         raw_content=raw,
     )
@@ -55,6 +56,14 @@ def test_wrong_api_pointer_or_observation_cannot_verify() -> None:
     facts = verify_claims(gated, {"src_api": True}, minimum_sources_met=True)
     assert facts["claims"][0]["verification_status"] == "unverified"
     assert facts["claims"][0]["allowed_downstream"] is False
+
+
+def test_api_request_fingerprint_must_match_sanitized_endpoint() -> None:
+    evidence = _api_evidence()
+    evidence["request_fingerprint"] = "0" * 64
+    gated = gate_evidence([evidence], [_api_document()])
+    assert gated[0]["evidence_eligible"] is False
+    assert gated[0]["eligibility_reason"] == "api_observation_unresolved"
 
 
 def test_search_snippet_can_never_become_evidence() -> None:

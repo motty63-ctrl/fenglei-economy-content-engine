@@ -108,6 +108,20 @@ def test_source_fetch_records_one_bad_url_and_keeps_successful_pages(tmp_path: P
     assert index["fetch_errors"][0]["url"] == "https://source1.example/data"
 
 
+def test_source_fetch_records_stable_dynamic_html_failure_code(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+
+    class DynamicFetcher(FakeFetcher):
+        def fetch(self, source_id, url, title):
+            if "source1.example" in url:
+                raise RuntimeError("dynamic_content_unavailable: application shell")
+            return super().fetch(source_id, url, title)
+
+    run_v02_pipeline(run.name, tmp_path, FakeSearch(), DynamicFetcher(), stop_after="source_fetch")
+    index = json.loads((run / "source_documents" / "index.json").read_text(encoding="utf-8"))
+    assert index["fetch_errors"][0]["failure_code"] == "dynamic_content_unavailable"
+
+
 def test_force_upstream_stage_rebuilds_stale_descendants(tmp_path: Path) -> None:
     run = _analyzed_run(tmp_path)
     class ChangingSearch(FakeSearch):
@@ -131,6 +145,22 @@ def test_force_upstream_stage_rebuilds_stale_descendants(tmp_path: Path) -> None
     assert all(after["artifacts"][name]["status"] == "valid" for name in (
         "search_results.json", "source_documents/index.json", "sources.json", "facts.json", "research.md"
     ))
+
+
+def test_rebuilt_source_fetch_removes_files_owned_by_previous_index(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+    run_v02_pipeline(run.name, tmp_path, FakeSearch(), FakeFetcher(), stop_after="source_fetch")
+    assert (run / "source_documents" / "src_003.md").is_file()
+
+    class TwoSearch(FakeSearch):
+        def search(self, request):
+            response = super().search(request)
+            return SearchResponse(response.query, response.provider, response.results[:2])
+
+    run_v02_pipeline(
+        run.name, tmp_path, TwoSearch(), FakeFetcher(), force_stage="search", stop_after="source_fetch"
+    )
+    assert not (run / "source_documents" / "src_003.md").exists()
 
 
 def test_source_document_tamper_stales_index_and_descendants(tmp_path: Path) -> None:

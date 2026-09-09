@@ -11,14 +11,15 @@ from fanglei.providers.document import FetchContext, RetrievalTarget
 from fanglei.security import sanitize_url
 
 
-def _fingerprint(url: str) -> str:
+def request_fingerprint(url: str) -> str:
+    """Fingerprint a credential-free GET request representation."""
     canonical = f"GET\n{sanitize_url(url)}\naccept:application/json"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _target(url: str, adapter: str, credential_ref: str | None = None) -> RetrievalTarget:
     safe_url = sanitize_url(url)
-    return RetrievalTarget("api", url, safe_url, adapter, _fingerprint(safe_url), credential_ref)
+    return RetrievalTarget("api", url, safe_url, adapter, request_fingerprint(safe_url), credential_ref)
 
 
 class SourceAdapter(Protocol):

@@ -44,6 +44,8 @@ TAVILY_API_KEY=... python -m fanglei research 2026-09-07-001-topic-slug
 
 可用 `--stop-after STAGE` 停在指定 owner stage，或用 `--force-stage STAGE` 显式重建该阶段并令下游 stale。`--provider mock` 用于无网络的确定性演示；生产默认仍为 Tavily。
 
+V0.2.1 对官方来源获取进行加固：确定性 API 路由、带页码的有限额 PDF 抽取、动态 HTML 失败检测、证据准入、脚本事实门和统一密钥脱敏。真实官方源测试必须显式设置 `RUN_OFFICIAL_INTEGRATION=1`；Tavily 搜索摘要始终只用于 discovery。
+
 默认复用输入指纹和输出哈希均有效的已有分析。显式重跑会先保存旧产物：
 
 ```bash

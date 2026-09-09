@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from fanglei.artifacts import sha256_bytes, sha256_text
+from fanglei.providers.official import request_fingerprint
 from fanglei.security import sanitize_url
 
 if TYPE_CHECKING:
@@ -46,8 +47,8 @@ def gate_evidence(evidence: list[dict[str, Any]], documents: list["FetchedDocume
                     raise ValueError("raw API response hash mismatch")
                 if not item.get("api_endpoint") or sanitize_url(item["api_endpoint"]) != item["api_endpoint"]:
                     raise ValueError("unsafe API endpoint")
-                if len(item.get("request_fingerprint") or "") != 64:
-                    raise ValueError("request fingerprint missing")
+                if item.get("request_fingerprint") != request_fingerprint(item["api_endpoint"]):
+                    raise ValueError("request fingerprint mismatch")
                 resolved = _json_pointer(json.loads(document.raw_content), item.get("json_pointer") or "")
                 if resolved != item.get("observation"):
                     raise ValueError("observation mismatch")

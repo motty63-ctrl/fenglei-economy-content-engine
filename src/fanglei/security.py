@@ -45,13 +45,13 @@ def redact_text(value: object) -> str:
     """Return a display-safe message without authentication material."""
     text = str(value)
     text = re.sub(
-        r"(?i)(authorization\s*[:=]\s*bearer\s+)([^\s,;\]}]+)",
-        rf"\1{REDACTED}",
+        r"(?i)([\"']?authorization[\"']?\s*[:=]\s*)([\"']?)([^\"'\r\n,;\]}]+)([\"']?)",
+        rf"\1\2{REDACTED}\4",
         text,
     )
     text = re.sub(
-        r"(?i)((?:x-api-key|x_api_key|api-key|api_key|apikey|access_token|token|secret|signature|userid|user_id)\s*[:=]\s*)([^\s,;&\]}]+)",
-        rf"\1{REDACTED}",
+        r"(?i)([\"']?(?:x-api-key|x_api_key|api-key|api_key|apikey|access_token|token|secret|signature|userid|user_id)[\"']?\s*[:=]\s*)([\"']?)([^\"'\s,;&\]}]+)([\"']?)",
+        rf"\1\2{REDACTED}\4",
         text,
     )
     text = re.sub(r"https?://[^\s\"'<>]+", lambda match: sanitize_url(match.group(0)), text)

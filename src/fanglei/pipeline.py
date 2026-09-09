@@ -133,6 +133,23 @@ def _fetch_context(questions: dict[str, Any]) -> FetchContext:
     return FetchContext(country=country, years=years, indicators=indicators, questions=tuple(_question_texts(questions)))
 
 
+def _fetch_failure_code(error: BaseException) -> str:
+    message = safe_error_message(error).lower()
+    for code in (
+        "dynamic_content_unavailable", "empty_body", "invalid_pdf", "pdf_size_limit",
+        "pdf_page_limit", "pdf_text_limit", "pdf_encrypted", "pdf_no_extractable_text",
+    ):
+        if code in message:
+            return code
+    if "http 403" in message:
+        return "access_denied"
+    if "http 429" in message:
+        return "rate_limited"
+    if "timeout" in message:
+        return "timeout"
+    return "fetch_failed"
+
+
 def _render_research(run_id: str, questions: list[str], sources: list[dict[str, Any]], facts: dict[str, Any]) -> str:
     source_by_id = {s["source_id"]: s for s in sources}
     lines = ["# 多源研究报告", "", f"Run: `{run_id}`", "", "## 研究问题", ""]
@@ -179,6 +196,16 @@ def run_v02_pipeline(
 
     documents: list[FetchedDocument] = []
     def fetch() -> None:
+        previous_assets: set[str] = set()
+        previous_index_path = run_dir / "source_documents" / "index.json"
+        if previous_index_path.is_file():
+            previous_index = read_json(previous_index_path)
+            for previous_document in previous_index.get("documents", []):
+                if previous_document.get("path"):
+                    previous_assets.add(previous_document["path"])
+                previous_assets.update(
+                    asset["path"] for asset in previous_document.get("files", []) if asset.get("path")
+                )
         questions = registry.read_json("questions.json")
         if hasattr(fetcher, "with_context"):
             fetcher.with_context(_fetch_context(questions))
@@ -195,7 +222,11 @@ def run_v02_pipeline(
                 doc = fetcher.fetch(source_id, item["url"], item["title"])
             except Exception as error:
                 first_error = first_error or error
-                fetch_errors.append({"url": sanitize_url(item["url"]), "error": safe_error_message(error)})
+                fetch_errors.append({
+                    "url": sanitize_url(item["url"]),
+                    "failure_code": _fetch_failure_code(error),
+                    "error": safe_error_message(error),
+                })
                 continue
             if not doc.document_hash:
                 doc = replace(doc, document_hash=sha256_text(doc.text))
@@ -246,6 +277,17 @@ def run_v02_pipeline(
                 })
             row["files"] = files
             document_rows.append(row)
+        current_assets = {
+            asset["path"]
+            for row in document_rows
+            for asset in row.get("files", [])
+            if asset.get("path")
+        }
+        source_root = (run_dir / "source_documents").resolve()
+        for relative_path in previous_assets - current_assets:
+            old_path = (run_dir / relative_path).resolve()
+            if old_path.is_relative_to(source_root) and old_path.is_file():
+                old_path.unlink()
         registry.write_json(
             "source_documents/index.json",
             {"schema_version": "2.1", "fetch_errors": fetch_errors, "documents": document_rows},

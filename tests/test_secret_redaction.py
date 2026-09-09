@@ -49,6 +49,19 @@ def test_provider_error_suppresses_secret_and_raw_exception_chain() -> None:
     assert captured.value.__cause__ is None
 
 
+def test_redacts_quoted_header_mapping_without_environment_secret(monkeypatch) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    request = {
+        "headers": {
+            "Authorization": f"Bearer {SENTINEL}",
+            "X-API-Key": SENTINEL,
+        }
+    }
+    redacted = redact_text(request)
+    assert SENTINEL not in redacted
+    assert redacted.count("[REDACTED]") == 2
+
+
 def test_stage_error_and_cli_stderr_are_redacted(tmp_path: Path, capsys) -> None:
     run = ingest_text("GDP 2024", tmp_path)
     analyze_run(run.name, tmp_path, MockAnalysisProvider())
