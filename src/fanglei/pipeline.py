@@ -52,6 +52,10 @@ STAGE_ARTIFACT = {
     "source_selection": "sources.json",
     "factcheck": "facts.json",
     "research_synthesis": "research.md",
+    "angle_generation": "angles.json",
+    "angle_selection": "angle.md",
+    "script_generation": "script.json",
+    "script_render": "script.md",
 }
 
 
