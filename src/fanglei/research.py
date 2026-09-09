@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from fanglei.evidence_policy import script_usage
+
 
 @dataclass(frozen=True)
 class FetchedDocument:
@@ -224,13 +226,14 @@ def verify_claims(
             context = source_context.get(source_id, False)
             return context if isinstance(context, bool) else context.get("credibility_tier") in {"A", "B", "C"}
 
-        independent_ids = {item["source_id"] for item in items if is_independent(item["source_id"])}
+        eligible_items = [item for item in items if item.get("evidence_eligible", True)]
+        independent_ids = {item["source_id"] for item in eligible_items if is_independent(item["source_id"])}
         independent_count = len(independent_ids)
         has_primary = any(is_primary(source_id) for source_id in independent_ids)
         claim_type = items[0].get("claim_type", "fact")
         values = {
             tuple(item["claim_values"]) if item.get("claim_values") else _claim_identity(item["evidence_text"])[1]
-            for item in items
+            for item in eligible_items
         }
         status = "conflicted" if claim_type == "fact" and len(values) > 1 else (
             "verified" if claim_type == "fact" and minimum_sources_met and independent_count >= 2 and has_primary else "unverified"
@@ -256,11 +259,12 @@ def verify_claims(
                     else "high-risk claim lacks the run-level three-source minimum and/or a primary source plus an independent corroborator"
                 ),
                 "allowed_downstream": status == "verified" and claim_type == "fact",
+                "script_usage": script_usage(status),
             }
         )
     return {
-        "schema_version": "2.0",
-        "policy_version": "economics-v1",
+        "schema_version": "2.1",
+        "policy_version": "economics-v1.1",
         "claims": claims,
         "summary": {
             "verified": sum(c["verification_status"] == "verified" for c in claims),

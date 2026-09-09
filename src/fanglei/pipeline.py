@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -16,6 +17,7 @@ from fanglei.providers.search import SearchProvider, SearchRequest
 from fanglei.providers.document import FetchContext
 from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims
 from fanglei.security import safe_error_message, sanitize_url
+from fanglei.evidence_policy import gate_evidence
 
 
 class DocumentFetcher(Protocol):
@@ -195,6 +197,8 @@ def run_v02_pipeline(
                 first_error = first_error or error
                 fetch_errors.append({"url": sanitize_url(item["url"]), "error": safe_error_message(error)})
                 continue
+            if not doc.document_hash:
+                doc = replace(doc, document_hash=sha256_text(doc.text))
             documents.append(doc)
         if not documents and first_error is not None:
             raise first_error
@@ -252,7 +256,15 @@ def run_v02_pipeline(
     if stop_after == "source_fetch": return run_dir
     if not documents:
         fields = FetchedDocument.__dataclass_fields__
-        documents = [FetchedDocument(**{key: value for key, value in row.items() if key in fields}) for row in registry.read_json("source_documents/index.json")["documents"]]
+        for row in registry.read_json("source_documents/index.json")["documents"]:
+            values = {key: value for key, value in row.items() if key in fields}
+            for asset in row.get("files", []):
+                asset_path = run_dir / asset.get("path", "")
+                if asset.get("role") == "raw_response" and asset_path.suffix == ".json":
+                    values["raw_content"] = asset_path.read_text(encoding="utf-8")
+                elif asset.get("role") == "raw_response" and asset_path.suffix == ".pdf":
+                    values["raw_bytes"] = asset_path.read_bytes()
+            documents.append(FetchedDocument(**values))
 
     def select() -> None:
         rows = deduplicate_sources(documents)
@@ -269,6 +281,7 @@ def run_v02_pipeline(
         sources = source_artifact["sources"]
         source_context = {row["source_id"]: row for row in sources}
         evidence = RuleBasedEvidenceExtractor().extract(documents, _question_texts(registry.read_json("questions.json")))
+        evidence = gate_evidence(evidence, documents)
         facts = verify_claims(evidence, source_context, minimum_sources_met=source_artifact["selection_status"] == "selected")
         facts["run_id"] = run_id
         facts["checked_at"] = _now()

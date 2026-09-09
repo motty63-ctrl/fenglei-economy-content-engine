@@ -102,6 +102,7 @@ class HttpDocumentFetcher:
             elif official_data_url and target and target.adapter == "world_bank":
                 payload = json.loads(decoded)
                 text = self._world_bank_text(payload)
+                document_hash = sha256_text(decoded)
                 api_observations = self._world_bank_observations(payload)
                 if isinstance(payload, list) and payload and isinstance(payload[0], dict):
                     published_at = payload[0].get("lastupdated")
