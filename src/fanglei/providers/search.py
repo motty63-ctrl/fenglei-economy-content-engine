@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from fanglei.errors import ProviderError
+from fanglei.security import safe_error_message
 
 
 @dataclass(frozen=True)
@@ -89,5 +90,5 @@ class TavilySearchProvider:
                 if isinstance(item, dict) and item.get("url")
             ]
         except Exception as error:
-            raise ProviderError(f"Tavily search failed (retryable): {error}") from None
+            raise ProviderError(f"Tavily search failed (retryable): {safe_error_message(error)}") from None
         return SearchResponse(query=request.query, provider=self.name, results=results)

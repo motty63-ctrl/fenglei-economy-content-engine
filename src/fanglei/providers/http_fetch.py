@@ -13,6 +13,7 @@ from html.parser import HTMLParser
 
 from fanglei.errors import ProviderError
 from fanglei.research import FetchedDocument
+from fanglei.security import safe_error_message, sanitize_url
 
 
 class _TextParser(HTMLParser):
@@ -78,10 +79,12 @@ class HttpDocumentFetcher:
                 text = "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
             if not text:
                 raise ValueError("no readable page text")
-        except ProviderError:
-            raise
+        except ProviderError as error:
+            raise ProviderError(safe_error_message(error)) from None
         except Exception as error:
-            raise ProviderError(f"Source fetch failed (retryable): {url}: {error}") from error
+            raise ProviderError(
+                f"Source fetch failed (retryable): {sanitize_url(url)}: {safe_error_message(error)}"
+            ) from None
         final_url = current_url
         host = urlparse(final_url).hostname or ""
         source_type = self._classify_source_type(host)

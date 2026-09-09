@@ -14,6 +14,7 @@ from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
 from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims
+from fanglei.security import safe_error_message, sanitize_url
 
 
 class DocumentFetcher(Protocol):
@@ -68,7 +69,7 @@ def _execute(manifest: RunManifest, registry: ArtifactRegistry, stage: str, acti
     except Exception as error:
         manifest.stages[stage] = StageState(
             status="failed", attempts=previous.attempts + 1, started_at=started, finished_at=_now(),
-            error=StageError(code="STAGE_FAILED", message=str(error)),
+            error=StageError(code="STAGE_FAILED", message=safe_error_message(error)),
         )
         registry.save_manifest()
         raise
@@ -176,7 +177,7 @@ def run_v02_pipeline(
                 doc = fetcher.fetch(source_id, item["url"], item["title"])
             except Exception as error:
                 first_error = first_error or error
-                fetch_errors.append({"url": item["url"], "error": str(error)})
+                fetch_errors.append({"url": sanitize_url(item["url"]), "error": safe_error_message(error)})
                 continue
             documents.append(doc)
         if not documents and first_error is not None:

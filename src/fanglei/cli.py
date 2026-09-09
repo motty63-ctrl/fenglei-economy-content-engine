@@ -17,6 +17,7 @@ from fanglei.pipeline import run_v02_pipeline
 from fanglei.providers.http_fetch import HttpDocumentFetcher
 from fanglei.providers.search import TavilySearchProvider
 from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvider
+from fanglei.security import safe_error_message
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -31,7 +32,7 @@ def configure(
 
 
 def _fail(error: FangleiError) -> None:
-    typer.echo(f"Error: {error}", err=True)
+    typer.echo(f"Error: {safe_error_message(error)}", err=True)
     raise typer.Exit(code=error.exit_code)
 
 
