@@ -23,7 +23,7 @@ facts.json ─────┴─→ angle.md (`angle_selection`)
 
 angle.md ───────┐
 facts.json ─────┤
-research.md ────┼─→ script.md (`script_generation`)
+research.md ────┼─→ script.json (`script_generation`) ─→ script.md (`script_render`)
 source.md ──────┘  post-generation originality input only
 ```
 

@@ -4,13 +4,16 @@
   "title": "V0.3 Structured Script Draft",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "script_id", "angle_id", "title", "target_duration_seconds", "sentences"],
+  "required": ["schema_version", "script_id", "angle_id", "title", "target_duration_seconds", "speaking_rate_chars_per_second", "spoken_character_count", "estimated_duration_seconds", "sentences"],
   "properties": {
     "schema_version": {"const": "3.0"},
     "script_id": {"type": "string", "pattern": "^script_[0-9]{3}$"},
     "angle_id": {"type": "string", "pattern": "^angle_[0-9]{3}$"},
     "title": {"type": "string", "minLength": 1, "maxLength": 40},
     "target_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 90},
+    "speaking_rate_chars_per_second": {"type": "number", "minimum": 2.5, "maximum": 6.0},
+    "spoken_character_count": {"type": "integer", "minimum": 1},
+    "estimated_duration_seconds": {"type": "number", "minimum": 60, "maximum": 90},
     "sentences": {
       "type": "array",
       "minItems": 4,

@@ -21,7 +21,7 @@ The provider never receives `source.md`. It returns validated Pydantic objects a
 
 `AngleProposalResult` contains 3–5 `AngleProposal` objects with title, hook, core question, core insight, supporting claim IDs, proposed audience/novelty/hook/visual/explainability scores, and risk notes.
 
-`ScriptDraft` contains ordered `ScriptSentence` objects. Each sentence has `sentence_id`, `section`, `sentence_type`, `text`, and `claim_ids`. The provider cannot mark an artifact valid.
+`ScriptDraft` contains ordered `ScriptSentence` objects. Each sentence has `sentence_id`, `section`, `sentence_type`, `text`, and `claim_ids`. Speaking rate, character count, estimated duration, lint status, recommendation, and final selection are computed outside the provider. The provider cannot mark an artifact valid.
 
 ## Implementations
 
