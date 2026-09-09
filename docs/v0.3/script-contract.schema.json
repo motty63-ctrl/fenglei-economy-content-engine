@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fanglei.local/schemas/script-draft-v3.json",
+  "title": "V0.3 Structured Script Draft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "script_id", "angle_id", "title", "target_duration_seconds", "sentences"],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "script_id": {"type": "string", "pattern": "^script_[0-9]{3}$"},
+    "angle_id": {"type": "string", "pattern": "^angle_[0-9]{3}$"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 40},
+    "target_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 90},
+    "sentences": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sentence_id", "section", "sentence_type", "text", "claim_ids"],
+        "properties": {
+          "sentence_id": {"type": "string", "pattern": "^sentence_[0-9]{3}$"},
+          "section": {"enum": ["hook", "phenomenon", "mechanism", "core_judgment"]},
+          "sentence_type": {"enum": ["verified_fact", "explanation", "interpretation", "analogy"]},
+          "text": {"type": "string", "minLength": 1},
+          "claim_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^claim_[0-9]{3}$"}}
+        },
+        "allOf": [
+          {"if": {"properties": {"sentence_type": {"const": "verified_fact"}}}, "then": {"properties": {"claim_ids": {"minItems": 1}}}},
+          {"if": {"properties": {"sentence_type": {"enum": ["explanation", "interpretation", "analogy"]}}}, "then": {"properties": {"claim_ids": {"maxItems": 0}}}}
+        ]
+      }
+    }
+  }
+}
