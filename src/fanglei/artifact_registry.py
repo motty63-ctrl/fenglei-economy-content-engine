@@ -20,6 +20,10 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "sources.json": ("source_selection", ("search_results.json", "source_documents/index.json")),
     "facts.json": ("factcheck", ("questions.json", "sources.json", "source_documents/index.json")),
     "research.md": ("research_synthesis", ("questions.json", "sources.json", "facts.json")),
+    "angles.json": ("angle_generation", ("facts.json", "research.md", "questions.json", "source.md")),
+    "angle.md": ("angle_selection", ("angles.json", "facts.json")),
+    "script.json": ("script_generation", ("angle.md", "facts.json", "research.md", "source.md")),
+    "script.md": ("script_render", ("script.json",)),
 }
 
 

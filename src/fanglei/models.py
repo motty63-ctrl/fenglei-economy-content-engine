@@ -48,7 +48,7 @@ class RunManifest(BaseModel):
     run_id: str
     created_at: str
     updated_at: str
-    status: Literal["created", "analyzed", "failed"] = "created"
+    status: Literal["created", "analyzed", "scripted", "failed"] = "created"
     input: InputInfo | None = None
     stages: dict[str, StageState] = Field(
         default_factory=lambda: {
