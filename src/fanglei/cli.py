@@ -18,6 +18,8 @@ from fanglei.providers.http_fetch import HttpDocumentFetcher
 from fanglei.providers.search import TavilySearchProvider
 from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvider
 from fanglei.security import safe_error_message
+from fanglei.content_pipeline import run_content_pipeline
+from fanglei.providers.content import MockContentPlanningProvider
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -121,3 +123,46 @@ def research_command(
         _fail(error)
     typer.echo(f"Research pipeline current: {run_id}")
     typer.echo(f"Run directory: {run_dir.resolve()}")
+
+
+def _content_run(ctx: typer.Context, run_id: str, provider_name: str, speaking_rate: float,
+                 stop_after: str | None = None, angle_id: str | None = None,
+                 force_stage: str | None = None) -> Path:
+    if provider_name != "mock":
+        typer.echo("Error: V0.3 currently supports --provider mock; real providers are opt-in adapters", err=True)
+        raise typer.Exit(code=2)
+    try:
+        return run_content_pipeline(run_id, ctx.obj["runs_dir"], MockContentPlanningProvider(),
+            stop_after=stop_after, angle_id=angle_id, speaking_rate=speaking_rate,
+            force_stage=force_stage)
+    except FangleiError as error:
+        _fail(error)
+
+
+@app.command("angles")
+def angles_command(ctx: typer.Context, run_id: str, provider: str = "mock") -> None:
+    run = _content_run(ctx, run_id, provider, 4.0, stop_after="angle_generation")
+    typer.echo(f"Artifact: {run / 'angles.json'}")
+
+
+@app.command("select-angle")
+def select_angle_command(ctx: typer.Context, run_id: str, angle_id: str | None = None,
+                         provider: str = "mock") -> None:
+    run = _content_run(ctx, run_id, provider, 4.0, stop_after="angle_selection", angle_id=angle_id)
+    typer.echo(f"Artifact: {run / 'angle.md'}")
+
+
+@app.command("script")
+def script_command(ctx: typer.Context, run_id: str, provider: str = "mock",
+                   speaking_rate: float = 4.0) -> None:
+    run = _content_run(ctx, run_id, provider, speaking_rate)
+    typer.echo(f"Artifacts: {run / 'script.json'}, {run / 'script.md'}")
+
+
+@app.command("plan-content")
+def plan_content_command(ctx: typer.Context, run_id: str, provider: str = "mock",
+                         speaking_rate: float = 4.0, angle_id: str | None = None,
+                         force_stage: str | None = None) -> None:
+    run = _content_run(ctx, run_id, provider, speaking_rate, angle_id=angle_id, force_stage=force_stage)
+    typer.echo(f"Content pipeline current: {run_id}")
+    typer.echo(f"Run directory: {run.resolve()}")
