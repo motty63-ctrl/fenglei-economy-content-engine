@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fanglei.artifact_registry import ArtifactRegistry
-from fanglei.artifacts import atomic_write_json, read_json, sha256_text
+from fanglei.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_bytes, sha256_text
 from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
@@ -207,9 +207,18 @@ def run_v02_pipeline(
                 raw_path = run_dir / "source_documents" / "raw" / f"{doc.source_id}.json"
                 raw_path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(raw_path, doc.raw_content)
+            if doc.raw_bytes is not None:
+                raw_path = run_dir / "source_documents" / "raw" / f"{doc.source_id}.pdf"
+                atomic_write_bytes(raw_path, doc.raw_bytes)
+            if doc.pages:
+                pages_path = run_dir / "source_documents" / f"{doc.source_id}.pages.json"
+                atomic_write_json(
+                    pages_path,
+                    {"source_id": doc.source_id, "document_hash": doc.document_hash, "pages": doc.pages},
+                )
         document_rows = []
         for doc in documents:
-            row = {key: value for key, value in doc.__dict__.items() if key != "raw_content"}
+            row = {key: value for key, value in doc.__dict__.items() if key not in {"raw_content", "raw_bytes"}}
             row.update({"path": f"source_documents/{doc.source_id}.md", "content_hash": sha256_text(doc.text)})
             files = [{"role": "normalized_text", "path": row["path"], "content_hash": row["content_hash"]}]
             if doc.raw_content is not None:
@@ -217,6 +226,19 @@ def run_v02_pipeline(
                     "role": "raw_response",
                     "path": f"source_documents/raw/{doc.source_id}.json",
                     "content_hash": sha256_text(doc.raw_content),
+                })
+            if doc.raw_bytes is not None:
+                files.append({
+                    "role": "raw_response",
+                    "path": f"source_documents/raw/{doc.source_id}.pdf",
+                    "content_hash": sha256_bytes(doc.raw_bytes),
+                })
+            if doc.pages:
+                pages_path = run_dir / "source_documents" / f"{doc.source_id}.pages.json"
+                files.append({
+                    "role": "page_index",
+                    "path": f"source_documents/{doc.source_id}.pages.json",
+                    "content_hash": sha256_bytes(pages_path.read_bytes()),
                 })
             row["files"] = files
             document_rows.append(row)

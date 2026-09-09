@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.8,<3",
   "typer>=0.12,<1",
+  "pypdf>=5,<7",
 ]
 
 [project.optional-dependencies]

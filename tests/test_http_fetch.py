@@ -110,3 +110,37 @@ def test_official_api_fetch_retains_exact_json_observation_and_fingerprint() -> 
     assert observation["observation"] == 2.79318715363841
     assert observation["year"] == "2024"
     assert doc.raw_content and "2.79318715363841" in doc.raw_content
+
+
+@pytest.mark.parametrize(
+    ("html", "code"),
+    [
+        ("<html><body></body></html>", "empty_body"),
+        ("<html><body>IMF Data Mapper { indicator.label } { related.length }</body></html>", "dynamic_content_unavailable"),
+    ],
+)
+def test_empty_or_dynamic_html_is_not_reported_as_success(html: str, code: str) -> None:
+    class Headers:
+        def get_content_charset(self):
+            return "utf-8"
+
+    class Response:
+        status = 200
+        headers = Headers()
+
+        def getheader(self, name, default=""):
+            return "text/html" if name == "Content-Type" else default
+
+        def read(self, _limit):
+            return html.encode("utf-8")
+
+    class Connection:
+        def close(self):
+            pass
+
+    class StubFetcher(HttpDocumentFetcher):
+        def _request_once(self, _url):
+            return Response(), Connection()
+
+    with pytest.raises(ProviderError, match=code):
+        StubFetcher().fetch("src", "https://www.imf.org/data", "IMF")

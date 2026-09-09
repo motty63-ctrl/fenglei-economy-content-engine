@@ -29,6 +29,8 @@ class FetchedDocument:
     request_fingerprint: str | None = None
     api_observations: list[dict[str, Any]] = field(default_factory=list)
     raw_content: str | None = None
+    pages: list[dict[str, Any]] = field(default_factory=list)
+    raw_bytes: bytes | None = None
 
 
 SOURCE_TIERS = {
@@ -164,6 +166,13 @@ class RuleBasedEvidenceExtractor:
                                 "json_pointer": observation.get("json_pointer"),
                                 "observation": observation.get("observation"),
                             })
+                        elif doc.document_format == "pdf":
+                            page = next((item for item in doc.pages if sentence in str(item.get("text", ""))), None)
+                            if page:
+                                base.update({
+                                    "page_number": page.get("page_number"),
+                                    "page_content_hash": page.get("content_hash"),
+                                })
                         if annual_real_gdp_context and targeted_pairs:
                             for value, year in targeted_pairs:
                                 evidence.append({

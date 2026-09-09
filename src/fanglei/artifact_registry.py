@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from fanglei.artifacts import atomic_write_json, atomic_write_text, read_json, sha256_text
+from fanglei.artifacts import atomic_write_json, atomic_write_text, read_json, sha256_bytes, sha256_text
 from fanglei.errors import ArtifactConflictError
 from fanglei.models import ArtifactState, RunManifest
 
@@ -118,6 +118,16 @@ class ArtifactRegistry:
                     state.status = "stale"
                     self._invalidate_descendants(name)
                     raise ArtifactConflictError(f"source document changed or missing: {document.get('path')}")
+                for asset in document.get("files", []):
+                    asset_path = self.run_dir / asset.get("path", "")
+                    if (
+                        not asset.get("path")
+                        or not asset_path.is_file()
+                        or sha256_bytes(asset_path.read_bytes()) != asset.get("content_hash")
+                    ):
+                        state.status = "stale"
+                        self._invalidate_descendants(name)
+                        raise ArtifactConflictError(f"source document changed or missing: {asset.get('path')}")
         for dependency, recorded_hash in state.dependencies.items():
             try:
                 self.validate(dependency)

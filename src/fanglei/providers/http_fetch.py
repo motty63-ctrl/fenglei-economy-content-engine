@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import http.client
 import json
+import re
 import socket
 import ssl
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -17,6 +18,7 @@ from fanglei.security import safe_error_message, sanitize_url
 from fanglei.artifacts import sha256_text
 from fanglei.providers.document import FetchContext
 from fanglei.providers.official import OfficialSourceRouter
+from fanglei.providers.pdf_fetch import PdfTextExtractor
 
 
 class _TextParser(HTMLParser):
@@ -41,11 +43,12 @@ class _TextParser(HTMLParser):
 
 
 class HttpDocumentFetcher:
-    def __init__(self, timeout: int = 20, max_bytes: int = 2_000_000):
+    def __init__(self, timeout: int = 20, max_bytes: int = 2_000_000, max_pdf_bytes: int = 20_000_000):
         self.timeout = timeout
         self.max_bytes = max_bytes
         self.context: FetchContext | None = None
         self.router = OfficialSourceRouter()
+        self.pdf_extractor = PdfTextExtractor(max_bytes=max_pdf_bytes)
 
     def with_context(self, context: FetchContext) -> "HttpDocumentFetcher":
         self.context = context
@@ -70,21 +73,33 @@ class HttpDocumentFetcher:
                 if response.status >= 400:
                     raise ValueError(f"HTTP {response.status}")
                 content_type = response.getheader("Content-Type", "")
+                media_type = content_type.split(";", 1)[0].strip().lower()
+                is_pdf = media_type == "application/pdf"
                 is_official_json = bool(official_data_url) and content_type.split(";", 1)[0].strip().lower() == "application/json"
-                if not self._supports_content_type(content_type) and not is_official_json:
+                if not self._supports_content_type(content_type) and not is_official_json and not is_pdf:
                     raise ValueError(f"unsupported Content-Type: {content_type or 'missing'}")
-                raw = response.read(self.max_bytes + 1)
+                size_limit = self.pdf_extractor.max_bytes if is_pdf else self.max_bytes
+                raw = response.read(size_limit + 1)
                 charset = response.headers.get_content_charset() or "utf-8"
                 connection.close()
                 break
             else:
                 raise ValueError("too many redirects")
-            if len(raw) > self.max_bytes:
+            if len(raw) > (self.pdf_extractor.max_bytes if is_pdf else self.max_bytes):
                 raise ValueError("document exceeds size limit")
-            decoded = raw.decode(charset, errors="replace")
+            decoded = "" if is_pdf else raw.decode(charset, errors="replace")
             api_observations: list[dict[str, object]] = []
             published_at = None
-            if official_data_url and target and target.adapter == "world_bank":
+            pages: list[dict[str, object]] = []
+            raw_bytes = None
+            document_hash = None
+            if is_pdf:
+                pdf = self.pdf_extractor.extract(raw)
+                text = pdf.text
+                pages = pdf.pages
+                document_hash = pdf.document_hash
+                raw_bytes = raw
+            elif official_data_url and target and target.adapter == "world_bank":
                 payload = json.loads(decoded)
                 text = self._world_bank_text(payload)
                 api_observations = self._world_bank_observations(payload)
@@ -96,8 +111,9 @@ class HttpDocumentFetcher:
                 parser = _TextParser()
                 parser.feed(decoded)
                 text = "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+                self._validate_html_text(text)
             if not text:
-                raise ValueError("no readable page text")
+                raise ValueError("empty_body: no readable page text")
         except ProviderError as error:
             raise ProviderError(safe_error_message(error)) from None
         except Exception as error:
@@ -110,16 +126,25 @@ class HttpDocumentFetcher:
         return FetchedDocument(
             source_id, discovery_url, title, text, source_type, published_at,
             datetime.now().astimezone().isoformat(timespec="seconds"), final_url if official_data_url else None,
-            document_format="api" if official_data_url else "html",
-            retrieval_method="api" if official_data_url else "html",
+            document_format="pdf" if is_pdf else ("api" if official_data_url else "html"),
+            retrieval_method="pdf" if is_pdf else ("api" if official_data_url else "html"),
             evidence_eligible=True,
-            eligibility_reason="official_api_original_data" if official_data_url else "original_html",
-            document_hash=sha256_text(text),
+            eligibility_reason="official_pdf" if is_pdf else ("official_api_original_data" if official_data_url else "original_html"),
+            document_hash=document_hash or sha256_text(text),
             api_endpoint=sanitize_url(final_url) if official_data_url else None,
             request_fingerprint=target.request_fingerprint if target else None,
             api_observations=api_observations,
             raw_content=decoded if official_data_url else None,
+            pages=pages,
+            raw_bytes=raw_bytes,
         )
+
+    @staticmethod
+    def _validate_html_text(text: str) -> None:
+        if not text.strip():
+            raise ValueError("empty_body: HTML contained no readable text")
+        if re.search(r"\{\s*(?:indicator\.label|related\.length|[^{}]+\.label)\s*\}", text, re.I):
+            raise ValueError("dynamic_content_unavailable: HTML contained only an application shell")
 
     def _request_once(self, url: str) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
         parsed = urlparse(url)
