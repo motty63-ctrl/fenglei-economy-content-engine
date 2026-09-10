@@ -67,7 +67,9 @@ def _entities(text: str) -> set[str]:
     known_acronyms = {"GDP", "CPI", "BEA", "IMF", "OECD", "US", "USA"}
     entities.update(f"named:{value.lower()}" for value in re.findall(r"\b[A-Z]{2,10}\b", text)
                     if value not in known_acronyms)
-    for name in re.findall(r"([\u4e00-\u9fff]{2,10})(?:称|表示|显示|认为|预计|宣布)", text):
+    for name in re.findall(
+        r"([\u4e00-\u9fff]{2,10})(?:称|表示|显示(?!精度|差异|方式)|认为|预计|宣布)", text
+    ):
         if not any(re.search(pattern, name, re.I) for pattern in _ENTITY_PATTERNS.values()):
             entities.add(f"named:{name}")
     for name in re.findall(
@@ -87,6 +89,44 @@ def _evidence_context(claim: dict, evidence: list[dict]) -> str:
     return " ".join(parts)
 
 
+def semantic_factuality_signals(text: str) -> set[str]:
+    """Detect externally checkable assertions without trusting sentence_type."""
+    signals = set()
+    explicit_nonfactual = bool(re.search(
+        r"打个比方|好比|就像|仿佛|我更愿意|我把它看成|可以把.+理解成|"
+        r"我的判断|我认为|我建议|建议(?:先|你)|请(?:先)?核对|不妨(?:先)?核对|"
+        r"下次.+(?:先看|先查|核对)|你可以(?:先)?|你不妨|你要做的是",
+        text,
+    ))
+    assertive_factual_clause = bool(re.search(
+        r"其实|事实上|(?:数据|结果|数值).{0,12}(?:是|有|带着|包含|保留|显示)",
+        text,
+    ))
+    if _value_tokens(text):
+        signals.add("numeric_or_date")
+    if re.search(r"一半|半数|两倍|三倍|[四五六七八九十]倍|百分之[零一二三四五六七八九十百]+", text):
+        signals.add("numeric_or_date")
+    institution_pattern = "|".join(
+        f"(?:{pattern})" for name, pattern in _ENTITY_PATTERNS.items() if name.startswith("institution:")
+    )
+    if re.search(institution_pattern, text, re.I) and re.search(
+        r"显示|公布|发布|宣布|认为|预计|报告|存(?:着|有)|提供|收录|保留|采用|使用|said|reported|shows?",
+        text,
+        re.I,
+    ):
+        signals.add("institution_action")
+    if re.search(r"数据口径|统计口径|计算口径|季调|修订|基期|样本范围|四舍五入|保留.{0,6}小数|原始数(?:据|值)|原始值|显示精度", text) and not re.search(r"是否|先核对|需要核对|要看", text):
+        signals.add("data_methodology")
+    if re.search(r"导致|造成|源于|归因于|因为|使得", text):
+        signals.add("causal_fact")
+    if re.search(r"通常|往往|一般会|经常|常用|常被|偏好|倾向于|习惯于|方便.+(?:传播|复算|计算)", text):
+        signals.add("usual_behavior")
+    if (explicit_nonfactual and not assertive_factual_clause
+            and "numeric_or_date" not in signals and not _entities(text)):
+        return set()
+    return signals
+
+
 def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_text: str,
                 *, speaking_rate: float = 4.0) -> ScriptLintResult:
     issues: list[LintIssue] = []
@@ -97,10 +137,28 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
         count = _spoken_count(sentence.text)
         if count > 48 or len(re.findall(r"[，；;：:]", sentence.text)) > 3:
             issues.append(LintIssue(code="COMPLEX_LONG_SENTENCE", message="sentence is too complex for speech", sentence_id=sentence.sentence_id))
-        has_fact_signal = bool(re.search(r"\d|(?:BEA|IMF|OECD|世界银行|央行|政府).*(?:显示|认为|预计|宣布|结论)", sentence.text, re.I))
-        if sentence.sentence_type != "verified_fact" and has_fact_signal:
-            issues.append(LintIssue(code="UNDECLARED_FACT", message="factual-looking sentence lacks claim", sentence_id=sentence.sentence_id))
-        if sentence.sentence_type == "verified_fact":
+        semantic_signals = semantic_factuality_signals(sentence.text)
+        requires_claim = sentence.sentence_type == "verified_fact" or bool(semantic_signals)
+        if requires_claim and not sentence.claim_ids:
+            if semantic_signals:
+                issues.append(LintIssue(code="UNDECLARED_FACT",
+                                        message="factual-looking sentence lacks claim",
+                                        sentence_id=sentence.sentence_id))
+            codes = ([f"SEMANTIC_FACTUALITY_UNSUPPORTED_{signal.upper()}__{sentence.sentence_id.upper()}"
+                      for signal in sorted(semantic_signals)]
+                     or ["SEMANTIC_FACTUALITY_UNSUPPORTED"])
+            issues.extend(LintIssue(code=code,
+                                    message="externally checkable assertion requires a verified claim",
+                                    sentence_id=sentence.sentence_id) for code in codes)
+        if (re.search(r"打个比方|好比|就像|仿佛|(?:这|它|那)像", sentence.text)
+                and sentence.sentence_type != "analogy"):
+            issues.append(LintIssue(code="SENTENCE_TYPE_MISMATCH",
+                                    message="obvious analogy must use sentence_type=analogy",
+                                    sentence_id=sentence.sentence_id))
+            issues.append(LintIssue(code=f"SENTENCE_TYPE_MISMATCH__{sentence.sentence_id.upper()}",
+                                    message="obvious analogy must use sentence_type=analogy",
+                                    sentence_id=sentence.sentence_id))
+        if sentence.claim_ids:
             contexts: list[str] = []
             valid = True
             for claim_id in sentence.claim_ids:
@@ -136,10 +194,30 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
         issues.append(LintIssue(code="MECHANISM_MISSING", message="mechanism section is required"))
     if not sections or sections[-1] != "core_judgment":
         issues.append(LintIssue(code="CORE_JUDGMENT_MISSING", message="final judgment is required"))
+    elif (re.search(r"[？?]\s*$", draft.sentences[-1].text)
+          or not re.search(r"我的判断|所以|核心|结论|真正|总之", draft.sentences[-1].text)):
+        issues.append(LintIssue(code="CORE_JUDGMENT_WEAK",
+                                message="final judgment must be an explicit declarative conclusion",
+                                sentence_id=draft.sentences[-1].sentence_id))
+        issues.append(LintIssue(code=f"CORE_JUDGMENT_WEAK__{draft.sentences[-1].sentence_id.upper()}",
+                                message="final judgment must be an explicit declarative conclusion",
+                                sentence_id=draft.sentences[-1].sentence_id))
     if any(re.search(r"镜头|画面|字幕|配音|storyboard|TTS", s.text, re.I) for s in draft.sentences):
         issues.append(LintIssue(code="PRODUCTION_DIRECTION", message="production directions are out of scope"))
+    seen_sentences: set[str] = set()
+    for sentence in draft.sentences:
+        normalized = re.sub(r"[\s，。！？；：、,.!?;:]", "", sentence.text).lower()
+        if normalized in seen_sentences:
+            issues.append(LintIssue(code="REPEATED_SENTENCE", message="script repeats a sentence",
+                                    sentence_id=sentence.sentence_id))
+        seen_sentences.add(normalized)
+    opener_patterns = (r"^你可以", r"^你不妨", r"^我的判断是", r"^打个比方", r"^就像")
+    if any(sum(bool(re.search(pattern, sentence.text)) for sentence in draft.sentences) > 2
+           for pattern in opener_patterns):
+        issues.append(LintIssue(code="FORMULAIC_REPETITION",
+                                message="script overuses the same discourse opener"))
     combined = "".join(s.text for s in draft.sentences)
-    creative_text = "".join(s.text for s in draft.sentences if s.sentence_type != "verified_fact")
+    creative_text = "".join(s.text for s in draft.sentences if not s.claim_ids)
     originality = check_originality(creative_text, source_text)
     if originality.status != "passed":
         issues.append(LintIssue(code="SOURCE_REUSE", message="script overlaps source article"))
@@ -147,6 +225,8 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
     estimated = spoken / speaking_rate if speaking_rate > 0 else 0
     if not 60 <= estimated <= 90:
         issues.append(LintIssue(code="DURATION_OUT_OF_RANGE", message="estimated duration must be 60–90 seconds"))
+        issues.append(LintIssue(code="DURATION_TOO_SHORT" if estimated < 60 else "DURATION_TOO_LONG",
+                                message="estimated duration is outside target range"))
     jargon = sum(combined.count(term) for term in ("边际", "流动性", "传导机制", "逆周期", "名义锚"))
     if jargon >= 3:
         issues.append(LintIssue(code="JARGON_DENSITY", message="too many unexplained terms"))

@@ -1,15 +1,64 @@
 """Artifact-first V0.3 content planning pipeline."""
 from __future__ import annotations
+import json
 import re
 from pathlib import Path
-from fanglei.angle_policy import score_angles, select_angle
+from fanglei.angle_policy import score_angles, select_angle, validate_angle_diversity
 from fanglei.content_models import AngleCandidate, ScriptDraft
 from fanglei.content_policy import build_fact_palette
 from fanglei.content_render import render_angle_markdown, render_script_json, render_script_markdown
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
-from fanglei.providers.content import AngleGenerationInput, ContentPlanningProvider, ScriptGenerationInput
+from fanglei.providers.content import (
+    AngleGenerationInput,
+    ContentPlanningProvider,
+    RepairIssue,
+    ScriptGenerationInput,
+    ScriptRepairInput,
+)
 from fanglei.script_lint import lint_script
+from fanglei.script_patch import apply_script_patches, build_repair_scope
+
+
+def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
+    sentence_by_id = {sentence.sentence_id: sentence for sentence in draft.sentences}
+    result: list[RepairIssue] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+    for item in lint.issues:
+        if item.severity != "error":
+            continue
+        code, _, locator = item.code.partition("__")
+        sentence_id = item.sentence_id or (locator.lower() if locator else None)
+        issue: RepairIssue | None
+        if code in {"DURATION_OUT_OF_RANGE", "UNDECLARED_FACT"}:
+            continue
+        if code == "DURATION_TOO_SHORT":
+            issue = RepairIssue(code=code, current_seconds=lint.estimated_duration_seconds,
+                                min_seconds=60, target_seconds=75)
+        elif code == "DURATION_TOO_LONG":
+            issue = RepairIssue(code=code, current_seconds=lint.estimated_duration_seconds,
+                                max_seconds=90, target_seconds=75)
+        elif code.startswith("SEMANTIC_FACTUALITY_UNSUPPORTED_"):
+            signal = code.removeprefix("SEMANTIC_FACTUALITY_UNSUPPORTED_").lower()
+            issue = RepairIssue(code="CLAIM_BINDING_MISSING", sentence_id=sentence_id,
+                                trigger_category=signal,
+                                expected_constraint="bind an allowed verified claim or rewrite as non-factual")
+        elif code == "SENTENCE_TYPE_MISMATCH":
+            sentence = sentence_by_id.get(sentence_id or "")
+            issue = RepairIssue(code=code, sentence_id=sentence_id,
+                                current_type=sentence.sentence_type if sentence else None,
+                                expected_constraint="obvious analogy markers require sentence_type=analogy")
+        else:
+            issue = RepairIssue(code=code, sentence_id=sentence_id)
+        key = (issue.code, issue.sentence_id, issue.trigger_category)
+        if key not in seen:
+            seen.add(key)
+            result.append(issue)
+    return result
+
+
+def _issue_codes(issues: list[RepairIssue]) -> list[str]:
+    return list(dict.fromkeys(issue.code for issue in issues))
 
 
 def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningProvider, *,
@@ -29,6 +78,9 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
             core_topic=questions.get("core_topic", ""),
             research_questions=[q.get("question", "") for q in questions.get("research_questions", [])],
             research_md=research, fact_palette=palette))
+        diversity = validate_angle_diversity(proposed.candidates)
+        if not diversity.passed:
+            raise ValueError("ANGLE_DIVERSITY_FAILED:" + ",".join(diversity.issue_codes))
         candidates = score_angles(proposed.candidates, palette, source_text)
         if len([c for c in candidates if c.eligibility == "eligible"]) < 3:
             raise ValueError("AT_LEAST_THREE_DISTINCT_ANGLES_REQUIRED")
@@ -36,6 +88,7 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         registry.write_json("angles.json", {"schema_version": "3.0", "run_id": run_id,
             "provider": {"name": provider.name, "model": provider.model, "prompt_version": provider.angle_prompt_version},
             "recommended_angle_id": recommended.angle_id,
+            "diversity_gate": diversity.model_dump(mode="json"),
             "candidates": [c.model_dump(mode="json") for c in candidates]},
             "angle_generation", force=force_stage == "angle_generation")
     _execute(manifest, registry, "angle_generation", generate_angles, force_stage == "angle_generation")
@@ -62,10 +115,93 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     angles = registry.read_json("angles.json")
     selected = AngleCandidate.model_validate(next(row for row in angles["candidates"] if row["angle_id"] == selected_id))
     def generate_script() -> None:
+        if force_script:
+            for artifact_name in ("script.json", "script.md"):
+                if manifest.artifacts[artifact_name].status == "valid":
+                    manifest.artifacts[artifact_name].status = "stale"
+            registry.save_manifest()
         draft = provider.generate_script(ScriptGenerationInput(run_id=run_id, selected_angle=selected,
             research_md=research, fact_palette=palette))
+        initial_draft = draft.model_dump(mode="json")
         lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
-        registry.write_json("script.json", render_script_json(draft, lint), "script_generation", force=force_script)
+        initial_issues = _repair_issues(lint, draft)
+        initial_codes = _issue_codes(initial_issues)
+        initial_duration = lint.estimated_duration_seconds
+        repairs: list[dict[str, object]] = []
+        repair_method = getattr(provider, "repair_script", None)
+        for attempt in range(1, 3):
+            if lint.passed or not callable(repair_method):
+                break
+            before_issues = _repair_issues(lint, draft)
+            before_codes = _issue_codes(before_issues)
+            before_duration = lint.estimated_duration_seconds
+            scope = build_repair_scope(draft, before_issues)
+            patch_result = repair_method(ScriptRepairInput(
+                run_id=run_id,
+                repair_attempt=attempt,
+                selected_angle=selected,
+                current_script=draft,
+                editable_sentence_ids=scope.editable_sentence_ids,
+                protected_sentence_ids=scope.protected_sentence_ids,
+                allow_additions=scope.allow_additions,
+                fact_palette=palette,
+                issues=before_issues,
+            ))
+            application = apply_script_patches(draft, scope, patch_result.patches)
+            draft = application.draft
+            lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
+            after_issues = _repair_issues(lint, draft)
+            after_codes = _issue_codes(after_issues)
+            repairs.append({
+                "attempt": attempt,
+                "attempt_number": attempt,
+                "issue_codes_before": before_codes,
+                "issue_codes_after": after_codes,
+                "issues_before": [issue.model_dump(mode="json", exclude_none=True) for issue in before_issues],
+                "issues_after": [issue.model_dump(mode="json", exclude_none=True) for issue in after_issues],
+                "editable_sentence_ids": scope.editable_sentence_ids,
+                "protected_sentence_ids": scope.protected_sentence_ids,
+                "patches_requested": [patch.model_dump(mode="json", exclude_none=True)
+                                      for patch in application.requested],
+                "patches_applied": [patch.model_dump(mode="json", exclude_none=True)
+                                    for patch in application.applied],
+                "patches_rejected": [row.model_dump(mode="json", exclude_none=True)
+                                     for row in application.rejected],
+                "protected_hashes_before": application.protected_hashes_before,
+                "protected_hashes_after": application.protected_hashes_after,
+                "protected_hashes_unchanged": application.protected_hashes_unchanged,
+                "estimated_duration_before": before_duration,
+                "estimated_duration_after": lint.estimated_duration_seconds,
+            })
+        final_issues = _repair_issues(lint, draft)
+        final_codes = _issue_codes(final_issues)
+        audit = {
+            "initial_script": initial_draft,
+            "initial_issue_codes": initial_codes,
+            "initial_issues": [issue.model_dump(mode="json", exclude_none=True) for issue in initial_issues],
+            "initial_estimated_duration_seconds": initial_duration,
+            "repairs": repairs,
+            "final_issue_codes": final_codes,
+            "final_issues": [issue.model_dump(mode="json", exclude_none=True) for issue in final_issues],
+            "final_estimated_duration_seconds": lint.estimated_duration_seconds,
+            "final_status": "passed" if lint.passed else "failed",
+        }
+        if not lint.passed:
+            raise ValueError("SCRIPT_REPAIR_EXHAUSTED:" + json.dumps(audit, separators=(",", ":")))
+        payload = render_script_json(draft, lint)
+        payload["repair_audit"] = audit
+        payload["provider"] = {
+            "name": provider.name,
+            "model": provider.model,
+            "prompt_version": provider.script_prompt_version,
+        }
+        payload["generation_config"] = {
+            key: getattr(provider, key)
+            for key in ("angle_temperature", "script_temperature", "repair_temperature")
+            if hasattr(provider, key)
+        }
+        payload["generation_config"]["max_repair_attempts"] = 2
+        registry.write_json("script.json", payload, "script_generation", force=force_script)
     _execute(manifest, registry, "script_generation", generate_script, force_script)
     if stop_after == "script_generation": return run_dir
 

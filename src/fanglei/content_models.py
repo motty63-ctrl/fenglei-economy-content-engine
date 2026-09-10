@@ -18,6 +18,9 @@ class AngleProposal(BaseModel):
     hook: str
     core_question: str
     core_insight: str
+    hook_mechanism: str = "unspecified"
+    audience_takeaway: str = "unspecified"
+    narrative_framing: str = "unspecified"
     supporting_claim_ids: list[str]
     audience_relevance: int = Field(ge=0, le=5)
     novelty: int = Field(ge=0, le=5)
@@ -40,6 +43,16 @@ class AngleProposalResult(BaseModel):
     candidates: list[AngleProposal]
 
 
+class AngleDiversityResult(BaseModel):
+    passed: bool
+    candidate_count: int
+    distinct_core_questions: int
+    distinct_hook_mechanisms: int
+    distinct_audience_takeaways: int
+    distinct_framings: int
+    issue_codes: list[str] = Field(default_factory=list)
+
+
 class ScriptSentence(BaseModel):
     sentence_id: str
     section: Literal["hook", "phenomenon", "mechanism", "core_judgment"]
@@ -51,8 +64,6 @@ class ScriptSentence(BaseModel):
     def claims_match_type(self) -> "ScriptSentence":
         if self.sentence_type == "verified_fact" and not self.claim_ids:
             raise ValueError("verified_fact requires claim_ids")
-        if self.sentence_type != "verified_fact" and self.claim_ids:
-            raise ValueError("only verified_fact may bind claim_ids")
         return self
 
 

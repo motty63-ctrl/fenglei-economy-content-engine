@@ -19,7 +19,7 @@ from fanglei.providers.search import TavilySearchProvider
 from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvider
 from fanglei.security import safe_error_message
 from fanglei.content_pipeline import run_content_pipeline
-from fanglei.providers.content import MockContentPlanningProvider
+from fanglei.providers.content import DeepSeekContentPlanningProvider, MockContentPlanningProvider
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -128,11 +128,24 @@ def research_command(
 def _content_run(ctx: typer.Context, run_id: str, provider_name: str, speaking_rate: float,
                  stop_after: str | None = None, angle_id: str | None = None,
                  force_stage: str | None = None) -> Path:
-    if provider_name != "mock":
-        typer.echo("Error: V0.3 currently supports --provider mock; real providers are opt-in adapters", err=True)
+    if provider_name == "mock":
+        content_provider = MockContentPlanningProvider()
+    elif provider_name == "deepseek":
+        try:
+            content_provider = DeepSeekContentPlanningProvider(
+                os.environ.get("DEEPSEEK_API_KEY", ""),
+                model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+                angle_temperature=float(os.environ.get("DEEPSEEK_ANGLE_TEMPERATURE", "0.6")),
+                script_temperature=float(os.environ.get("DEEPSEEK_SCRIPT_TEMPERATURE", "0.2")),
+                repair_temperature=float(os.environ.get("DEEPSEEK_REPAIR_TEMPERATURE", "0.0")),
+            )
+        except (FangleiError, ValueError) as error:
+            _fail(error)
+    else:
+        typer.echo("Error: --provider must be mock or deepseek", err=True)
         raise typer.Exit(code=2)
     try:
-        return run_content_pipeline(run_id, ctx.obj["runs_dir"], MockContentPlanningProvider(),
+        return run_content_pipeline(run_id, ctx.obj["runs_dir"], content_provider,
             stop_after=stop_after, angle_id=angle_id, speaking_rate=speaking_rate,
             force_stage=force_stage)
     except FangleiError as error:

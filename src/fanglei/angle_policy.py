@@ -1,6 +1,6 @@
 """Local scoring and selection for content angles."""
 import re
-from fanglei.content_models import AngleCandidate, AngleProposal, ScriptReadyClaim
+from fanglei.content_models import AngleCandidate, AngleDiversityResult, AngleProposal, ScriptReadyClaim
 from fanglei.originality import check_originality
 
 
@@ -34,6 +34,40 @@ def score_angles(proposals: list[AngleProposal], palette: tuple[ScriptReadyClaim
             originality={"status": originality.status, "max_contiguous_overlap": originality.max_contiguous_overlap,
                          "five_gram_jaccard": originality.five_gram_jaccard}))
     return results
+
+
+def _semantic_key(value: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", value).lower()
+
+
+def validate_angle_diversity(proposals: list[AngleProposal]) -> AngleDiversityResult:
+    questions = {_semantic_key(item.core_question) for item in proposals}
+    mechanisms = {_semantic_key(item.hook_mechanism) for item in proposals}
+    takeaways = {_semantic_key(item.audience_takeaway) for item in proposals}
+    framings = {_semantic_key(item.narrative_framing) for item in proposals}
+    issues = []
+    if not 3 <= len(proposals) <= 5:
+        issues.append("ANGLE_COUNT_OUT_OF_RANGE")
+    if len(questions) < 3:
+        issues.append("CORE_QUESTION_NOT_DIVERSE")
+    if len(mechanisms) < 3:
+        issues.append("HOOK_MECHANISM_NOT_DIVERSE")
+    if len(takeaways) < 3:
+        issues.append("AUDIENCE_TAKEAWAY_NOT_DIVERSE")
+    if len(framings) < 3:
+        issues.append("NARRATIVE_FRAMING_NOT_DIVERSE")
+    required = {"misconception_correction", "economic_data_literacy", "media_literacy"}
+    if not required.issubset({item.narrative_framing for item in proposals}):
+        issues.append("REQUIRED_GDP_FRAMINGS_MISSING")
+    return AngleDiversityResult(
+        passed=not issues,
+        candidate_count=len(proposals),
+        distinct_core_questions=len(questions),
+        distinct_hook_mechanisms=len(mechanisms),
+        distinct_audience_takeaways=len(takeaways),
+        distinct_framings=len(framings),
+        issue_codes=issues,
+    )
 
 
 def select_angle(candidates: list[AngleCandidate], requested_id: str | None = None) -> AngleCandidate:

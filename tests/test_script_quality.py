@@ -23,9 +23,20 @@ def _draft(extra: str = "") -> ScriptDraft:
         ScriptSentence(sentence_id="sentence_001", section="hook", sentence_type="interpretation", text="同一个增长率，为什么有两个数字？"),
         ScriptSentence(sentence_id="sentence_002", section="phenomenon", sentence_type="verified_fact", text="美国2024年实际GDP增长2.8%。", claim_ids=["claim_007"]),
     ]
-    for index in range(3, 11):
+    mechanism_texts = (
+        "你可以先把两个结果的指标名称放在一起认真核对。",
+        "你不妨再看年份，别把不同时间的结果直接放在一起。",
+        "我的判断是，比较之前先把问题拆成名称、时间和表达方式。",
+        "打个比方，这像看两张地图，先确认比例尺再判断远近。",
+        "你可以把小数位当成显示层次，不要急着解释成方向变化。",
+        "你不妨追到原始来源，再决定新闻标题有没有省略信息。",
+        "我的判断是，核对过程比盯着末尾几位小数更有价值。",
+        "就像读药品标签，先看单位，再看数量，最后才下结论。",
+    )
+    for index, text in enumerate(mechanism_texts, 3):
+        sentence_type = "analogy" if text.startswith(("打个比方", "就像")) else "explanation"
         sentences.append(ScriptSentence(sentence_id=f"sentence_{index:03d}", section="mechanism",
-            sentence_type="explanation", text="统计结果可以保留不同精度，短一些方便传播，长一些方便研究者继续计算。"))
+            sentence_type=sentence_type, text=text))
     sentences.append(ScriptSentence(sentence_id="sentence_012", section="mechanism", sentence_type="analogy",
         text="这像把同一段距离分别写成约数和更细的刻度，表达层级不同，方向并没有改变。"))
     sentences.append(ScriptSentence(sentence_id="sentence_013", section="core_judgment", sentence_type="interpretation",
@@ -42,6 +53,35 @@ def test_valid_script_has_configurable_duration_and_clean_markdown() -> None:
     assert payload["sentences"][1]["claim_ids"] == ["claim_007"]
     spoken = render_script_markdown(_draft(), result)
     assert "claim_" not in spoken and "sentence_" not in spoken and "---" not in spoken
+
+
+def test_repeated_sentence_fails_quality_gate() -> None:
+    draft = _draft()
+    draft.sentences[-1].text = draft.sentences[-2].text
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "REPEATED_SENTENCE" in {issue.code for issue in result.issues}
+
+
+def test_obvious_analogy_must_be_labeled_as_analogy() -> None:
+    draft = _draft()
+    draft.sentences[-2].sentence_type = "interpretation"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "SENTENCE_TYPE_MISMATCH" in {issue.code for issue in result.issues}
+
+
+def test_core_judgment_must_be_an_explicit_conclusion_not_a_question() -> None:
+    draft = _draft()
+    draft.sentences[-1].text = "你是否只盯着那个醒目的数字？"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "CORE_JUDGMENT_WEAK" in {issue.code for issue in result.issues}
+
+
+def test_formulaic_openers_cannot_repeat_more_than_twice() -> None:
+    draft = _draft()
+    for sentence in draft.sentences[2:5]:
+        sentence.text = "你不妨先核对来源，再决定怎么理解。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "FORMULAIC_REPETITION" in {issue.code for issue in result.issues}
 
 
 def test_unsupported_number_and_bad_rate_fail_quality_gate() -> None:

@@ -17,13 +17,13 @@ def test_v03_artifacts_have_separate_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["script.md"] == ("script_render", ("script.json",))
 
 
-def test_verified_fact_requires_claim_and_explanation_cannot_claim() -> None:
+def test_verified_fact_requires_claim_and_other_types_may_bind_for_semantic_gate() -> None:
     with pytest.raises(ValidationError):
         ScriptSentence(sentence_id="sentence_001", section="phenomenon",
                        sentence_type="verified_fact", text="增长2.8%。", claim_ids=[])
-    with pytest.raises(ValidationError):
-        ScriptSentence(sentence_id="sentence_002", section="mechanism",
-                       sentence_type="explanation", text="这是舍入差异。", claim_ids=["claim_001"])
+    sentence = ScriptSentence(sentence_id="sentence_002", section="mechanism",
+                              sentence_type="explanation", text="这是舍入差异。", claim_ids=["claim_001"])
+    assert sentence.claim_ids == ["claim_001"]
 
 
 def test_fact_palette_excludes_unverified_conflicted_and_disallowed() -> None:
