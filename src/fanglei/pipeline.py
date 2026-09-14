@@ -59,15 +59,32 @@ STAGE_ARTIFACT = {
     "visual_planning": "visual_beats.json",
     "storyboard_generation": "storyboard.json",
     "visual_plan_render": "visual_plan.md",
+    "narration_generation": "narration.json",
+    "audio_generation": "audio/metadata.json",
+    "audio_alignment": "alignment.json",
+    "timeline_compilation": "timeline.json",
+    "nikola_adaptation": "render_manifest.json",
+    "render_preflight": "render_qa.json",
+}
+
+STAGE_ARTIFACTS = {
+    "narration_generation": ("narration.json", "narration.txt"),
+    "audio_generation": ("audio/narration.wav", "audio/metadata.json"),
+    "audio_alignment": ("alignment.json",),
+    "timeline_compilation": ("timeline.json",),
+    "nikola_adaptation": ("renderer_project", "render_manifest.json"),
+    "render_preflight": ("preflight_report.json", "render_qa.json"),
 }
 
 
 def _execute(manifest: RunManifest, registry: ArtifactRegistry, stage: str, action, force: bool = False) -> None:
     previous = manifest.stages.get(stage, StageState())
-    artifact_state = manifest.artifacts[STAGE_ARTIFACT[stage]]
-    if previous.status == "succeeded" and artifact_state.status == "valid" and not force:
+    artifact_names = STAGE_ARTIFACTS.get(stage, (STAGE_ARTIFACT[stage],))
+    artifact_states = [manifest.artifacts[name] for name in artifact_names]
+    if previous.status == "succeeded" and all(state.status == "valid" for state in artifact_states) and not force:
         try:
-            registry.validate(STAGE_ARTIFACT[stage])
+            for artifact_name in artifact_names:
+                registry.validate(artifact_name)
             return
         except Exception:
             pass

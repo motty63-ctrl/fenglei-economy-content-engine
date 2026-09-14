@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,17 @@ def sha256_text(value: str) -> str:
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    for attempt in range(5):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(.02 * (attempt + 1))
 
 
 def atomic_write_text(path: Path, value: str) -> None:
@@ -35,7 +47,7 @@ def atomic_write_text(path: Path, value: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()
@@ -52,7 +64,7 @@ def atomic_write_bytes(path: Path, value: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()

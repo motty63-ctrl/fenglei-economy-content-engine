@@ -22,6 +22,10 @@ from fanglei.content_pipeline import run_content_pipeline
 from fanglei.providers.content import DeepSeekContentPlanningProvider, MockContentPlanningProvider
 from fanglei.providers.visual import DeterministicVisualPlanningProvider
 from fanglei.visual_pipeline import run_visual_pipeline
+from fanglei.providers.alignment import FakeAlignmentProvider
+from fanglei.providers.narration import FakeNarrationProvider
+from fanglei.render_preflight import FakeRendererProbe
+from fanglei.v05_pipeline import run_v05_pipeline
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -203,3 +207,25 @@ def storyboard_command(
         run_id, ctx.obj["runs_dir"], DeterministicVisualPlanningProvider(), force_stage=force_stage,
     )
     typer.echo(f"Artifacts: {run / 'storyboard.json'}, {run / 'visual_plan.md'}")
+
+
+@app.command("prepare-renderer")
+def prepare_renderer_command(
+    ctx: typer.Context,
+    run_id: str,
+    narration_provider: Annotated[str, typer.Option("--narration-provider")] = "fake",
+    alignment_provider: Annotated[str, typer.Option("--alignment-provider")] = "fake",
+    probe: Annotated[str, typer.Option("--probe")] = "fake",
+    voice_id: Annotated[str, typer.Option("--voice-id")] = "fake-voice",
+    stop_after: Annotated[str | None, typer.Option("--stop-after")] = None,
+    force_stage: Annotated[str | None, typer.Option("--force-stage")] = None,
+) -> None:
+    if (narration_provider, alignment_provider, probe) != ("fake", "fake", "fake"):
+        typer.echo("Error: V0.5 currently exposes only explicit fake providers", err=True)
+        raise typer.Exit(code=2)
+    run = run_v05_pipeline(
+        run_id, ctx.obj["runs_dir"], FakeNarrationProvider(), FakeAlignmentProvider(),
+        FakeRendererProbe(), voice_id=voice_id, stop_after=stop_after, force_stage=force_stage,
+    )
+    typer.echo(f"renderer_ready: {run_id}")
+    typer.echo(f"Run directory: {run.resolve()}")

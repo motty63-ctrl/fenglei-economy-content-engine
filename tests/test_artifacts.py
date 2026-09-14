@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from fanglei.artifacts import atomic_write_json, atomic_write_text, read_json, sha256_text
 from fanglei.models import AnalysisResult, RunManifest, StageState
+import fanglei.artifacts as artifact_io
 
 
 def test_atomic_writes_round_trip_utf8(tmp_path: Path) -> None:
@@ -17,6 +18,24 @@ def test_atomic_writes_round_trip_utf8(tmp_path: Path) -> None:
     assert text_path.read_text(encoding="utf-8") == "利率与通胀\n"
     assert read_json(json_path) == {"topic": "利率"}
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_write_retries_transient_windows_replace_lock(tmp_path: Path, monkeypatch) -> None:
+    original_replace = artifact_io.os.replace
+    attempts = 0
+
+    def flaky_replace(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("transient sync lock")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(artifact_io.os, "replace", flaky_replace)
+    target = tmp_path / "run.json"
+    atomic_write_text(target, "ready")
+    assert target.read_text(encoding="utf-8") == "ready"
+    assert attempts == 3
 
 
 def test_sha256_text_is_deterministic() -> None:

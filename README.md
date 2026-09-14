@@ -58,6 +58,17 @@ python -m fanglei analyze 2026-09-07-001-topic-slug --force
 python -m fanglei --runs-dir D:/fanglei-runs ingest article.md
 ```
 
+已通过 V0.4 的脚本与 storyboard 可用确定性 provider 生成 V0.5 的旁白、真实音频时间轴和 Nikola renderer 工程：
+
+```bash
+python -m fanglei prepare-renderer RUN_ID \
+  --narration-provider fake \
+  --alignment-provider fake \
+  --probe fake
+```
+
+`--stop-after` 可停在任一 V0.5 stage，`--force-stage` 只重跑指定 stage；有效上游 artifact 默认复用。fake provider 仅用于确定性工程验收，真实 TTS、alignment 与 Nikola dry-run 均为显式 opt-in integration。
+
 ## Artifact 产物
 
 每个任务目录至少包含：
@@ -71,5 +82,7 @@ python -m fanglei --runs-dir D:/fanglei-runs ingest article.md
 
 - 分析使用确定性的 mock provider，不调用真实模型；
 - `analyze` 只生成问题；`research.md` 必须经过检索、原文抓取与事实核查后生成；
-- 暂不支持 URL 抓取、视频、Web UI、n8n、自动发布、TTS 或 FFmpeg；
+- V0.5 尚未接入默认真实 TTS，也不生成正式 MP4；
+- Nikola 真实 dry-run 需要本机另行提供 HyperFrames、浏览器、FFmpeg/FFprobe 和字体环境；
+- 暂不提供 Web UI、n8n 或自动发布；
 - 中文标题在没有 ASCII 字符时使用通用 `topic` slug。
