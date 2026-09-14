@@ -5,6 +5,7 @@ import urllib.request
 from typing import Any, Callable, Protocol
 from pydantic import BaseModel
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
+from fanglei.content_style import FANGLEI_ECONOMY_STYLE_GUIDE
 from fanglei.errors import ProviderError
 from fanglei.security import REDACTED, safe_error_message
 from fanglei.script_patch import ScriptPatchResult
@@ -208,22 +209,43 @@ class DeepSeekContentPlanningProvider:
             "你是风雷经济的中文短视频编剧。只消费输入 JSON 中的 verified claims。不得创造数字、日期、机构行为、"
             "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定支持它的 claim_ids，即使 sentence_type 写成"
             " explanation 或 interpretation。没有 claim 支持时，只能写成明确的个人判断或比喻。输出纯 JSON，不要 Markdown。"
-            "脚本目标60到90秒，总口播字符严格控制在300到340个；第一句 hook 最多18个口播字符。"
+            "脚本目标60到90秒，总口播字符严格控制在260到310个，必须先自行核对字数；第一句 hook 最多20个口播字符。"
             "按现象、机制、核心判断推进，语言口语化。不要把 selected_angle 中未经 verified claims 支持的内容当作事实。"
             "绑定 claim_ids 的句子只能陈述该 claim 及 evidence 明确包含的数字、机构和指标；不要给纯观点或比喻绑定 claim。"
-            "请输出14到16句。第一句是12到18个口播字符且不含数字、年份、机构名或数据处理结论；其余每句约20到28个"
-            "口播字符。只写一条 verified_fact，忠实翻译 claim_text，不增加主语行为、成因或数据处理方式，也只有该句绑定"
-            "claim_ids。其余句子不要写可核查的机构行为、媒体惯例、舍入规则或确定因果；改写成提问、第二人称核对建议、"
-            "明确类比，或带有“我的判断是”的主观解释。非事实句要让听众清楚它是提问、建议、类比或观点，但表达要自然，"
-            "“你可以”“你不妨”“打个比方”“就像”“我的判断是”每种开头最多使用两次。"
+            "请输出12到15句，每句推动当前问题向答案前进。事实句可有多句，但每句都必须忠实复述对应 claim 或 evidence，"
+            "并绑定支持它的 claim_ids。API observation 后不要擅自添加百分号，必须按 evidence 中的原始值表达。"
+            "若 hook 包含已验证数字或机构名，hook 本身也必须标为 verified_fact 并绑定 claim。"
+            "对 angle_001，叙事只围绕同一 GDP 数值的两种精度写法：先呈现 BEA 的2.8%与 World Bank API 的"
+            "2.79318715363841（不加百分号），再写‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%’，"
+            "最后教观众先核对来源、指标、"
+            "年份和精度。四舍五入机制句也必须绑定支持它的 claim_id，并标为 verified_fact。"
+            "不要引入政策沟通需求、媒体行为、统计误差或任何 claims 未支持的原因。"
             "section 只能使用 hook、phenomenon、mechanism、core_judgment，最后一句必须是 core_judgment。"
             "sentence_type 只能使用 verified_fact、explanation、interpretation、analogy。"
             "凡是包含“打个比方、好比、就像、仿佛、这像”的句子，sentence_type 必须是 analogy。"
+            + FANGLEI_ECONOMY_STYLE_GUIDE
         )
         user = json.dumps({
             "task": "生成约300个中文口播字符的结构化脚本 JSON",
             "selected_angle": request.selected_angle.model_dump(mode="json"),
             "verified_claims_only": facts,
+            "minimum_sentence_count": 12,
+            "minimum_spoken_character_count": 240,
+            "required_narrative_beats": [
+                "hook：原样使用‘同一个美国GDP，怎么会有两种答案？’，不含数字与机构名",
+                "phenomenon：BEA的2024年美国实际GDP增长率2.8%，绑定claim",
+                "phenomenon：World Bank API原始观察值2.79318715363841，不加百分号，绑定claim",
+                "mechanism：原样使用‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%。’，绑定claim",
+                "explanation：直接点明算完这一步，表面反差已经消失",
+                "interpretation：不要把小数位差别直接理解成机构争论",
+                "explanation：把本题答案收束为同一数值的不同精度展示",
+                "advice：以后比较经济数据，第一步先看来源",
+                "advice：第二步确认指标名称是否相同",
+                "advice：第三步确认年份是否相同",
+                "advice：第四步检查数值精度",
+                "interpretation：完成核对后再判断差异是否真实",
+                "core_judgment：用来源、指标、年份、精度这一可复用方法收尾",
+            ],
             "output_schema": {
                 "angle_id": request.selected_angle.angle_id,
                 "title": request.selected_angle.title,
@@ -244,6 +266,8 @@ class DeepSeekContentPlanningProvider:
                 sentence["section"] = "core_judgment"
             if isinstance(sentence, dict) and sentence.get("sentence_type") == "core_judgment":
                 sentence["sentence_type"] = "interpretation"
+            if isinstance(sentence, dict) and sentence.get("sentence_type") != "verified_fact":
+                sentence["claim_ids"] = []
         return ScriptDraft.model_validate(raw)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:
@@ -253,9 +277,13 @@ class DeepSeekContentPlanningProvider:
             "不得修改 claim 状态、claim_ids、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
             "不得新增数字、日期、机构结论、数据口径、历史事件或因果事实。只修 structured_issues 指向的问题，"
             "保持其他内容不变，不重新设计 selected_angle。输出纯 JSON，顶层只能是 patches。"
-            "replace patch 使用 sentence_id、operation=replace、new_text；只有 SENTENCE_TYPE_MISMATCH 明确授权时"
+            "遇到 DURATION_TOO_SHORT 时，必须按缺口一次提交足够数量、文本互不重复的 add_after patches，"
+            "使完整脚本至少达到240个口播字符；不得靠重复句凑时长。"
+            "replace patch 使用 sentence_id、operation=replace、new_text；只有 SENTENCE_TYPE_MISMATCH 或"
+            " ANALOGY_OVERUSE 明确授权时"
             "才可附 new_sentence_type。add_after 仅在 allow_additions=true 时使用，并必须附 new_sentence_id、"
             "new_sentence_type=explanation或interpretation、new_section=mechanism。不得在 patch 中发送 claim_ids。"
+            + FANGLEI_ECONOMY_STYLE_GUIDE
         )
         issue_rules = {
             "HOOK_INVALID": "hook需为12到18个口播字符，且不含阿拉伯数字、年份、机构名或确定事实。",
@@ -263,8 +291,8 @@ class DeepSeekContentPlanningProvider:
             "DURATION_TOO_SHORT": (
                 "必须提交至少一个add_after patch，在授权的explanation或interpretation句后新增一条mechanism句；"
                 "新增句只写建议、提问或主观理解，不得出现统计、误差、原始数据、精度、机构、数字或因果结论。"
-                "可直接使用：‘还可以把疑问写成清单，再按顺序逐项核对。’"
-                "不得修改verified_fact、已通过的hook或结论，不得重复事实凑时长。"
+                "每条新增句必须与 existing_sentence_texts 中所有句子实质不同。"
+                "不得修改verified_fact、已通过的hook或结论，不得重复事实或建议凑时长。"
             ),
             "DURATION_TOO_LONG": (
                 "只压缩授权的explanation或analogy句；不得删除核心verified_fact，"
@@ -287,6 +315,9 @@ class DeepSeekContentPlanningProvider:
                 "‘所以，理解数据的精度，比记住一个数字更重要。’"
             ),
             "FORMULAIC_REPETITION": "同一种话语开头最多使用两次；改写成自然口语，避免连续使用‘你可以/你不妨/我的判断是’。",
+            "REPORT_STYLE_LANGUAGE": "删掉报告式套话，直接进入问题或答案；不得新增事实。",
+            "ANALOGY_OVERUSE": "去掉该句的比喻表达并改为自然 explanation；全篇最多保留1个主要比喻。",
+            "STYLE_TEMPLATE_OVERUSE": "去掉‘我的判断是’或‘你不妨想想’等模板前缀，保留句子原本推进作用。",
             "SEMANTIC_FACTUALITY_UNSUPPORTED": (
                 "逐句检查所有claim_ids为空的句子并消除五类可核查断言："
                 "numeric_or_date（阿拉伯数字或年份）；institution_action（机构显示、公布、发布、宣布、认为、预计或报告）；"
@@ -363,6 +394,7 @@ class DeepSeekContentPlanningProvider:
             "task": "仅返回 lint 授权范围内的 sentence-level patches",
             "repair_attempt": request.repair_attempt,
             "current_spoken_character_count": current_spoken_character_count,
+            "existing_sentence_texts": [sentence.text for sentence in request.current_script.sentences],
             "valid_duration_character_range": {"min": 240, "max": 360, "target": 300},
             "structured_issues": [issue.model_dump(mode="json", exclude_none=True) for issue in request.issues],
             "rules_for_current_issue_codes": current_rules,
@@ -379,9 +411,18 @@ class DeepSeekContentPlanningProvider:
                                      "new_sentence_type", "new_section"],
             },
         }, ensure_ascii=False)
-        return ScriptPatchResult.model_validate(self._request_json(
-            system, user, max_tokens=1800, temperature=self.repair_temperature
-        ))
+        raw = self._request_json(system, user, max_tokens=1800, temperature=self.repair_temperature)
+        for patch in raw.get("patches", []):
+            if not isinstance(patch, dict):
+                continue
+            if (patch.get("operation") == "replace"
+                    and patch.get("new_sentence_type") in {"hook", "phenomenon", "mechanism", "core_judgment"}):
+                patch.pop("new_sentence_type")
+            if (patch.get("operation") == "add_after"
+                    and patch.get("new_sentence_type") == "mechanism"):
+                patch["new_sentence_type"] = "explanation"
+                patch.setdefault("new_section", "mechanism")
+        return ScriptPatchResult.model_validate(raw)
 
 
 class MockContentPlanningProvider:
@@ -424,10 +465,10 @@ class MockContentPlanningProvider:
             ("mechanism", "explanation", "先别急着判断谁对谁错，第一步是把指标、年份和计算范围对齐。"),
             ("mechanism", "interpretation", "在这个例子里，可以把差别理解成显示精度不同。"),
             ("mechanism", "analogy", "这就像同一段距离，一个人说大约三公里，另一个人写到具体米数。"),
-            ("mechanism", "analogy", "你可以把短数字当成报纸上的简写，把长数字当成计算器里的原数。"),
+            ("mechanism", "explanation", "接着把两种写法放在一起，看看它们回答的是不是同一个问题。"),
             ("mechanism", "interpretation", "真正值得追问的不是小数点后多了几位，而是口径有没有变化。"),
             ("mechanism", "explanation", "还要看数据是否来自同一年度，是否经过修订，以及增长率是不是实际口径。"),
-            ("mechanism", "analogy", "刻度更细不代表方向相反，它只是让同一个位置被描述得更具体。"),
+            ("mechanism", "interpretation", "末尾写得更细，并不会自动改变前面共同表达的方向。"),
             ("mechanism", "interpretation", "普通人看到两个数字时，最容易把显示差异误读成机构分歧。"),
             ("mechanism", "explanation", "避免误读的方法很简单，先对口径，再看精度，最后才比较结论。"),
             ("core_judgment", "interpretation", "所以核心判断是，小数位不同未必是矛盾，口径不同才需要真正警惕。"),

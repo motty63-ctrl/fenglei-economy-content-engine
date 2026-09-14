@@ -30,15 +30,15 @@ def _draft(extra: str = "") -> ScriptDraft:
         "打个比方，这像看两张地图，先确认比例尺再判断远近。",
         "你可以把小数位当成显示层次，不要急着解释成方向变化。",
         "你不妨追到原始来源，再决定新闻标题有没有省略信息。",
-        "我的判断是，核对过程比盯着末尾几位小数更有价值。",
-        "就像读药品标签，先看单位，再看数量，最后才下结论。",
+        "核对过程比盯着末尾几位小数更有价值。",
+        "可以先看单位，再看数量，最后才下结论。",
     )
     for index, text in enumerate(mechanism_texts, 3):
         sentence_type = "analogy" if text.startswith(("打个比方", "就像")) else "explanation"
         sentences.append(ScriptSentence(sentence_id=f"sentence_{index:03d}", section="mechanism",
             sentence_type=sentence_type, text=text))
-    sentences.append(ScriptSentence(sentence_id="sentence_012", section="mechanism", sentence_type="analogy",
-        text="这像把同一段距离分别写成约数和更细的刻度，表达层级不同，方向并没有改变。"))
+    sentences.append(ScriptSentence(sentence_id="sentence_012", section="mechanism", sentence_type="interpretation",
+        text="最后把两种写法放回同一个问题里，再判断方向有没有变化。"))
     sentences.append(ScriptSentence(sentence_id="sentence_013", section="core_judgment", sentence_type="interpretation",
         text="所以核心判断是，先核对指标口径和精度，再讨论经济含义。" + extra))
     return ScriptDraft(angle_id="angle_001", title="小数点不是分歧", sentences=sentences)
@@ -64,7 +64,8 @@ def test_repeated_sentence_fails_quality_gate() -> None:
 
 def test_obvious_analogy_must_be_labeled_as_analogy() -> None:
     draft = _draft()
-    draft.sentences[-2].sentence_type = "interpretation"
+    analogy = next(sentence for sentence in draft.sentences if sentence.sentence_type == "analogy")
+    analogy.sentence_type = "interpretation"
     result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
     assert "SENTENCE_TYPE_MISMATCH" in {issue.code for issue in result.issues}
 
@@ -82,6 +83,29 @@ def test_formulaic_openers_cannot_repeat_more_than_twice() -> None:
         sentence.text = "你不妨先核对来源，再决定怎么理解。"
     result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
     assert "FORMULAIC_REPETITION" in {issue.code for issue in result.issues}
+
+
+def test_fanglei_style_blocks_report_language() -> None:
+    draft = _draft()
+    draft.sentences[2].text = "值得注意的是，先把两个结果放在一起比较。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "REPORT_STYLE_LANGUAGE" in {issue.code for issue in result.issues}
+
+
+def test_fanglei_style_allows_at_most_one_main_analogy() -> None:
+    draft = _draft()
+    draft.sentences[3].sentence_type = "analogy"
+    draft.sentences[3].text = "好比看另一把尺子，先确认刻度。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "ANALOGY_OVERUSE" in {issue.code for issue in result.issues}
+
+
+def test_fanglei_style_blocks_stacked_template_phrases() -> None:
+    draft = _draft()
+    draft.sentences[2].text = "我的判断是，先确认讨论的问题。"
+    draft.sentences[3].text = "你不妨想想，两个写法是否在回答同一件事。"
+    result = lint_script(draft, _angle(), _facts(), "完全不同的原始文章", speaking_rate=4.0)
+    assert "STYLE_TEMPLATE_OVERUSE" in {issue.code for issue in result.issues}
 
 
 def test_unsupported_number_and_bad_rate_fail_quality_gate() -> None:

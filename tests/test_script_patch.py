@@ -114,3 +114,20 @@ def test_sentence_type_mismatch_can_authorize_type_correction_for_same_sentence(
     )])
     assert not result.rejected
     assert result.draft.sentences[2].sentence_type == "analogy"
+
+
+def test_analogy_overuse_can_authorize_removing_analogy_type() -> None:
+    draft = _draft()
+    analogy = next(sentence for sentence in draft.sentences if sentence.sentence_type == "analogy")
+    scope = build_repair_scope(draft, [RepairIssue(
+        code="ANALOGY_OVERUSE", sentence_id=analogy.sentence_id,
+    )])
+    result = apply_script_patches(draft, scope, [ScriptPatch(
+        sentence_id=analogy.sentence_id,
+        operation="replace",
+        new_text="换个顺序，先确认问题，再比较两种写法。",
+        new_sentence_type="explanation",
+    )])
+
+    assert not result.rejected
+    assert result.draft.sentences[4].sentence_type == "explanation"

@@ -155,7 +155,8 @@ def test_script_repair_loop_stops_after_two_and_does_not_publish_failed_draft(tm
 def test_structured_repair_issues_include_safe_machine_readable_fields() -> None:
     draft = _draft()
     draft.sentences[2].text = "世界银行显示增长3.6%。"
-    draft.sentences[-2].sentence_type = "interpretation"
+    analogy = next(sentence for sentence in draft.sentences if sentence.sentence_type == "analogy")
+    analogy.sentence_type = "interpretation"
     lint = lint_script(draft, _angle(), _facts(), "不同原文", speaking_rate=6.0)
     issues = _repair_issues(lint, draft)
     by_code = {}

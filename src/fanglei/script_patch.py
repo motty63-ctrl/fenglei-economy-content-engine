@@ -56,7 +56,7 @@ def build_repair_scope(draft: ScriptDraft, issues: list[Any]) -> RepairScope:
         sentence_id = getattr(issue, "sentence_id", None)
         if sentence_id in by_id:
             editable.add(sentence_id)
-            if issue.code == "SENTENCE_TYPE_MISMATCH":
+            if issue.code in {"SENTENCE_TYPE_MISMATCH", "ANALOGY_OVERUSE"}:
                 type_change.add(sentence_id)
 
     if "HOOK_INVALID" in codes:

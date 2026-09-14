@@ -216,6 +216,24 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
            for pattern in opener_patterns):
         issues.append(LintIssue(code="FORMULAIC_REPETITION",
                                 message="script overuses the same discourse opener"))
+    report_phrases = ("根据数据显示", "值得注意的是", "从本质上来看")
+    for sentence in draft.sentences:
+        if any(phrase in sentence.text for phrase in report_phrases):
+            issues.append(LintIssue(code="REPORT_STYLE_LANGUAGE",
+                                    message="report-style language is not suitable for spoken video",
+                                    sentence_id=sentence.sentence_id))
+    analogies = [sentence for sentence in draft.sentences if sentence.sentence_type == "analogy"]
+    for sentence in analogies[1:]:
+        issues.append(LintIssue(code="ANALOGY_OVERUSE",
+                                message="Fanglei style permits at most one main analogy",
+                                sentence_id=sentence.sentence_id))
+    template_phrases = ("我的判断是", "你不妨想想")
+    template_sentences = [sentence for sentence in draft.sentences
+                          if any(phrase in sentence.text for phrase in template_phrases)]
+    for sentence in template_sentences[1:]:
+        issues.append(LintIssue(code="STYLE_TEMPLATE_OVERUSE",
+                                message="script stacks formulaic template phrases",
+                                sentence_id=sentence.sentence_id))
     combined = "".join(s.text for s in draft.sentences)
     creative_text = "".join(s.text for s in draft.sentences if not s.claim_ids)
     originality = check_originality(creative_text, source_text)

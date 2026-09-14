@@ -72,6 +72,7 @@ def test_deepseek_normalizes_explicit_ten_point_scores_at_provider_boundary() ->
 
 
 def test_deepseek_script_parses_structured_sentences() -> None:
+    captured = {}
     draft = {"angle_id": "angle_001", "title": "数字为何不同", "sentences": [
         {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
          "text": "为什么两个数字看着不同？", "claim_ids": []},
@@ -82,12 +83,28 @@ def test_deepseek_script_parses_structured_sentences() -> None:
         {"sentence_id": "sentence_004", "section": "core_judgment", "sentence_type": "interpretation",
          "text": "我的判断是，先核对定义再比较数字。", "claim_ids": []},
     ]}
-    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=lambda _: _response(draft))
+    def transport(payload):
+        captured.update(payload)
+        return _response(draft)
+
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=transport)
     result = provider.generate_script(ScriptGenerationInput(
         run_id="run", selected_angle=_candidate(),
         research_md="UNVERIFIED", fact_palette=(_claim(),),
     ))
     assert result.sentences[1].claim_ids == ["claim_007"]
+    system = captured["messages"][0]["content"]
+    assert "Fanglei Economy Style Guide" in system
+    assert "最多1个主要比喻" in system
+    assert "根据数据显示" in system
+    assert "API observation 后不要擅自添加百分号" in system
+    assert "四舍五入机制句也必须绑定" in system
+    user = json.loads(captured["messages"][1]["content"])
+    assert user["minimum_sentence_count"] == 12
+    assert user["minimum_spoken_character_count"] == 240
+    assert len(user["required_narrative_beats"]) >= 12
+    assert "同一个美国GDP，怎么会有两种答案" in user["required_narrative_beats"][0]
+    assert "2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%" in user["required_narrative_beats"][3]
 
 
 def test_deepseek_normalizes_core_insight_section_alias() -> None:
@@ -116,6 +133,23 @@ def test_deepseek_normalizes_core_judgment_used_as_sentence_type() -> None:
         run_id="run", selected_angle=_candidate(), research_md="", fact_palette=(_claim(),),
     ))
     assert result.sentences[-1].sentence_type == "interpretation"
+
+
+def test_deepseek_clears_claim_bindings_from_non_fact_sentences() -> None:
+    draft = {"angle_id": "angle_001", "title": "结论", "sentences": [
+        {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
+         "text": "同一个数字为什么有两种写法？", "claim_ids": ["claim_007"]},
+        {"sentence_id": "sentence_002", "section": "phenomenon", "sentence_type": "verified_fact",
+         "text": "美国2024年实际GDP增长2.8%。", "claim_ids": ["claim_007"]},
+    ]}
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=lambda _: _response(draft))
+
+    result = provider.generate_script(ScriptGenerationInput(
+        run_id="run", selected_angle=_candidate(), research_md="", fact_palette=(_claim(),),
+    ))
+
+    assert result.sentences[0].claim_ids == []
+    assert result.sentences[1].claim_ids == ["claim_007"]
 
 
 def test_deepseek_error_redacts_key_and_does_not_chain_raw_exception() -> None:
@@ -185,13 +219,65 @@ def test_deepseek_repair_sends_only_allowlisted_context_and_issue_codes() -> Non
     }
     assert user_payload["valid_duration_character_range"] == {"min": 240, "max": 360, "target": 300}
     assert user_payload["current_spoken_character_count"] > 0
+    assert user_payload["existing_sentence_texts"] == [row["text"] for row in draft["sentences"]]
     assert user_payload["patch_contract"]["operations"] == ["replace", "add_after"]
     assert {row["code"] for row in user_payload["structured_issues"]} >= {
         "HOOK_INVALID", "CLAIM_BINDING_MISSING", "CORE_JUDGMENT_MISSING", "REPEATED_SENTENCE"
     }
     assert captured["temperature"] == 0.0
+    assert "Fanglei Economy Style Guide" in captured["messages"][0]["content"]
+    assert "按缺口一次提交足够数量" in captured["messages"][0]["content"]
+    assert "还可以把疑问写成清单" not in captured["messages"][0]["content"]
     assert SENTINEL not in serialized
     assert "Authorization" not in serialized
+
+
+def test_deepseek_repair_normalizes_mechanism_type_alias_for_addition() -> None:
+    patch_response = {"patches": [{
+        "sentence_id": "sentence_003",
+        "operation": "add_after",
+        "new_sentence_id": "sentence_repair_001",
+        "new_text": "再核对两种写法回答的是不是同一个问题。",
+        "new_sentence_type": "mechanism",
+    }]}
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=lambda _: _response(patch_response))
+    current = ScriptDraft.model_validate({
+        "angle_id": "angle_001", "title": "数字为何不同", "sentences": [
+            {"sentence_id": "sentence_003", "section": "mechanism", "sentence_type": "explanation",
+             "text": "先核对来源。", "claim_ids": []},
+        ],
+    })
+
+    result = provider.repair_script(ScriptRepairInput(
+        run_id="run", repair_attempt=1, selected_angle=_candidate(), current_script=current,
+        editable_sentence_ids=["sentence_003"], protected_sentence_ids=[], allow_additions=True,
+        fact_palette=(_claim(),), issues=[RepairIssue(code="DURATION_TOO_SHORT")],
+    ))
+
+    assert result.patches[0].new_sentence_type == "explanation"
+    assert result.patches[0].new_section == "mechanism"
+
+
+def test_deepseek_repair_drops_section_alias_from_replace_type() -> None:
+    patch_response = {"patches": [{
+        "sentence_id": "sentence_001", "operation": "replace",
+        "new_text": "同一个数字，为什么有两种写法？", "new_sentence_type": "hook",
+    }]}
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=lambda _: _response(patch_response))
+    current = ScriptDraft.model_validate({
+        "angle_id": "angle_001", "title": "数字为何不同", "sentences": [
+            {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
+             "text": "原来的开头。", "claim_ids": []},
+        ],
+    })
+
+    result = provider.repair_script(ScriptRepairInput(
+        run_id="run", repair_attempt=1, selected_angle=_candidate(), current_script=current,
+        editable_sentence_ids=["sentence_001"], protected_sentence_ids=[], allow_additions=False,
+        fact_palette=(_claim(),), issues=[RepairIssue(code="HOOK_INVALID")],
+    ))
+
+    assert result.patches[0].new_sentence_type is None
 
 
 def test_deepseek_uses_independent_configurable_temperatures() -> None:
