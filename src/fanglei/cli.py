@@ -20,6 +20,8 @@ from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvi
 from fanglei.security import safe_error_message
 from fanglei.content_pipeline import run_content_pipeline
 from fanglei.providers.content import DeepSeekContentPlanningProvider, MockContentPlanningProvider
+from fanglei.providers.visual import DeterministicVisualPlanningProvider
+from fanglei.visual_pipeline import run_visual_pipeline
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -179,3 +181,25 @@ def plan_content_command(ctx: typer.Context, run_id: str, provider: str = "mock"
     run = _content_run(ctx, run_id, provider, speaking_rate, angle_id=angle_id, force_stage=force_stage)
     typer.echo(f"Content pipeline current: {run_id}")
     typer.echo(f"Run directory: {run.resolve()}")
+
+
+@app.command("visual-plan")
+def visual_plan_command(ctx: typer.Context, run_id: str,
+                        force: Annotated[bool, typer.Option("--force", help="Rerun semantic visual planning.")] = False) -> None:
+    run = run_visual_pipeline(
+        run_id, ctx.obj["runs_dir"], DeterministicVisualPlanningProvider(),
+        stop_after="visual_planning", force_stage="visual_planning" if force else None,
+    )
+    typer.echo(f"Artifact: {run / 'visual_beats.json'}")
+
+
+@app.command("storyboard")
+def storyboard_command(
+    ctx: typer.Context,
+    run_id: str,
+    force_stage: Annotated[str | None, typer.Option("--force-stage")] = None,
+) -> None:
+    run = run_visual_pipeline(
+        run_id, ctx.obj["runs_dir"], DeterministicVisualPlanningProvider(), force_stage=force_stage,
+    )
+    typer.echo(f"Artifacts: {run / 'storyboard.json'}, {run / 'visual_plan.md'}")

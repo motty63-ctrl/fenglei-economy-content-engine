@@ -56,6 +56,9 @@ STAGE_ARTIFACT = {
     "angle_selection": "angle.md",
     "script_generation": "script.json",
     "script_render": "script.md",
+    "visual_planning": "visual_beats.json",
+    "storyboard_generation": "storyboard.json",
+    "visual_plan_render": "visual_plan.md",
 }
 
 

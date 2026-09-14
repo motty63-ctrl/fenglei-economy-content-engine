@@ -24,6 +24,9 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "angle.md": ("angle_selection", ("angles.json", "facts.json")),
     "script.json": ("script_generation", ("angle.md", "facts.json", "research.md", "source.md")),
     "script.md": ("script_render", ("script.json",)),
+    "visual_beats.json": ("visual_planning", ("script.json", "facts.json", "angle.md")),
+    "storyboard.json": ("storyboard_generation", ("visual_beats.json", "script.json", "facts.json")),
+    "visual_plan.md": ("visual_plan_render", ("storyboard.json",)),
 }
 
 
