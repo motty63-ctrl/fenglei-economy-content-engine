@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fanglei.visual_models import (
+    MicroAnimationStep,
     Placement,
     RendererDirectives,
     Storyboard,
@@ -19,6 +20,8 @@ PLACEMENTS = {
     "right": Placement(x=.54, y=.32, width=.38, height=.20),
     "middle": Placement(x=.35, y=.55, width=.30, height=.12),
     "bottom": Placement(x=.12, y=.65, width=.76, height=.14),
+    "badge_left": Placement(x=.12, y=.25, width=.22, height=.08),
+    "badge_right": Placement(x=.66, y=.25, width=.22, height=.08),
 }
 
 
@@ -87,7 +90,9 @@ def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[s
         start = elapsed / total
         elapsed += beat.estimated_duration_seconds
         end = elapsed / total
-        scene_objects, _, structure, layout, primitives = _scene_spec(beat, fact_objects, by_id)
+        scene_objects, _, structure, layout, primitives, micro_steps = _scene_spec(
+            beat, fact_objects, by_id
+        )
         desired_ids = [obj.object_id for obj in scene_objects]
         inherited = [oid for oid in desired_ids if oid in active]
         introduced = [oid for oid in desired_ids if oid not in active]
@@ -108,6 +113,7 @@ def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[s
                     animation_primitives=primitives, draw_order=desired_ids,
                 deterministic_overlay_object_ids=[obj.object_id for obj in scene_objects
                                                   if obj.deterministic_render],
+                micro_animation_sequence=micro_steps,
             ),
         ))
         active = set(desired_ids)
@@ -174,7 +180,9 @@ def _build_generic_storyboard(plan: VisualBeatPlan, verified_sentence: dict[str,
 
 
 def _scene_spec(beat, facts: dict[str, StoryboardObject],
-                by_id: dict[str, dict[str, Any]]) -> tuple[list[StoryboardObject], list[str], str, str, list[str]]:
+                by_id: dict[str, dict[str, Any]]) -> tuple[
+                    list[StoryboardObject], list[str], str, str, list[str], list[MicroAnimationStep]
+                ]:
     def sentence_for(token: str, fallback: str | None = None) -> list[str]:
         for sentence_id in beat.sentence_ids:
             if token in by_id[sentence_id]["text"]:
@@ -190,17 +198,38 @@ def _scene_spec(beat, facts: dict[str, StoryboardObject],
             _object("question_mark", "text", "？", "middle", 3, sentence_ids=hook_ids,
                     emphasis="primary"),
         ]
-        return objects, [], "comparison", "同一画布左右两栏，中间保留问题焦点", ["draw", "reveal", "pulse"]
+        return objects, [], "comparison", "同一画布左右两栏，中间保留问题焦点", ["draw", "reveal", "pulse"], []
     if beat.narrative_role == "phenomenon":
         objects = [facts[name] for name in (
             "year_2024", "gdp_indicator", "bea_label", "world_bank_label", "bea_value", "world_bank_value"
         )]
-        return objects, [], "comparison", "共享标题下的左右同尺度数字对比", ["replace", "count_in", "highlight"]
+        return objects, [], "comparison", "共享标题下的左右同尺度数字对比", ["replace", "count_in", "highlight"], []
     if beat.narrative_role == "mechanism" and "检查" not in beat.cognitive_purpose:
-        objects = [facts["bea_value"], facts["world_bank_value"], facts["rounding_rule"],
+        bea_badge = facts["bea_label"].model_copy(update={"placement": PLACEMENTS["badge_left"]})
+        world_bank_badge = facts["world_bank_label"].model_copy(
+            update={"placement": PLACEMENTS["badge_right"]}
+        )
+        objects = [bea_badge, world_bank_badge, facts["bea_value"], facts["world_bank_value"], facts["rounding_rule"],
                    _derived_fact_object("rounding_arrow", "2.7932% → 2.8%", facts["rounding_rule"],
                                         "bottom", 4)]
-        return objects, [], "numeric_animation", "保留两个数值，以小数位和舍入箭头连接", ["hold", "digit_highlight", "round", "merge"]
+        micro_steps = [
+            MicroAnimationStep(
+                step_id="source_badges_hold",
+                target_object_ids=["bea_label", "world_bank_label"],
+                actions=["scale_down", "deemphasize", "hold"],
+            ),
+            MicroAnimationStep(
+                step_id="rounding_merge",
+                target_object_ids=["world_bank_value", "rounding_arrow", "bea_value"],
+                actions=["digit_highlight", "round", "merge"],
+            ),
+            MicroAnimationStep(
+                step_id="source_badges_fade",
+                target_object_ids=["bea_label", "world_bank_label"],
+                actions=["fade_out"],
+            ),
+        ]
+        return objects, [], "numeric_animation", "来源标签缩小为角标保留至数字合并完成，再淡出", ["hold", "digit_highlight", "round", "merge", "fade_out"], micro_steps
     if beat.narrative_role == "mechanism":
         source_ids = sentence_for("原始来源")
         indicator_ids = sentence_for("指标")
@@ -213,7 +242,23 @@ def _scene_spec(beat, facts: dict[str, StoryboardObject],
                            sentence_ids=precision_ids, emphasis="primary"),
                    _object("check_flow", "arrow", "来源 → 指标 → 年份 → 精度", "bottom", 7,
                            sentence_ids=list(dict.fromkeys(source_ids + indicator_ids + precision_ids)))]
-        return objects, [], "process_flow", "两个数值保留在上方，四项检查依次在下方形成路径", ["hold", "reveal_sequence", "connect"]
+        nodes = ["source_check", "indicator_check", "year_check", "precision_check"]
+        micro_steps = [
+            MicroAnimationStep(
+                step_id=f"{object_id}_cycle",
+                target_object_ids=[object_id],
+                actions=["appear", "focus", "check"] + (
+                    ["move_focus_next"] if object_id != nodes[-1] else []
+                ),
+            )
+            for object_id in nodes
+        ]
+        micro_steps.append(MicroAnimationStep(
+            step_id="connect_complete_flow",
+            target_object_ids=nodes + ["check_flow"],
+            actions=["connect_complete_flow"],
+        ))
+        return objects, [], "process_flow", "两个数值保留在上方；来源、指标、年份、精度依次出现、聚焦、确认并移交焦点，最后连接成完整路径", ["hold", "reveal_sequence", "focus", "check", "connect"], micro_steps
     judgment_ids = [beat.sentence_ids[0]]
     objects = [facts["bea_value"], facts["world_bank_value"],
                _object("decimal_point", "shape", "小数点", "middle", 3,
@@ -222,4 +267,4 @@ def _scene_spec(beat, facts: dict[str, StoryboardObject],
                                     "right", 4, "number"),
                _object("closing_metaphor", "metaphor", "小数点把部分数字藏到纸后", "bottom", 5,
                        sentence_ids=judgment_ids)]
-    return objects, [], "numeric_animation", "延续数值位置，让多余小数位滑到纸后并收束", ["hold", "mask_digits", "merge", "final_hold"]
+    return objects, [], "numeric_animation", "延续数值位置，让多余小数位滑到纸后并收束", ["hold", "mask_digits", "merge", "final_hold"], []

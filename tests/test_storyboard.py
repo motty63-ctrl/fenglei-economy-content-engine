@@ -45,6 +45,37 @@ def test_storyboard_keeps_stable_objects_across_beats() -> None:
     assert first_value.content == inherited_value.content == "2.8%"
 
 
+def test_rounding_scene_keeps_source_badges_until_number_merge_finishes() -> None:
+    board = _board()
+    scene = board.scenes[2]
+
+    assert {"bea_label", "world_bank_label"} <= set(scene.inherited_objects)
+    assert {"bea_label", "world_bank_label"} <= set(scene.persistent_objects)
+    labels = {obj.object_id: obj for obj in scene.objects}
+    assert labels["bea_label"].emphasis == "secondary"
+    assert labels["world_bank_label"].emphasis == "secondary"
+    assert labels["bea_label"].placement.height < board.scenes[1].objects[2].placement.height
+
+    steps = scene.renderer_directives.micro_animation_sequence
+    merge_index = next(i for i, step in enumerate(steps) if "merge" in step.actions)
+    fade_index = next(i for i, step in enumerate(steps) if "fade_out" in step.actions)
+    assert fade_index > merge_index
+    assert set(steps[fade_index].target_object_ids) == {"bea_label", "world_bank_label"}
+
+
+def test_process_flow_declares_each_check_node_micro_animation() -> None:
+    scene = _board().scenes[3]
+    steps = scene.renderer_directives.micro_animation_sequence
+    expected = ["source_check", "indicator_check", "year_check", "precision_check"]
+
+    assert [step.target_object_ids[0] for step in steps[:4]] == expected
+    assert all(step.actions[:3] == ["appear", "focus", "check"] for step in steps[:4])
+    assert all("move_focus_next" in step.actions for step in steps[:3])
+    assert steps[3].actions == ["appear", "focus", "check"]
+    assert steps[4].target_object_ids == expected + ["check_flow"]
+    assert steps[4].actions == ["connect_complete_flow"]
+
+
 def test_factual_visible_objects_are_deterministic_and_traceable() -> None:
     board = _board()
     factual = [obj for scene in board.scenes for obj in scene.objects if obj.factual]

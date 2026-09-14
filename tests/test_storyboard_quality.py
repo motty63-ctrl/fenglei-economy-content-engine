@@ -53,3 +53,22 @@ def test_gate_rejects_invalid_persistence_and_appearance_order() -> None:
     codes = _codes(board)
     assert "PERSISTENT_OBJECT_NOT_INHERITED" in codes
     assert "APPEARANCE_SEQUENCE_INVALID" in codes
+
+
+def test_gate_rejects_source_badges_that_disappear_before_rounding_merge() -> None:
+    board = _board()
+    scene = board.scenes[2]
+    scene.objects = [obj for obj in scene.objects if obj.object_id not in {"bea_label", "world_bank_label"}]
+    scene.inherited_objects = [oid for oid in scene.inherited_objects
+                               if oid not in {"bea_label", "world_bank_label"}]
+    scene.persistent_objects = [oid for oid in scene.persistent_objects
+                                if oid not in {"bea_label", "world_bank_label"}]
+    scene.appearance_sequence = [obj.object_id for obj in scene.objects]
+    scene.renderer_directives.draw_order = list(scene.appearance_sequence)
+    assert "ROUNDING_SOURCE_CONTEXT_MISSING" in _codes(board)
+
+
+def test_gate_rejects_incomplete_process_flow_micro_animation() -> None:
+    board = _board()
+    board.scenes[3].renderer_directives.micro_animation_sequence = []
+    assert "PROCESS_FLOW_SEQUENCE_INVALID" in _codes(board)

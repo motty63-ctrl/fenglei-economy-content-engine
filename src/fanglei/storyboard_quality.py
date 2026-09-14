@@ -63,6 +63,54 @@ def lint_storyboard(storyboard: Storyboard, script: dict[str, Any], facts: dict[
         if set(scene.inherited_objects) & set(scene.introduced_objects):
             issues.append(_issue("OBJECT_CONTINUITY_CONFLICT", "object cannot be introduced and inherited",
                                  scene.scene_id))
+        micro_steps = scene.renderer_directives.micro_animation_sequence
+        for step in micro_steps:
+            for oid in step.target_object_ids:
+                if oid not in current:
+                    issues.append(_issue("MICRO_ANIMATION_TARGET_UNKNOWN",
+                                         "micro animation targets an object outside the scene",
+                                         scene.scene_id, oid))
+        if scene.renderer_directives.structure == "numeric_animation" and any(
+            obj.object_id == "rounding_arrow" for obj in scene.objects
+        ):
+            source_badges = {"bea_label", "world_bank_label"}
+            if not source_badges.issubset(current) or not source_badges.issubset(
+                set(scene.inherited_objects)
+            ):
+                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_MISSING",
+                                     "source badges must persist through the rounding merge",
+                                     scene.scene_id))
+            merge_index = next((i for i, step in enumerate(micro_steps)
+                                if "merge" in step.actions), None)
+            fade_index = next((i for i, step in enumerate(micro_steps)
+                               if "fade_out" in step.actions and
+                               source_badges == set(step.target_object_ids)), None)
+            if merge_index is None or fade_index is None or fade_index <= merge_index:
+                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_SEQUENCE_INVALID",
+                                     "source badges may fade only after the numeric merge",
+                                     scene.scene_id))
+        if scene.renderer_directives.structure == "process_flow":
+            node_ids = ["source_check", "indicator_check", "year_check", "precision_check"]
+            valid_sequence = len(micro_steps) == len(node_ids) + 1
+            if valid_sequence:
+                for index, (step, node_id) in enumerate(zip(micro_steps[:4], node_ids)):
+                    expected_actions = ["appear", "focus", "check"] + (
+                        ["move_focus_next"] if index < len(node_ids) - 1
+                        else []
+                    )
+                    if step.target_object_ids != [node_id] or step.actions != expected_actions:
+                        valid_sequence = False
+                        break
+            if valid_sequence:
+                connect_step = micro_steps[-1]
+                valid_sequence = (
+                    connect_step.target_object_ids == node_ids + ["check_flow"]
+                    and connect_step.actions == ["connect_complete_flow"]
+                )
+            if not valid_sequence:
+                issues.append(_issue("PROCESS_FLOW_SEQUENCE_INVALID",
+                                     "process flow must animate source, indicator, year, then precision",
+                                     scene.scene_id))
         for obj in scene.objects:
             identity = (obj.object_type, obj.content)
             if obj.object_id in known_objects and known_objects[obj.object_id] != identity:

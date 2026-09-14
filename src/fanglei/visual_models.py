@@ -75,6 +75,12 @@ class StoryboardObject(StrictModel):
     emphasis: Literal["none", "primary", "secondary"] = "none"
 
 
+class MicroAnimationStep(StrictModel):
+    step_id: str
+    target_object_ids: list[str] = Field(min_length=1)
+    actions: list[str] = Field(min_length=1)
+
+
 class RendererDirectives(StrictModel):
     primary_route: RendererType
     structure: VisualStructure
@@ -82,6 +88,7 @@ class RendererDirectives(StrictModel):
     draw_order: list[str] = Field(default_factory=list)
     semantic_regions: list[str] = Field(default_factory=list)
     deterministic_overlay_object_ids: list[str] = Field(default_factory=list)
+    micro_animation_sequence: list[MicroAnimationStep] = Field(default_factory=list)
 
 
 class StoryboardScene(StrictModel):
