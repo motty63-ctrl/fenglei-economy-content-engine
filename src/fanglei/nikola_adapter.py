@@ -20,6 +20,70 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _beat_one_dry_run_html(scene: dict) -> str:
+    duration_seconds = (scene["end_ms"] - scene["start_ms"]) / 1000
+    beat_id = (scene.get("beat_ids") or ["beat_001"])[0]
+    object_markup: list[str] = []
+    object_ids: list[str] = []
+    for obj in scene["objects"]:
+        object_id = escape(obj["object_id"], quote=True)
+        object_ids.append(obj["object_id"])
+        content = escape(obj.get("content") or "")
+        placement = obj["placement"]
+        delay = max(0, int(obj.get("appearance_order", 1)) - 1) * 0.45
+        style = (
+            f"left:{placement['x'] * 100:g}%;top:{placement['y'] * 100:g}%;"
+            f"width:{placement['width'] * 100:g}%;height:{placement['height'] * 100:g}%;"
+            f"animation-delay:{delay:g}s"
+        )
+        classes = "beat-object"
+        if obj.get("emphasis") == "primary":
+            classes += " primary"
+        if obj.get("object_type") == "shape":
+            object_markup.append(
+                f'<svg id="{object_id}" class="{classes} shape" style="{style}" '
+                'viewBox="0 0 100 100" role="img">'
+                '<rect x="4" y="8" width="92" height="84" rx="12"/>'
+                f'<text x="50" y="58" text-anchor="middle">{content}</text></svg>'
+            )
+        else:
+            object_markup.append(
+                f'<div id="{object_id}" class="{classes}" style="{style}">{content}</div>'
+            )
+    primitives = ",".join(scene["renderer_directives"].get("animation_primitives", []))
+    required_ids = json.dumps(object_ids, ensure_ascii=False)
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=1080,height=1920">'
+        '<style>'
+        "@font-face{font-family:'Microsoft YaHei';src:local('Microsoft YaHei')}"
+        '*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;'
+        "background:#faf8f0;font-family:'Microsoft YaHei',sans-serif}"
+        '#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#faf8f0}'
+        '.beat-object{position:absolute;display:flex;align-items:center;justify-content:center;'
+        'color:#20211d;font-size:58px;font-weight:700;opacity:0;transform:translateY(28px);'
+        'animation:beatReveal .7s ease-out both}'
+        '.shape rect{fill:#fff;stroke:#20211d;stroke-width:3}.shape text{font-family:'
+        "'Microsoft YaHei',sans-serif;font-size:16px;font-weight:700;fill:#20211d}"
+        '.primary{color:#d54b3d;font-size:110px;animation-name:beatReveal,beatPulse;'
+        'animation-duration:.7s,.6s;animation-delay:.9s,1.6s;animation-iteration-count:1,2;'
+        'animation-direction:normal,alternate}'
+        '@keyframes beatReveal{to{opacity:1;transform:translateY(0)}}'
+        '@keyframes beatPulse{to{transform:scale(1.12)}}'
+        '</style></head><body>'
+        f'<main id="root" data-composition-id="main" data-no-timeline data-beat-id="{escape(beat_id, quote=True)}" '
+        f'data-animation-primitives="{escape(primitives, quote=True)}" data-start="0" '
+        f'data-duration="{duration_seconds:g}" data-width="1080" data-height="1920">'
+        + "".join(object_markup)
+        + f'<audio id="{escape(beat_id, quote=True)}_narration" class="clip" data-start="0" '
+        f'data-duration="{duration_seconds:g}" '
+        'data-track-index="5" src="assets/narration.wav"></audio></main>'
+        f'<script>const requiredIds={required_ids};const root=document.getElementById("root");'
+        'root.dataset.animationStatus=requiredIds.every(id=>document.getElementById(id))?"ready":"invalid";'
+        '</script></body></html>\n'
+    )
+
+
 def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
                          narration_audio: bytes) -> tuple[dict[str, str | bytes], dict]:
     gate = storyboard.get("quality_gate") or {}
@@ -99,10 +163,6 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
         },
     }
     project_json = json.dumps(project_manifest, ensure_ascii=False, indent=2) + "\n"
-    visible_text = " · ".join(
-        escape(obj["content"]) for scene in project_scenes for obj in scene["objects"]
-        if obj.get("content")
-    )
     files: dict[str, str | bytes] = {
         "project-manifest.json": project_json,
         "hyperframes.json": json.dumps({
@@ -126,13 +186,7 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
                 "preview": "npx --yes hyperframes@0.8.20 preview",
             },
         }, ensure_ascii=False, indent=2) + "\n",
-        "index.html": (
-            "<!doctype html><meta charset=\"utf-8\"><style>body{font-family:'Microsoft YaHei',sans-serif}"
-            "#root{width:1080px;height:1920px;overflow:hidden}</style>"
-            f"<main id=\"root\" data-composition-id=\"main\" data-start=\"0\" "
-            f"data-duration=\"{timeline.audio['duration_ms'] / 1000:g}\" "
-            f"data-width=\"1080\" data-height=\"1920\">{visible_text}</main>\n"
-        ),
+        "index.html": _beat_one_dry_run_html(project_scenes[0]),
         "scripts/compatibility-check.mjs": (
             "import fs from 'node:fs';\n"
             "for (const p of ['project-manifest.json','hyperframes.json','data/storyboard.json','data/timeline.json','assets/narration.wav']) "

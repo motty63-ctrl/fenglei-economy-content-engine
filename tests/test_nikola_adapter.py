@@ -91,3 +91,25 @@ def test_adapter_emits_hyperframes_project_contract() -> None:
     assert config["$schema"].endswith("/schema/hyperframes.json")
     assert "hyperframes@0.8.20 check" in package["scripts"]["check"]
     assert 'data-composition-id="main"' in files["index.html"]
+
+
+def test_adapter_emits_hyperframes_compatible_beat_one_dry_run() -> None:
+    alignment, board, beats, audio = _inputs()
+    from fanglei.timeline import compile_timeline
+    timeline = compile_timeline(alignment, board, beats, audio)
+    narration_audio = b"audio"
+    timeline.audio["sha256"] = sha256_bytes(narration_audio)
+
+    files, _ = build_nikola_project(board, timeline, narration_audio)
+    html = files["index.html"]
+
+    assert 'data-beat-id="beat_001"' in html
+    assert 'data-duration="7.351"' in html
+    assert "data-no-timeline" in html
+    assert "@font-face" in html
+    assert "src:local('Microsoft YaHei')" in html
+    assert 'id="gdp_topic"' in html
+    assert 'id="question_mark"' in html
+    assert 'id="beat_001_narration"' in html
+    assert "@keyframes beatReveal" in html
+    assert "<svg" in html

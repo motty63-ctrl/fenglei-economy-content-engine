@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import pytest
 
 from fanglei.artifact_registry import ArtifactRegistry
@@ -56,6 +57,29 @@ def test_pipeline_reuses_valid_stages_by_default(tmp_path) -> None:
         "nikola_adaptation", "render_preflight",
     ):
         assert after["stages"][stage]["attempts"] == before["stages"][stage]["attempts"]
+
+
+def test_preflight_succeeds_when_windows_temporarily_locks_empty_probe_root(
+    tmp_path, monkeypatch,
+) -> None:
+    run = _ready(tmp_path)
+    original_rmdir = Path.rmdir
+
+    def deny_probe_root_once(path: Path) -> None:
+        if path.name == ".render-preflight-temp":
+            raise PermissionError("probe root is temporarily locked")
+        original_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", deny_probe_root_once)
+    run_v05_pipeline(
+        run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+        FakeRendererProbe(), voice_id="fake-voice",
+    )
+
+    manifest = _manifest(run)
+    assert manifest["stages"]["render_preflight"]["status"] == "succeeded"
+    assert manifest["artifacts"]["preflight_report.json"]["status"] == "valid"
+    assert manifest["artifacts"]["render_qa.json"]["status"] == "valid"
 
 
 def test_force_alignment_does_not_regenerate_audio(tmp_path) -> None:

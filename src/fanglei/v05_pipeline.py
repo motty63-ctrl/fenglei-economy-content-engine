@@ -130,7 +130,10 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
             renderer_probe, probe_root=probe_root,
         )
         if probe_root.exists() and not any(probe_root.iterdir()):
-            probe_root.rmdir()
+            try:
+                probe_root.rmdir()
+            except OSError:
+                pass
         registry.write_json("preflight_report.json", preflight, "render_preflight",
                             force=force_stage == "render_preflight")
         registry.write_json("render_qa.json", qa, "render_preflight",
