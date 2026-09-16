@@ -103,3 +103,14 @@ audio SHA with `approve-voice`. Regeneration invalidates any earlier approval.
 
 The legacy fake audio pipeline remains test-only; its silent WAV and deterministic
 alignment are not production narration or real speech timing.
+
+Volcengine Seed TTS is available through the same provider-neutral contract. Set
+`VOLCENGINE_TTS_API_KEY`, `VOLCENGINE_TTS_SPEAKER`, and
+`VOLCENGINE_TTS_RESOURCE_ID` in the local process environment. The adapter requests
+raw PCM and wraps it locally as canonical 24 kHz, mono, 16-bit WAV; credentials are
+never written to artifacts. A live one-sentence smoke test is opt-in only:
+
+`$env:RUN_VOLCENGINE_TTS_INTEGRATION='1'; python -m pytest tests/integration/test_volcengine_speech_live.py -q`
+
+Remove `RUN_VOLCENGINE_TTS_INTEGRATION` after the smoke test. Do not run the GDP
+narration until the smoke output has passed the production audio-quality gate.

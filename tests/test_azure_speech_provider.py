@@ -40,6 +40,13 @@ def test_factory_requires_environment_without_echoing_secret(monkeypatch) -> Non
     assert sentinel not in repr(provider)
 
 
+def test_azure_factory_remains_available_after_provider_extension(monkeypatch) -> None:
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-sentinel")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastasia")
+    assert isinstance(build_narration_provider("azure", client=FakeAzureClient()),
+                      AzureSpeechNarrationProvider)
+
+
 def test_adapter_redacts_provider_exception_sentinel(monkeypatch) -> None:
     sentinel = "sentinel-never-print"
     monkeypatch.setenv("AZURE_SPEECH_KEY", sentinel)
