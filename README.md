@@ -86,3 +86,20 @@ python -m fanglei prepare-renderer RUN_ID \
 - Nikola 真实 dry-run 需要本机另行提供 HyperFrames、浏览器、FFmpeg/FFprobe 和字体环境；
 - 暂不提供 Web UI、n8n 或自动发布；
 - 中文标题在没有 ASCII 字符时使用通用 `topic` slug。
+# V0.5.1 real voice checkpoint
+
+Production voice synthesis uses a replaceable `NarrationProvider` adapter. Install the
+optional Azure SDK with `python -m pip install -e ".[azure-speech]"`, then set
+`AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` in your local environment; configure
+the voice ID explicitly. Never commit credentials or paste them into CLI arguments.
+
+`python -m fanglei --runs-dir runs generate-voice RUN_ID --provider azure --voice-id VOICE_ID --language zh-CN --speaking-rate 1.0 --pitch-semitones 0 --volume-gain-db 0 --force`
+
+This command consumes the existing narration artifacts and stops after canonical
+`audio/narration.wav`, `audio/metadata.json`, and `audio/quality.json`. It does not
+perform alignment, timeline compilation, or rendering. Listen to the WAV and verify
+voice, rate, pauses, and number reading before explicitly approving the current
+audio SHA with `approve-voice`. Regeneration invalidates any earlier approval.
+
+The legacy fake audio pipeline remains test-only; its silent WAV and deterministic
+alignment are not production narration or real speech timing.

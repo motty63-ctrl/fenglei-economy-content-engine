@@ -69,7 +69,8 @@ STAGE_ARTIFACT = {
 
 STAGE_ARTIFACTS = {
     "narration_generation": ("narration.json", "narration.txt"),
-    "audio_generation": ("audio/narration.wav", "audio/metadata.json"),
+    "audio_generation": ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"),
+    "voice_review": ("audio/review.json",),
     "audio_alignment": ("alignment.json",),
     "timeline_compilation": ("timeline.json",),
     "nikola_adaptation": ("renderer_project", "render_manifest.json"),

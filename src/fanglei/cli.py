@@ -26,6 +26,9 @@ from fanglei.providers.alignment import FakeAlignmentProvider
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
 from fanglei.v05_pipeline import run_v05_pipeline
+from fanglei.v05_pipeline import run_voice_generation, approve_voice_run
+from fanglei.provider_factory import build_narration_provider
+from fanglei.v05_models import NarrationSynthesisConfig
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -229,3 +232,54 @@ def prepare_renderer_command(
     )
     typer.echo(f"renderer_ready: {run_id}")
     typer.echo(f"Run directory: {run.resolve()}")
+
+
+@app.command("generate-voice")
+def generate_voice_command(
+    ctx: typer.Context,
+    run_id: str,
+    provider: Annotated[str, typer.Option("--provider")] = "azure",
+    voice_id: Annotated[str, typer.Option("--voice-id")] = "",
+    language: Annotated[str, typer.Option("--language")] = "zh-CN",
+    speaking_rate: Annotated[float, typer.Option("--speaking-rate")] = 1.0,
+    pitch_semitones: Annotated[float, typer.Option("--pitch-semitones")] = 0.0,
+    volume_gain_db: Annotated[float, typer.Option("--volume-gain-db")] = 0.0,
+    force: Annotated[bool, typer.Option("--force")] = False,
+) -> None:
+    if provider == "fake":
+        typer.echo("PRODUCTION_PROVIDER_REQUIRED", err=True)
+        raise typer.Exit(code=2)
+    try:
+        config = NarrationSynthesisConfig(
+            voice_id=voice_id, language=language, speaking_rate=speaking_rate,
+            pitch_semitones=pitch_semitones, volume_gain_db=volume_gain_db,
+        )
+        if not config.voice_id:
+            raise ValueError("VOICE_ID_REQUIRED")
+        run = run_voice_generation(run_id, ctx.obj["runs_dir"],
+                                   build_narration_provider(provider), config, force=force)
+    except Exception as error:
+        typer.echo(f"Error: {safe_error_message(error)}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"Voice review pending: {run / 'audio' / 'narration.wav'}")
+    typer.echo(f"Audio quality: {run / 'audio' / 'quality.json'}")
+
+
+@app.command("approve-voice")
+def approve_voice_command(
+    ctx: typer.Context, run_id: str,
+    confirm_voice: Annotated[bool, typer.Option("--confirm-voice")] = False,
+    confirm_speaking_rate: Annotated[bool, typer.Option("--confirm-speaking-rate")] = False,
+    confirm_pauses: Annotated[bool, typer.Option("--confirm-pauses")] = False,
+    confirm_number_pronunciation: Annotated[bool, typer.Option("--confirm-number-pronunciation")] = False,
+    reviewer: Annotated[str, typer.Option("--reviewer")] = "human",
+) -> None:
+    try:
+        run = approve_voice_run(run_id, ctx.obj["runs_dir"], reviewer=reviewer,
+                                voice=confirm_voice, rate=confirm_speaking_rate,
+                                pauses=confirm_pauses,
+                                number_pronunciation=confirm_number_pronunciation)
+    except Exception as error:
+        typer.echo(f"Error: {safe_error_message(error)}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"Voice approved for current audio hash: {run / 'audio' / 'review.json'}")

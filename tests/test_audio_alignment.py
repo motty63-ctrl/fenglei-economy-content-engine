@@ -69,3 +69,8 @@ def test_low_confidence_uses_explicit_fallback() -> None:
 def test_low_confidence_without_fallback_fails() -> None:
     with pytest.raises(ValueError, match="ALIGNMENT_LOW_CONFIDENCE"):
         align_audio(_document(), _metadata(), FakeAlignmentProvider(confidence=.4))
+
+
+def test_production_alignment_rejects_fake_provider() -> None:
+    with pytest.raises(ValueError, match="PRODUCTION_ALIGNMENT_PROVIDER_REQUIRED"):
+        align_audio(_document(), _metadata(), FakeAlignmentProvider(), production=True)

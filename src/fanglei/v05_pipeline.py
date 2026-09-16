@@ -13,7 +13,11 @@ from fanglei.providers.alignment import AlignmentProvider
 from fanglei.providers.narration import NarrationProvider
 from fanglei.render_preflight import RendererProbe, run_render_preflight
 from fanglei.timeline import compile_timeline
-from fanglei.v05_models import AlignmentDocument, AudioMetadata, NarrationDocument, TimelineDocument
+from fanglei.v05_models import (
+    AlignmentDocument, AudioMetadata, NarrationDocument, NarrationSynthesisConfig,
+    TimelineDocument, VoiceReviewDocument,
+)
+from fanglei.voice_review import approve_voice
 
 
 V05_STAGES = (
@@ -27,6 +31,8 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
                      voice_id: str = "fake-voice", stop_after: str | None = None,
                      force_stage: str | None = None,
                      fallback_alignment_provider: AlignmentProvider | None = None) -> Path:
+    if getattr(narration_provider, "provider_type", "fake") != "fake":
+        raise ValueError("PRODUCTION_VOICE_REQUIRES_AUDIO_ONLY")
     if stop_after is not None and stop_after not in V05_STAGES:
         raise ValueError("INVALID_V05_STOP_STAGE")
     if force_stage is not None and force_stage not in V05_STAGES:
@@ -59,15 +65,31 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
 
     def audio_stage() -> None:
         narration = NarrationDocument.model_validate(registry.read_json("narration.json"))
-        audio_bytes, metadata = generate_audio(narration, narration_provider, voice_id)
-        registry.write_bytes("audio/narration.wav", audio_bytes, "audio_generation",
+        bundle = generate_audio(narration, narration_provider,
+                                NarrationSynthesisConfig(voice_id=voice_id))
+        registry.write_bytes("audio/narration.wav", bundle.audio_bytes, "audio_generation",
                              force=audio_force)
-        registry.write_json("audio/metadata.json", metadata.model_dump(mode="json"),
+        registry.write_json("audio/metadata.json", bundle.metadata.model_dump(mode="json"),
+                            "audio_generation", force=audio_force)
+        registry.write_json("audio/quality.json", bundle.quality.model_dump(mode="json"),
                             "audio_generation", force=audio_force)
 
     _execute(manifest, registry, "audio_generation", audio_stage, audio_force)
     if stop_after == "audio_generation":
         return run_dir
+
+    # The legacy all-fake pipeline is test infrastructure only. Its explicit test-only
+    # review satisfies artifact dependencies but can never authorize production alignment.
+    review_state = manifest.artifacts["audio/review.json"]
+    if review_state.status != "valid" and getattr(narration_provider, "provider_type", "fake") == "fake":
+        metadata = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
+        review = VoiceReviewDocument(
+            run_id=run_id, audio_sha256=metadata.sha256, status="test_only", reviewer="test",
+            reviewed_at=manifest.updated_at, voice_approved=True, rate_approved=True,
+            pauses_approved=True, number_pronunciation_approved=True,
+        )
+        registry.write_json("audio/review.json", review.model_dump(mode="json"), "voice_review")
+        registry.save_manifest()
 
     alignment_force = force_stage == "audio_alignment"
     alignment_record = manifest.artifacts.get("alignment.json")
@@ -147,5 +169,63 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
     _execute(manifest, registry, "render_preflight", preflight_stage,
              force_stage == "render_preflight")
     manifest.status = "renderer_ready"
+    registry.save_manifest()
+    return run_dir
+
+
+def run_voice_generation(run_id: str, runs_dir: Path, provider: NarrationProvider,
+                         config: NarrationSynthesisConfig, *, force: bool = False) -> Path:
+    """Generate and validate a real audio bundle, then stop for human listening review."""
+    if getattr(provider, "provider_type", None) != "real":
+        raise ValueError("PRODUCTION_PROVIDER_REQUIRED")
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+    registry.validate("narration.json")
+    registry.validate("narration.txt")
+    current_state = manifest.artifacts["audio/narration.wav"]
+    if current_state.status == "valid" and not force:
+        raise ValueError("AUDIO_ALREADY_VALID_USE_FORCE")
+    if force:
+        for name in ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"):
+            state = manifest.artifacts[name]
+            if state.status == "valid":
+                state.status = "stale"
+                registry._invalidate_descendants(name)
+        registry.save_manifest()
+
+    def stage() -> None:
+        narration = NarrationDocument.model_validate(registry.read_json("narration.json"))
+        bundle = generate_audio(narration, provider, config, production=True)
+        registry.write_bytes("audio/narration.wav", bundle.audio_bytes, "audio_generation", force=True)
+        registry.write_json("audio/metadata.json", bundle.metadata.model_dump(mode="json"),
+                            "audio_generation", force=True)
+        registry.write_json("audio/quality.json", bundle.quality.model_dump(mode="json"),
+                            "audio_generation", force=True)
+
+    _execute(manifest, registry, "audio_generation", stage, force=True)
+    manifest.status = "voice_review_pending"
+    registry.save_manifest()
+    return run_dir
+
+
+def approve_voice_run(run_id: str, runs_dir: Path, *, reviewer: str,
+                      voice: bool, rate: bool, pauses: bool,
+                      number_pronunciation: bool) -> Path:
+    """Persist human approval for the current real, quality-passing audio hash."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+    registry.validate("audio/narration.wav")
+    audio = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
+    quality = registry.read_json("audio/quality.json")
+    if audio.provider_type != "real" or not quality["production_eligible"]:
+        raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
+    if quality["audio_sha256"] != audio.sha256:
+        raise ValueError("AUDIO_QUALITY_HASH_MISMATCH")
+    review = approve_voice(run_id, audio.sha256, reviewer=reviewer, voice=voice,
+                           rate=rate, pauses=pauses,
+                           number_pronunciation=number_pronunciation)
+    registry.write_json("audio/review.json", review.model_dump(mode="json"),
+                        "voice_review", force=True)
+    manifest.status = "voice_approved"
     registry.save_manifest()
     return run_dir

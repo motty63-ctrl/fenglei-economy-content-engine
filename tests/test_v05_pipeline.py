@@ -8,6 +8,8 @@ from fanglei.providers.alignment import FakeAlignmentProvider
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
 from fanglei.v05_pipeline import run_v05_pipeline
+from fanglei.v05_pipeline import run_voice_generation, approve_voice_run
+from fanglei.v05_models import NarrationSynthesisConfig
 from tests.test_visual_pipeline import _visual_ready_run
 from fanglei.providers.visual import DeterministicVisualPlanningProvider
 from fanglei.visual_pipeline import run_visual_pipeline
@@ -137,3 +139,113 @@ def test_voice_change_regenerates_audio_and_downstream_timeline(tmp_path) -> Non
     assert metadata["voice_id"] == "voice-b"
     assert after["stages"]["audio_generation"]["attempts"] == before["stages"]["audio_generation"]["attempts"] + 1
     assert after["stages"]["timeline_compilation"]["attempts"] == before["stages"]["timeline_compilation"]["attempts"] + 1
+
+
+def test_real_audio_replaces_fake_and_stops_before_alignment(tmp_path) -> None:
+    import io
+    import struct
+    import wave
+    from fanglei.providers.narration import NarrationAudioResult
+
+    class RealProvider:
+        name = "mock_real"
+        model = "test-sine"
+        provider_type = "real"
+
+        def synthesize(self, request, config):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as stream:
+                stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+                stream.writeframes(struct.pack("<h", 7000) * 24000 * 2)
+            return NarrationAudioResult(audio_bytes=output.getvalue())
+
+    run = _ready(tmp_path)
+    run_v05_pipeline(run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+                     FakeRendererProbe())
+    narration_before = (run / "narration.json").read_bytes()
+    text_before = (run / "narration.txt").read_bytes()
+    before = _manifest(run)
+    run_voice_generation(run.name, tmp_path, RealProvider(),
+                         NarrationSynthesisConfig(voice_id="configured"), force=True)
+    after = _manifest(run)
+    assert (run / "narration.json").read_bytes() == narration_before
+    assert (run / "narration.txt").read_bytes() == text_before
+    assert after["status"] == "voice_review_pending"
+    assert after["artifacts"]["audio/quality.json"]["status"] == "valid"
+    for name in ("audio/review.json", "alignment.json", "timeline.json", "renderer_project",
+                 "render_manifest.json", "preflight_report.json", "render_qa.json"):
+        assert after["artifacts"][name]["status"] in {"missing", "stale"}
+    assert after["stages"]["audio_alignment"]["attempts"] == before["stages"]["audio_alignment"]["attempts"]
+
+
+def test_failed_real_silent_replacement_never_leaves_fake_audio_valid(tmp_path) -> None:
+    class SilentReal(FakeNarrationProvider):
+        name = "silent_real_mock"
+        provider_type = "real"
+
+    run = _ready(tmp_path)
+    run_v05_pipeline(run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+                     FakeRendererProbe(), stop_after="audio_generation")
+    with pytest.raises(ValueError, match="AUDIO_SILENT"):
+        run_voice_generation(run.name, tmp_path, SilentReal(),
+                             NarrationSynthesisConfig(voice_id="configured"), force=True)
+    manifest = _manifest(run)
+    for name in ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"):
+        assert manifest["artifacts"][name]["status"] != "valid"
+    assert manifest["stages"]["audio_generation"]["status"] == "failed"
+
+
+def test_real_generation_requires_force_when_audio_already_valid(tmp_path) -> None:
+    class RealMock(FakeNarrationProvider):
+        provider_type = "real"
+    run = _ready(tmp_path)
+    run_v05_pipeline(run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+                     FakeRendererProbe(), stop_after="audio_generation")
+    with pytest.raises(ValueError, match="AUDIO_ALREADY_VALID_USE_FORCE"):
+        run_voice_generation(run.name, tmp_path, RealMock(),
+                             NarrationSynthesisConfig(voice_id="voice"))
+
+
+def test_legacy_full_pipeline_cannot_run_real_voice_without_manual_approval(tmp_path) -> None:
+    class RealMock(FakeNarrationProvider):
+        provider_type = "real"
+    run = _ready(tmp_path)
+    with pytest.raises(ValueError, match="PRODUCTION_VOICE_REQUIRES_AUDIO_ONLY"):
+        run_v05_pipeline(run.name, tmp_path, RealMock(), FakeAlignmentProvider(),
+                         FakeRendererProbe())
+
+
+def test_audio_regeneration_invalidates_approved_hash(tmp_path) -> None:
+    import io
+    import struct
+    import wave
+    from fanglei.providers.narration import NarrationAudioResult
+
+    class RealProvider:
+        name = "mock_real"
+        model = "test"
+        provider_type = "real"
+
+        def __init__(self, amplitude):
+            self.amplitude = amplitude
+
+        def synthesize(self, request, config):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as stream:
+                stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+                stream.writeframes(struct.pack("<h", self.amplitude) * 24000 * 2)
+            return NarrationAudioResult(audio_bytes=output.getvalue())
+
+    run = _ready(tmp_path)
+    run_v05_pipeline(run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+                     FakeRendererProbe(), stop_after="narration_generation")
+    config = NarrationSynthesisConfig(voice_id="real-voice")
+    run_voice_generation(run.name, tmp_path, RealProvider(7000), config)
+    approve_voice_run(run.name, tmp_path, reviewer="human", voice=True, rate=True,
+                      pauses=True, number_pronunciation=True)
+    before = _manifest(run)
+    assert before["artifacts"]["audio/review.json"]["status"] == "valid"
+    run_voice_generation(run.name, tmp_path, RealProvider(8000), config, force=True)
+    after = _manifest(run)
+    assert after["artifacts"]["audio/review.json"]["status"] == "stale"
+    assert after["status"] == "voice_review_pending"

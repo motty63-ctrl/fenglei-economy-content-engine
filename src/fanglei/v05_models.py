@@ -45,8 +45,29 @@ class NarrationDocument(StrictModel):
     semantic_validation: SemanticValidation
 
 
+ProviderType = Literal["fake", "real"]
+
+
+class NarrationSynthesisConfig(StrictModel):
+    language: str = "zh-CN"
+    voice_id: str
+    speaking_rate: float = Field(default=1.0, ge=.5, le=2.0)
+    pitch_semitones: float = Field(default=0.0, ge=-12, le=12)
+    volume_gain_db: float = Field(default=0.0, ge=-20, le=10)
+
+
+class NativeTimingEvent(StrictModel):
+    event_type: Literal["word", "punctuation", "sentence"]
+    audio_offset_ms: int = Field(ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    text_offset: int = Field(ge=0)
+    text_length: int = Field(ge=0)
+    text: str
+    source: Literal["provider_native"] = "provider_native"
+
+
 class AudioMetadata(StrictModel):
-    schema_version: Literal["5.0"] = "5.0"
+    schema_version: Literal["5.0", "5.1"] = "5.0"
     path: Literal["audio/narration.wav"] = "audio/narration.wav"
     format: Literal["wav"] = "wav"
     codec: Literal["pcm_s16le"] = "pcm_s16le"
@@ -55,8 +76,62 @@ class AudioMetadata(StrictModel):
     duration_ms: int = Field(gt=0)
     sha256: str
     provider: str
+    provider_type: ProviderType | None = None
+    provider_model: str | None = None
     voice_id: str
-    native_timestamps: list[dict] | None = None
+    language: str | None = None
+    speaking_rate: float | None = None
+    pitch_semitones: float | None = None
+    volume_gain_db: float | None = None
+    native_timestamps: list[NativeTimingEvent] | list[dict] | None = None
+
+    @model_validator(mode="after")
+    def require_explicit_real_classification(self) -> "AudioMetadata":
+        if self.schema_version == "5.1" and self.provider_type is None:
+            raise ValueError("provider_type is required for schema 5.1")
+        if self.schema_version == "5.0" and self.provider_type is None and self.provider == "fake":
+            self.provider_type = "fake"
+        return self
+
+
+class AudioQualityThresholdsModel(StrictModel):
+    min_peak: float
+    min_rms_dbfs: float
+    voiced_frame_rms_dbfs: float
+    min_voiced_duration_ms: int
+    min_voiced_ratio: float
+
+
+class AudioQualityDocument(StrictModel):
+    schema_version: Literal["5.1"] = "5.1"
+    audio_sha256: str
+    provider: str
+    provider_type: ProviderType
+    duration_ms: int = Field(gt=0)
+    peak: float = Field(ge=0, le=1)
+    peak_dbfs: float | None
+    rms: float = Field(ge=0, le=1)
+    rms_dbfs: float | None
+    voiced_duration_ms: int = Field(ge=0)
+    voiced_ratio: float = Field(ge=0, le=1)
+    frame_duration_ms: int = 20
+    thresholds: AudioQualityThresholdsModel
+    passed: bool
+    gate_reasons: list[str] = Field(default_factory=list)
+    production_eligible: bool
+
+
+class VoiceReviewDocument(StrictModel):
+    schema_version: Literal["5.1"] = "5.1"
+    run_id: str
+    audio_sha256: str
+    status: Literal["approved", "test_only"]
+    reviewer: str
+    reviewed_at: str
+    voice_approved: bool
+    rate_approved: bool
+    pauses_approved: bool
+    number_pronunciation_approved: bool
 
 
 class AlignedSentence(StrictModel):

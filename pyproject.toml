@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fanglei-economy-content-engine"
-version = "0.5.0"
+version = "0.5.1"
 description = "Artifact-first CLI for economic explainer research workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3,<9",
+]
+azure-speech = [
+  "azure-cognitiveservices-speech>=1.45,<2",
 ]
 
 [project.scripts]

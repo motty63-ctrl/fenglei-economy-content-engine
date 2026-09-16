@@ -9,6 +9,7 @@ from fanglei.providers.narration import (
     FakeNarrationProvider,
     NarrationAudioResult,
 )
+from fanglei.v05_models import NativeTimingEvent, NarrationSynthesisConfig
 
 
 def _document():
@@ -35,8 +36,8 @@ def test_fake_provider_produces_canonical_audio_and_complete_metadata() -> None:
 
 
 class StereoProvider(FakeNarrationProvider):
-    def synthesize(self, request):
-        result = super().synthesize(request)
+    def synthesize(self, request, config=None):
+        result = super().synthesize(request, config)
         source = wave.open(io.BytesIO(result.audio_bytes), "rb")
         frames = source.readframes(source.getnframes())
         output = io.BytesIO()
@@ -51,3 +52,22 @@ class StereoProvider(FakeNarrationProvider):
 def test_audio_gate_rejects_noncanonical_channels() -> None:
     with pytest.raises(ValueError, match="AUDIO_CHANNELS_INVALID"):
         generate_audio(_document(), StereoProvider(), "fake-voice")
+
+
+def test_production_generation_rejects_fake_provider() -> None:
+    with pytest.raises(ValueError, match="AUDIO_PROVIDER_NOT_REAL"):
+        generate_audio(_document(), FakeNarrationProvider(),
+                       NarrationSynthesisConfig(voice_id="fake-voice"), production=True)
+
+
+def test_native_timing_outside_text_is_rejected_before_audio_artifact() -> None:
+    class InvalidTiming(FakeNarrationProvider):
+        def synthesize(self, request, config=None):
+            result = super().synthesize(request, config)
+            return NarrationAudioResult(audio_bytes=result.audio_bytes, native_timestamps=(
+                NativeTimingEvent(event_type="word", audio_offset_ms=0,
+                                  text_offset=1000, text_length=2, text="unknown"),
+            ))
+
+    with pytest.raises(ValueError, match="NATIVE_TIMESTAMP_OUT_OF_BOUNDS"):
+        generate_audio(_document(), InvalidTiming(), "fake-voice")

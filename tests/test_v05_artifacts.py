@@ -29,8 +29,17 @@ def _mark_text_valid(registry, name, value="{}\n"):
 def test_v05_artifacts_have_unique_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["narration.json"] == ("narration_generation", ("script.json",))
     assert ARTIFACT_GRAPH["audio/narration.wav"][0] == "audio_generation"
+    assert ARTIFACT_GRAPH["audio/quality.json"] == (
+        "audio_generation", ("audio/narration.wav", "audio/metadata.json")
+    )
+    assert ARTIFACT_GRAPH["audio/review.json"] == (
+        "voice_review", ("audio/narration.wav", "audio/quality.json")
+    )
     assert ARTIFACT_GRAPH["alignment.json"] == (
-        "audio_alignment", ("narration.json", "audio/narration.wav", "audio/metadata.json")
+        "audio_alignment", (
+            "narration.json", "audio/narration.wav", "audio/metadata.json",
+            "audio/quality.json", "audio/review.json",
+        )
     )
     assert ARTIFACT_GRAPH["timeline.json"] == (
         "timeline_compilation",

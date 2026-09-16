@@ -49,7 +49,8 @@ class RunManifest(BaseModel):
     created_at: str
     updated_at: str
     status: Literal[
-        "created", "analyzed", "scripted", "visual_planned", "renderer_ready", "failed"
+        "created", "analyzed", "scripted", "visual_planned", "voice_review_pending",
+        "voice_approved", "renderer_ready", "failed"
     ] = "created"
     input: InputInfo | None = None
     stages: dict[str, StageState] = Field(

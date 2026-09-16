@@ -4,7 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fanglei.providers.alignment import AlignmentProvider, AlignmentRequest
-from fanglei.v05_models import AlignmentDocument, AudioMetadata, NarrationDocument
+from fanglei.v05_models import (
+    AlignmentDocument, AudioMetadata, AudioQualityDocument, NarrationDocument,
+    VoiceReviewDocument,
+)
+from fanglei.voice_review import validate_voice_approval
 
 
 MIN_ALIGNMENT_CONFIDENCE = .85
@@ -61,7 +65,22 @@ def _run(document: NarrationDocument, audio: AudioMetadata,
 
 def align_audio(document: NarrationDocument, audio: AudioMetadata,
                 provider: AlignmentProvider, *,
-                fallback_provider: AlignmentProvider | None = None) -> AlignmentDocument:
+                fallback_provider: AlignmentProvider | None = None,
+                production: bool = False,
+                quality: AudioQualityDocument | None = None,
+                review: VoiceReviewDocument | None = None) -> AlignmentDocument:
+    if production:
+        if provider.method == "deterministic_fake" or (
+            fallback_provider is not None and fallback_provider.method == "deterministic_fake"
+        ):
+            raise ValueError("PRODUCTION_ALIGNMENT_PROVIDER_REQUIRED")
+        if audio.provider_type != "real" or quality is None or not quality.production_eligible:
+            raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
+        if quality.audio_sha256 != audio.sha256:
+            raise ValueError("AUDIO_QUALITY_HASH_MISMATCH")
+        if review is None:
+            raise ValueError("VOICE_REVIEW_REQUIRED")
+        validate_voice_approval(review, audio.sha256)
     expected = [row.sentence_id for row in document.sentences]
     result = _run(document, audio, provider, False)
     gate = validate_alignment(result, expected)
