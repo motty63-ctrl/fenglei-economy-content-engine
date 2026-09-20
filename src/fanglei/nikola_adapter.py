@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from html import escape
 
 from fanglei.artifacts import sha256_bytes, sha256_text
@@ -20,7 +21,8 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _beat_one_dry_run_html(scene: dict) -> str:
+def _beat_one_dry_run_html(scene: dict, *, audio_path: str = "assets/narration.wav",
+                           audio_track_index: int = 5) -> str:
     duration_seconds = (scene["end_ms"] - scene["start_ms"]) / 1000
     beat_id = (scene.get("beat_ids") or ["beat_001"])[0]
     object_markup: list[str] = []
@@ -77,9 +79,151 @@ def _beat_one_dry_run_html(scene: dict) -> str:
         + "".join(object_markup)
         + f'<audio id="{escape(beat_id, quote=True)}_narration" class="clip" data-start="0" '
         f'data-duration="{duration_seconds:g}" '
-        'data-track-index="5" src="assets/narration.wav"></audio></main>'
+        f'data-track-index="{audio_track_index}" '
+        f'src="{escape(audio_path, quote=True)}"></audio></main>'
         f'<script>const requiredIds={required_ids};const root=document.getElementById("root");'
         'root.dataset.animationStatus=requiredIds.every(id=>document.getElementById(id))?"ready":"invalid";'
+        '</script></body></html>\n'
+    )
+
+
+def _frame_at_or_after(timestamp_ms: int, fps: int) -> int:
+    return math.ceil(timestamp_ms * fps / 1000)
+
+
+def _placement_key(obj: dict) -> str:
+    return _canonical_json(obj["placement"])
+
+
+def _object_visibility(scene: dict) -> list[dict]:
+    objects = scene["objects"]
+    max_order = max((int(obj.get("appearance_order", 1)) for obj in objects), default=1)
+    scene_duration = scene["end_ms"] - scene["start_ms"]
+    starts = {
+        order: scene["start_ms"] + round((order - 1) * scene_duration / max_order)
+        for order in range(1, max_order + 1)
+    }
+    groups: dict[str, list[dict]] = {}
+    for obj in objects:
+        groups.setdefault(_placement_key(obj), []).append(obj)
+    windows: dict[str, dict] = {}
+    for placement_key, grouped in groups.items():
+        ordered = sorted(grouped, key=lambda item: int(item.get("appearance_order", 1)))
+        for index, obj in enumerate(ordered):
+            start_ms = starts[int(obj.get("appearance_order", 1))]
+            end_ms = (
+                starts[int(ordered[index + 1].get("appearance_order", 1))]
+                if index + 1 < len(ordered) else scene["end_ms"]
+            )
+            windows[obj["object_id"]] = {
+                "object_id": obj["object_id"],
+                "placement_key": placement_key,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+            }
+    return [windows[obj["object_id"]] for obj in objects]
+
+
+def _full_composition_html(project_scenes: list[dict], duration_ms: int, fps: int) -> str:
+    duration_seconds = duration_ms / 1000
+    scene_markup: list[str] = []
+    scene_schedule: list[dict[str, int | str]] = []
+    for scene in project_scenes:
+        object_markup: list[str] = []
+        visibility_by_id = {
+            window["object_id"]: window for window in scene["object_visibility"]
+        }
+        primitives = ",".join(scene["renderer_directives"].get("animation_primitives", []))
+        steps = ",".join(scene["animation_steps"])
+        for obj in scene["objects"]:
+            dom_id = escape(f'{scene["scene_id"]}__{obj["object_id"]}', quote=True)
+            object_id = escape(obj["object_id"], quote=True)
+            content = escape(obj.get("content") or "")
+            placement = obj["placement"]
+            visibility = visibility_by_id[obj["object_id"]]
+            style = (
+                f"left:{placement['x'] * 100:g}%;top:{placement['y'] * 100:g}%;"
+                f"width:{placement['width'] * 100:g}%;height:{placement['height'] * 100:g}%"
+            )
+            classes = "scene-object"
+            if obj.get("emphasis") == "primary":
+                classes += " primary"
+            if obj.get("object_type") == "shape":
+                object_markup.append(
+                    f'<svg id="{dom_id}" data-object-id="{object_id}" '
+                    f'data-visible-start-ms="{visibility["start_ms"]}" '
+                    f'data-visible-end-ms="{visibility["end_ms"]}" class="{classes} shape" '
+                    f'style="{style}" viewBox="0 0 100 100" role="img">'
+                    '<rect x="4" y="8" width="92" height="84" rx="12"/>'
+                    f'<text x="50" y="58" text-anchor="middle">{content}</text></svg>'
+                )
+            else:
+                object_markup.append(
+                    f'<div id="{dom_id}" data-object-id="{object_id}" '
+                    f'data-visible-start-ms="{visibility["start_ms"]}" '
+                    f'data-visible-end-ms="{visibility["end_ms"]}" class="{classes}" '
+                    f'style="{style}">{content}</div>'
+                )
+        scene_markup.append(
+            f'<section id="{escape(scene["scene_id"], quote=True)}" class="scene" '
+            f'data-scene-id="{escape(scene["scene_id"], quote=True)}" '
+            f'data-start-ms="{scene["start_ms"]}" data-end-ms="{scene["end_ms"]}" '
+            f'data-start-frame="{scene["start_frame"]}" '
+            f'data-end-frame-exclusive="{scene["end_frame_exclusive"]}" '
+            f'data-animation-primitives="{escape(primitives, quote=True)}" '
+            f'data-animation-steps="{escape(steps, quote=True)}">'
+            + "".join(object_markup) + "</section>"
+        )
+        scene_schedule.append({
+            "scene_id": scene["scene_id"],
+            "start_ms": scene["start_ms"],
+            "end_ms": scene["end_ms"],
+        })
+    schedule_json = json.dumps(scene_schedule, ensure_ascii=False, separators=(",", ":"))
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=1080,height=1920">'
+        '<style>'
+        "@font-face{font-family:'Microsoft YaHei';src:local('Microsoft YaHei')}"
+        '*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;'
+        "background:#faf8f0;font-family:'Microsoft YaHei',sans-serif}"
+        '#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#faf8f0}'
+        '.scene{position:absolute;inset:0;visibility:hidden;opacity:0;background:#faf8f0}'
+        '.scene-object{position:absolute;display:flex;align-items:center;justify-content:center;'
+        'color:#20211d;font-size:58px;font-weight:700;opacity:0;transform:translateY(28px)}'
+        '.shape rect{fill:#fff;stroke:#20211d;stroke-width:3}.shape text{font-family:'
+        "'Microsoft YaHei',sans-serif;font-size:16px;font-weight:700;fill:#20211d}"
+        '.primary{color:#d54b3d;font-size:110px}'
+        '</style></head><body>'
+        f'<main id="root" data-composition-id="full" data-no-timeline data-start="0" '
+        f'data-duration="{duration_seconds:g}" data-fps="{fps}" '
+        f'data-frame-count="{_frame_at_or_after(duration_ms, fps)}" '
+        'data-width="1080" data-height="1920">'
+        + "".join(scene_markup)
+        + f'<audio id="full_narration" class="clip" data-start="0" '
+        f'data-duration="{duration_seconds:g}" data-track-index="5" data-volume="1" '
+        'src="assets/narration.wav"></audio></main>'
+        f'<script>const sceneSchedule={schedule_json};'
+        'for(const item of sceneSchedule){const scene=document.getElementById(item.scene_id);'
+        'scene.animate([{visibility:"hidden",opacity:0,offset:0},'
+        '{visibility:"hidden",opacity:0,offset:item.start_ms/' + str(duration_ms) + '},'
+        '{visibility:"visible",opacity:1,offset:item.start_ms/' + str(duration_ms) + '},'
+        '{visibility:"visible",opacity:1,offset:item.end_ms/' + str(duration_ms) + '},'
+        '{visibility:"hidden",opacity:0,offset:item.end_ms/' + str(duration_ms) + '},'
+        '{visibility:"hidden",opacity:0,offset:1}],'
+        '{duration:' + str(duration_ms) + ',fill:"both",easing:"linear"});'
+        'for(const object of scene.querySelectorAll(".scene-object")){'
+        'const start=Number(object.dataset.visibleStartMs);const end=Number(object.dataset.visibleEndMs);'
+        'const revealEnd=Math.min(start+350,end);'
+        'object.animate([{visibility:"hidden",opacity:0,transform:"translateY(28px)",offset:0},'
+        '{visibility:"hidden",opacity:0,transform:"translateY(28px)",offset:start/' + str(duration_ms) + '},'
+        '{visibility:"visible",opacity:1,transform:"translateY(0)",offset:revealEnd/' + str(duration_ms) + '},'
+        '{visibility:"visible",opacity:1,transform:"translateY(0)",offset:end/' + str(duration_ms) + '},'
+        '{visibility:"hidden",opacity:0,transform:"translateY(0)",offset:end/' + str(duration_ms) + '},'
+        '{visibility:"hidden",opacity:0,transform:"translateY(0)",offset:1}],'
+        '{duration:' + str(duration_ms) + ',fill:"both",easing:"linear"});}}'
+        'document.getElementById("root").dataset.animationStatus='
+        'sceneSchedule.length===5?"ready":"invalid";'
         '</script></body></html>\n'
     )
 
@@ -131,11 +275,33 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
     storyboard_hash = sha256_text(_canonical_json(storyboard))
     timeline_payload = timeline.model_dump(mode="json")
     timeline_hash = sha256_text(_canonical_json(timeline_payload))
+    fps = 30
+    duration_ms = int(timeline.audio["duration_ms"])
+    frame_count = _frame_at_or_after(duration_ms, fps)
+    scene_frame_ranges = []
+    for scene in project_scenes:
+        scene["start_frame"] = _frame_at_or_after(scene["start_ms"], fps)
+        scene["end_frame_exclusive"] = _frame_at_or_after(scene["end_ms"], fps)
+        scene["object_visibility"] = _object_visibility(scene)
+        scene_frame_ranges.append({
+            "scene_id": scene["scene_id"],
+            "start_ms": scene["start_ms"],
+            "end_ms": scene["end_ms"],
+            "start_frame": scene["start_frame"],
+            "end_frame_exclusive": scene["end_frame_exclusive"],
+        })
     project_manifest = {
         "schema_version": "5.0",
         "run_id": timeline.run_id,
         "route": storyboard["renderer_selection"]["primary_route"],
         "audio": {"path": "assets/narration.wav", **timeline.audio},
+        "composition": {
+            "entry": "index.html",
+            "duration_ms": duration_ms,
+            "fps": fps,
+            "frame_count": frame_count,
+            "scene_frame_ranges": scene_frame_ranges,
+        },
         "scenes": project_scenes,
     }
     manifest = {
@@ -151,6 +317,12 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
         "renderer": {
             "route": storyboard["renderer_selection"]["primary_route"],
             "engine": "hyperframes",
+            "compatibility_composition_entry": "compositions/beat-001.html",
+            "full_composition_entry": "index.html",
+            "duration_ms": duration_ms,
+            "fps": fps,
+            "frame_count": frame_count,
+            "scene_frame_ranges": scene_frame_ranges,
             "full_render_requested": False,
         },
         "scene_mappings": [{
@@ -178,18 +350,22 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
         "data/storyboard.json": json.dumps(storyboard, ensure_ascii=False, indent=2) + "\n",
         "data/timeline.json": json.dumps(timeline_payload, ensure_ascii=False, indent=2) + "\n",
         "assets/narration.wav": narration_audio,
+        "index.html": _full_composition_html(project_scenes, duration_ms, fps),
+        "compositions/beat-001.html": _beat_one_dry_run_html(
+            project_scenes[0], audio_path="assets/narration.wav", audio_track_index=6,
+        ),
         "package.json": json.dumps({
             "name": "fanglei-nikola-render-project", "private": True, "type": "module",
             "scripts": {
                 "compat": "node scripts/compatibility-check.mjs",
                 "check": "npx --yes hyperframes@0.8.20 check",
                 "preview": "npx --yes hyperframes@0.8.20 preview",
+                "render:full": "npx --yes hyperframes@0.8.20 render .",
             },
         }, ensure_ascii=False, indent=2) + "\n",
-        "index.html": _beat_one_dry_run_html(project_scenes[0]),
         "scripts/compatibility-check.mjs": (
             "import fs from 'node:fs';\n"
-            "for (const p of ['project-manifest.json','hyperframes.json','data/storyboard.json','data/timeline.json','assets/narration.wav']) "
+            "for (const p of ['project-manifest.json','hyperframes.json','data/storyboard.json','data/timeline.json','assets/narration.wav','index.html','compositions/beat-001.html']) "
             "if (!fs.existsSync(p)) throw new Error(`missing ${p}`);\n"
             "JSON.parse(fs.readFileSync('project-manifest.json','utf8'));\n"
         ),

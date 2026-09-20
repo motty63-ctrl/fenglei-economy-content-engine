@@ -4,6 +4,7 @@ import json
 import math
 import struct
 import wave
+from urllib.error import HTTPError
 
 import pytest
 
@@ -13,7 +14,7 @@ from fanglei.provider_factory import build_narration_provider
 from fanglei.providers.narration import NarrationRequest
 from fanglei.providers.volcengine_speech import (
     VolcengineHttpClient, VolcengineNarrationProvider, VolcengineSynthesisPayload,
-    parse_volcengine_sse,
+    _UrllibSseTransport, parse_volcengine_sse,
 )
 from fanglei.v05_models import NarrationSynthesisConfig
 
@@ -88,7 +89,20 @@ def test_sse_parser_combines_chunks_and_rejects_provider_error() -> None:
         parse_volcengine_sse(["data:" + json.dumps({"code": 55000000, "message": "denied"})])
 
 
-def test_http_client_builds_v3_sse_request_without_secret_in_body() -> None:
+def test_parser_accepts_chunked_ndjson_lines() -> None:
+    pcm = _pcm(20)
+    payload = parse_volcengine_sse([
+        json.dumps({
+            "code": 20000000,
+            "data": base64.b64encode(pcm).decode(),
+            "reqid": "chunked-response",
+        }),
+    ])
+    assert payload.pcm_s16le == pcm
+    assert payload.request_id == "chunked-response"
+
+
+def test_http_client_builds_minimal_v3_http_chunked_request() -> None:
     captured = {}
 
     class Transport:
@@ -104,18 +118,53 @@ def test_http_client_builds_v3_sse_request_without_secret_in_body() -> None:
         api_key="sentinel-secret", speaker="configured-speaker",
         resource_id="configured-resource", transport=Transport(),
     )
-    result = client.synthesize("你好", NarrationSynthesisConfig(
+    result = client.synthesize("你好，这是一次语音合成测试。", NarrationSynthesisConfig(
         voice_id="configured-speaker", language="zh-CN", speaking_rate=.9,
     ))
     assert result.request_id == "response-id"
-    assert captured["endpoint"].endswith("/api/v3/tts/unidirectional/sse")
+    assert captured["endpoint"] == (
+        "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+    )
+    assert set(captured["headers"]) == {
+        "Content-Type", "X-Api-Key", "X-Api-Resource-Id", "X-Api-Request-Id",
+    }
+    assert captured["headers"]["Content-Type"] == "application/json"
     assert captured["headers"]["X-Api-Key"] == "sentinel-secret"
     assert captured["headers"]["X-Api-Resource-Id"] == "configured-resource"
-    assert "sentinel-secret" not in json.dumps(captured["body"])
-    assert captured["body"]["req_params"]["speaker"] == "configured-speaker"
-    assert captured["body"]["req_params"]["sample_rate"] == 24000
-    assert captured["body"]["req_params"]["audio_params"]["format"] == "pcm"
-    assert captured["body"]["req_params"]["audio_params"]["speech_rate"] == -10
+    assert captured["body"] == {
+        "req_params": {
+            "text": "你好，这是一次语音合成测试。",
+            "speaker": "configured-speaker",
+            "audio_params": {"format": "pcm", "sample_rate": 24000},
+        },
+    }
+
+
+def test_transport_surfaces_sanitizable_http_error_details(monkeypatch) -> None:
+    response = io.BytesIO(json.dumps({
+        "code": 3001, "message": "invalid request parameters",
+        "request_id": "request-diagnostic",
+    }).encode("utf-8"))
+
+    headers = {
+        "X-Api-Status-Code": "40000001",
+        "X-Api-Message": "invalid speaker",
+        "X-Tt-Logid": "safe-log-id",
+    }
+
+    def fail_request(*args, **kwargs):
+        raise HTTPError("https://example.invalid", 400, "Bad Request", headers, response)
+
+    monkeypatch.setattr("fanglei.providers.volcengine_speech.urlopen", fail_request)
+    with pytest.raises(RuntimeError) as error:
+        list(_UrllibSseTransport().post_sse(
+            "https://example.invalid", {"X-Api-Key": "sentinel-secret"}, {}, 1,
+        ))
+    message = str(error.value)
+    assert message == (
+        "VOLCENGINE_TTS_HTTP_ERROR:400:40000001:invalid speaker:safe-log-id"
+    )
+    assert "sentinel-secret" not in message
 
 
 def test_factory_reads_environment_and_redacts_provider_failure(monkeypatch) -> None:

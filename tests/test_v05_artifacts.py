@@ -35,6 +35,15 @@ def test_v05_artifacts_have_unique_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["audio/review.json"] == (
         "voice_review", ("audio/narration.wav", "audio/quality.json")
     )
+    assert ARTIFACT_GRAPH["alignment_candidate.json"] == (
+        "audio_alignment", (
+            "narration.json", "audio/narration.wav", "audio/metadata.json",
+            "audio/quality.json", "audio/review.json",
+        )
+    )
+    assert ARTIFACT_GRAPH["alignment_review.json"] == (
+        "alignment_review", ("alignment_candidate.json", "audio/review.json")
+    )
     assert ARTIFACT_GRAPH["alignment.json"] == (
         "audio_alignment", (
             "narration.json", "audio/narration.wav", "audio/metadata.json",

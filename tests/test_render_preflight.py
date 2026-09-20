@@ -57,3 +57,16 @@ def test_preflight_requires_hyperframes_configuration(tmp_path) -> None:
     assert preflight["passed"] is False
     assert "PROJECT_FILE_MISSING:hyperframes.json" in preflight["issues"]
     assert qa["passed"] is False
+
+
+def test_preflight_requires_full_composition_entry(tmp_path) -> None:
+    project, manifest = _project(tmp_path)
+    (project / "index.html").unlink()
+
+    preflight, qa = run_render_preflight(
+        project, manifest, FakeRendererProbe(), probe_root=tmp_path / "probe",
+    )
+
+    assert preflight["passed"] is False
+    assert "PROJECT_FILE_MISSING:index.html" in preflight["issues"]
+    assert qa["passed"] is False

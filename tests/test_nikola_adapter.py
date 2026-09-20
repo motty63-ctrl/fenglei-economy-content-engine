@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 
@@ -90,7 +91,8 @@ def test_adapter_emits_hyperframes_project_contract() -> None:
     package = json.loads(files["package.json"])
     assert config["$schema"].endswith("/schema/hyperframes.json")
     assert "hyperframes@0.8.20 check" in package["scripts"]["check"]
-    assert 'data-composition-id="main"' in files["index.html"]
+    assert 'data-composition-id="full"' in files["index.html"]
+    assert 'data-composition-id="main"' in files["compositions/beat-001.html"]
 
 
 def test_adapter_emits_hyperframes_compatible_beat_one_dry_run() -> None:
@@ -101,7 +103,7 @@ def test_adapter_emits_hyperframes_compatible_beat_one_dry_run() -> None:
     timeline.audio["sha256"] = sha256_bytes(narration_audio)
 
     files, _ = build_nikola_project(board, timeline, narration_audio)
-    html = files["index.html"]
+    html = files["compositions/beat-001.html"]
 
     assert 'data-beat-id="beat_001"' in html
     assert 'data-duration="7.351"' in html
@@ -113,3 +115,106 @@ def test_adapter_emits_hyperframes_compatible_beat_one_dry_run() -> None:
     assert 'id="beat_001_narration"' in html
     assert "@keyframes beatReveal" in html
     assert "<svg" in html
+
+
+def _full_composition_fixture():
+    alignment, board, beats, audio = _inputs()
+    from fanglei.timeline import compile_timeline
+    timeline = compile_timeline(alignment, board, beats, audio)
+    narration_audio = b"audio"
+    timeline.audio["sha256"] = sha256_bytes(narration_audio)
+    files, manifest = build_nikola_project(board, timeline, narration_audio)
+    project = json.loads(files["project-manifest.json"])
+    return timeline, files, manifest, project
+
+
+def test_adapter_emits_separate_full_and_beat_one_composition_entries() -> None:
+    _, files, manifest, _ = _full_composition_fixture()
+
+    assert manifest["renderer"]["compatibility_composition_entry"] == "compositions/beat-001.html"
+    assert manifest["renderer"]["full_composition_entry"] == "index.html"
+    assert manifest["renderer"]["full_render_requested"] is False
+    assert "compositions/beat-001.html" in files
+    assert 'data-composition-id="full"' in files["index.html"]
+    assert 'data-composition-id="main"' in files["compositions/beat-001.html"]
+
+
+def test_full_and_debug_compositions_do_not_conflict_in_hyperframes_project() -> None:
+    _, files, _, _ = _full_composition_fixture()
+    full_html = files["index.html"]
+    debug_html = files["compositions/beat-001.html"]
+
+    assert 'data-composition-id="full" data-no-timeline' in full_html
+    assert 'src="assets/narration.wav"' in debug_html
+    assert 'src="../assets/narration.wav"' not in debug_html
+    assert 'data-track-index="6"' in debug_html
+
+
+def test_full_composition_duration_and_frame_count_come_from_real_audio() -> None:
+    timeline, files, manifest, project = _full_composition_fixture()
+    duration_ms = timeline.audio["duration_ms"]
+    expected_frames = math.ceil(duration_ms * 30 / 1000)
+    html = files["index.html"]
+
+    assert project["composition"]["duration_ms"] == duration_ms
+    assert project["composition"]["fps"] == 30
+    assert project["composition"]["frame_count"] == expected_frames
+    assert manifest["renderer"]["duration_ms"] == duration_ms
+    assert manifest["renderer"]["frame_count"] == expected_frames
+    assert f'data-duration="{duration_ms / 1000:g}"' in html
+    assert 'data-fps="30"' in html
+
+
+def test_full_composition_preserves_scene_order_and_exact_timeline_ranges() -> None:
+    timeline, files, manifest, project = _full_composition_fixture()
+    expected = []
+    for scene in timeline.scenes:
+        expected.append({
+            "scene_id": scene.scene_id,
+            "start_ms": scene.start_ms,
+            "end_ms": scene.end_ms,
+            "start_frame": math.ceil(scene.start_ms * 30 / 1000),
+            "end_frame_exclusive": math.ceil(scene.end_ms * 30 / 1000),
+        })
+
+    assert project["composition"]["scene_frame_ranges"] == expected
+    assert manifest["renderer"]["scene_frame_ranges"] == expected
+    assert [row["scene_id"] for row in expected] == [
+        "scene_001", "scene_002", "scene_003", "scene_004", "scene_005",
+    ]
+    html = files["index.html"]
+    positions = [html.index(f'data-scene-id="{row["scene_id"]}"') for row in expected]
+    assert positions == sorted(positions)
+    for row in expected:
+        assert f'data-start-ms="{row["start_ms"]}"' in html
+        assert f'data-end-ms="{row["end_ms"]}"' in html
+        assert f'data-start-frame="{row["start_frame"]}"' in html
+        assert f'data-end-frame-exclusive="{row["end_frame_exclusive"]}"' in html
+
+
+def test_full_composition_binds_one_real_full_length_narration_track() -> None:
+    timeline, files, manifest, project = _full_composition_fixture()
+    html = files["index.html"]
+
+    assert html.count("<audio ") == 1
+    assert 'id="full_narration"' in html
+    assert 'src="assets/narration.wav"' in html
+    assert f'data-duration="{timeline.audio["duration_ms"] / 1000:g}"' in html
+    assert project["audio"]["sha256"] == timeline.audio["sha256"]
+    assert manifest["audio"]["sha256"] == timeline.audio["sha256"]
+
+
+def test_same_placement_objects_receive_non_overlapping_visibility_windows() -> None:
+    _, files, _, project = _full_composition_fixture()
+    html = files["index.html"]
+
+    for scene in project["scenes"]:
+        by_placement = {}
+        for window in scene["object_visibility"]:
+            by_placement.setdefault(window["placement_key"], []).append(window)
+            assert f'data-visible-start-ms="{window["start_ms"]}"' in html
+            assert f'data-visible-end-ms="{window["end_ms"]}"' in html
+        for windows in by_placement.values():
+            ordered = sorted(windows, key=lambda item: item["start_ms"])
+            assert all(left["end_ms"] <= right["start_ms"]
+                       for left, right in zip(ordered, ordered[1:]))

@@ -171,10 +171,23 @@ class LocalRendererProbe:
         capabilities = {name: False for name in CAPABILITIES}
         failures = list(self.environment.failure_codes)
         animation_manifest_valid = False
+        full_composition_entry = "index.html"
         try:
             project = json.loads((project_dir / "project-manifest.json").read_text(encoding="utf-8"))
             timeline = json.loads((project_dir / "data" / "timeline.json").read_text(encoding="utf-8"))
-            capabilities["project_schema"] = project.get("schema_version") == "5.0"
+            composition = project.get("composition") or {}
+            full_composition_entry = composition.get("entry", full_composition_entry)
+            entry_path = Path(full_composition_entry)
+            entry_is_safe = not entry_path.is_absolute() and ".." not in entry_path.parts
+            capabilities["project_schema"] = bool(
+                project.get("schema_version") == "5.0"
+                and entry_is_safe
+                and (project_dir / entry_path).is_file()
+                and composition.get("duration_ms") == timeline.get("audio", {}).get("duration_ms")
+                and composition.get("fps") == 30
+                and composition.get("frame_count")
+                and len(composition.get("scene_frame_ranges", [])) == len(project.get("scenes", []))
+            )
             capabilities["timeline"] = (
                 timeline.get("timing_authority") == "real_narration_audio"
                 and bool(timeline.get("scenes"))
@@ -207,7 +220,7 @@ class LocalRendererProbe:
             elif check_result is None:
                 failures.append("PREFLIGHT_HYPERFRAMES_CHECK_FAILED")
         screenshot = temporary_dir / "frame.png"
-        document_url = (project_dir / "index.html").resolve().as_uri()
+        document_url = (project_dir / full_composition_entry).resolve().as_uri()
         browser_result = self._run([
             self.environment.browser, "--headless=new", "--disable-gpu", "--no-sandbox",
             "--allow-file-access-from-files", "--virtual-time-budget=3000",
@@ -226,14 +239,14 @@ class LocalRendererProbe:
         rendered_dom = (dom_result.stdout or "") if dom_result is not None else ""
         capabilities["animation_directives"] = bool(
             animation_manifest_valid
-            and 'data-beat-id="beat_001"' in rendered_dom
+            and 'data-composition-id="full"' in rendered_dom
             and 'data-animation-status="ready"' in rendered_dom
         )
         if animation_manifest_valid and self.environment.browser and not capabilities["animation_directives"]:
             failures.append("PREFLIGHT_ANIMATION_DIRECTIVES_NOT_EXECUTED")
         capabilities["svg_assets"] = capabilities["browser"] and "<svg" in rendered_dom
         try:
-            source_html = (project_dir / "index.html").read_text(encoding="utf-8")
+            source_html = (project_dir / full_composition_entry).read_text(encoding="utf-8")
         except OSError:
             source_html = ""
         capabilities["fonts"] = capabilities["browser"] and "@font-face" in source_html
@@ -265,7 +278,8 @@ def run_render_preflight(project_dir: Path, manifest: dict, probe: RendererProbe
                          probe_root: Path) -> tuple[dict, dict]:
     required = (
         "project-manifest.json", "hyperframes.json", "data/storyboard.json", "data/timeline.json",
-        "assets/narration.wav", "index.html", "scripts/compatibility-check.mjs",
+        "assets/narration.wav", "index.html", "compositions/beat-001.html",
+        "scripts/compatibility-check.mjs",
     )
     static_issues = [f"PROJECT_FILE_MISSING:{relative}" for relative in required
                      if not (project_dir / relative).is_file()]

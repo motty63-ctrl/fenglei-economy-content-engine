@@ -1,6 +1,10 @@
 import pytest
+from pydantic import ValidationError
 
-from fanglei.v05_models import AudioMetadata, NarrationSynthesisConfig, NativeTimingEvent
+from fanglei.v05_models import (
+    AlignedSentence, AlignmentDocument, AudioMetadata, NarrationSynthesisConfig,
+    NativeTimingEvent,
+)
 
 
 def test_v051_audio_requires_explicit_provider_type() -> None:
@@ -22,3 +26,16 @@ def test_synthesis_config_and_native_timing_are_provider_neutral() -> None:
                               text_length=2, text="美国")
     assert config.voice_id == "voice"
     assert event.source == "provider_native"
+
+
+def test_alignment_schema_52_requires_real_provenance_metadata() -> None:
+    row = AlignedSentence(
+        sentence_id="sentence_001", start_ms=0, end_ms=1000, confidence=.5,
+        timing_source="forced_alignment",
+    )
+    with pytest.raises(ValidationError, match="schema 5.2 requires alignment provenance"):
+        AlignmentDocument(
+            schema_version="5.2", run_id="run", audio_sha256="a" * 64,
+            audio_duration_ms=1000, provider="local_whisperx", method="forced_alignment",
+            sentences=[row], coverage_ratio=1, confidence=.5,
+        )

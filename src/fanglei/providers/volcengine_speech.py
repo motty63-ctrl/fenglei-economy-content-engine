@@ -7,6 +7,7 @@ import binascii
 import io
 import json
 from typing import Iterable, Protocol
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import uuid
 import wave
@@ -17,7 +18,7 @@ from fanglei.v05_models import NarrationSynthesisConfig
 
 
 VOLCENGINE_V3_SSE_ENDPOINT = (
-    "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
+    "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 )
 
 
@@ -44,9 +45,9 @@ def parse_volcengine_sse(lines: Iterable[str]) -> VolcengineSynthesisPayload:
     request_id: str | None = None
     for raw_line in lines:
         line = raw_line.strip()
-        if not line.startswith("data:"):
+        if line.startswith(("event:", ":")):
             continue
-        value = line[5:].strip()
+        value = line[5:].strip() if line.startswith("data:") else line
         if not value or value == "[DONE]":
             continue
         try:
@@ -93,22 +94,17 @@ class VolcengineHttpClient:
                    config: NarrationSynthesisConfig) -> VolcengineSynthesisPayload:
         if config.language.lower() not in {"zh-cn", "zh_cn"}:
             raise ValueError("VOLCENGINE_TTS_LANGUAGE_UNSUPPORTED")
-        speech_rate = round((config.speaking_rate - 1.0) * 100)
         headers = {
             "Content-Type": "application/json",
-            "Accept": "text/event-stream",
             "X-Api-Key": self._api_key,
             "X-Api-Resource-Id": self.resource_id,
             "X-Api-Request-Id": str(uuid.uuid4()),
         }
         body = {
-            "user": {"uid": "fanglei-content-engine"},
             "req_params": {
                 "text": text,
                 "speaker": self.speaker,
-                "sample_rate": 24000,
-                "audio_params": {"format": "pcm", "speech_rate": speech_rate},
-                "additions": json.dumps({}, ensure_ascii=False),
+                "audio_params": {"format": "pcm", "sample_rate": 24000},
             },
         }
         return parse_volcengine_sse(self._transport.post_sse(
@@ -168,6 +164,26 @@ class _UrllibSseTransport:
             endpoint, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers=headers, method="POST",
         )
-        with urlopen(request, timeout=timeout_seconds) as response:
-            for line in response:
-                yield line.decode("utf-8", errors="strict")
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                for line in response:
+                    yield line.decode("utf-8", errors="strict")
+        except HTTPError as error:
+            response_headers = error.headers or {}
+            provider_code = response_headers.get("X-Api-Status-Code", "unknown")
+            provider_message = response_headers.get("X-Api-Message", "request rejected")
+            request_id = response_headers.get("X-Tt-Logid", "unknown")
+            try:
+                detail = json.loads(error.read(4096).decode("utf-8"))
+                if provider_code == "unknown":
+                    provider_code = str(detail.get("code", provider_code))
+                if provider_message == "request rejected":
+                    provider_message = str(detail.get("message", provider_message))
+                if request_id == "unknown":
+                    request_id = str(detail.get("request_id", request_id))
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                pass
+            raise RuntimeError(
+                f"VOLCENGINE_TTS_HTTP_ERROR:{error.code}:{provider_code}:"
+                f"{provider_message}:{request_id}"
+            ) from None

@@ -35,7 +35,7 @@ def _successful_subprocess(command, **kwargs):
     elif "--version" in arguments and "hyperframes@0.8.20" in arguments:
         stdout = "0.8.20\n"
     elif "--dump-dom" in arguments:
-        stdout = '<main data-beat-id="beat_001" data-animation-status="ready"><svg></svg></main>'
+        stdout = '<main data-composition-id="full" data-animation-status="ready"><svg></svg></main>'
     for argument in arguments:
         if argument.startswith("--screenshot="):
             Path(argument.split("=", 1)[1]).write_bytes(b"png")
@@ -186,7 +186,7 @@ def test_missing_browser_reports_specific_failure_code(tmp_path) -> None:
     assert "PREFLIGHT_BROWSER_NOT_FOUND" in environment.failure_codes
 
 
-def test_browser_probe_rejects_a_beat_whose_animation_marker_never_becomes_ready(
+def test_browser_probe_rejects_a_full_composition_whose_animation_marker_never_becomes_ready(
     tmp_path, monkeypatch,
 ) -> None:
     paths, environ = _runtime(tmp_path)
@@ -194,7 +194,7 @@ def test_browser_probe_rejects_a_beat_whose_animation_marker_never_becomes_ready
     def animation_not_ready(command, **kwargs):
         result = _successful_subprocess(command, **kwargs)
         if "--dump-dom" in [str(item) for item in command]:
-            result.stdout = '<main data-beat-id="beat_001" data-animation-status="invalid"></main>'
+            result.stdout = '<main data-composition-id="full" data-animation-status="invalid"></main>'
         return result
 
     monkeypatch.setattr(preflight_module.subprocess, "run", animation_not_ready)
@@ -209,6 +209,28 @@ def test_browser_probe_rejects_a_beat_whose_animation_marker_never_becomes_ready
     assert report["capabilities"]["browser"] is True
     assert report["capabilities"]["animation_directives"] is False
     assert "PREFLIGHT_ANIMATION_DIRECTIVES_NOT_EXECUTED" in report["issues"]
+
+
+def test_browser_probe_uses_full_composition_entry(tmp_path, monkeypatch) -> None:
+    paths, environ = _runtime(tmp_path)
+    commands: list[list[str]] = []
+
+    def record(command, **kwargs):
+        commands.append([str(item) for item in command])
+        return _successful_subprocess(command, **kwargs)
+
+    monkeypatch.setattr(preflight_module.subprocess, "run", record)
+    project, manifest = _project(tmp_path / "run")
+    run_render_preflight(
+        project,
+        manifest,
+        LocalRendererProbe(resolve_renderer_environment(environ=environ, which=_which(paths))),
+        probe_root=tmp_path / "probe",
+    )
+
+    browser_urls = [argument for command in commands for argument in command if argument.startswith("file:")]
+    assert browser_urls
+    assert all(url.endswith("/index.html") for url in browser_urls)
 
 
 @pytest.mark.parametrize(

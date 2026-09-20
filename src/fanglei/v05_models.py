@@ -140,6 +140,15 @@ class AlignedSentence(StrictModel):
     end_ms: int = Field(gt=0)
     confidence: float = Field(ge=0, le=1)
     timing_source: Literal["native_timestamp", "forced_alignment", "sentence_asr", "deterministic_fake"]
+    text: str | None = None
+    confidence_source: str | None = None
+    provider: str | None = None
+    method: str | None = None
+    audio_sha256: str | None = None
+    normalized_ref: str | None = None
+    normalized_asr: str | None = None
+    measured: bool | None = None
+    interpolated: bool | None = None
 
     @model_validator(mode="after")
     def timing_advances(self) -> "AlignedSentence":
@@ -148,8 +157,35 @@ class AlignedSentence(StrictModel):
         return self
 
 
+class HumanAlignmentOverride(StrictModel):
+    reviewer_status: Literal["approved"] = "approved"
+    reviewer: str
+    reviewed_sentences: int = Field(gt=0)
+    total_sentences: int = Field(gt=0)
+    candidate_hash: str
+    audio_sha256: str
+    automatic_text_consistency_passed: Literal[False] = False
+    automatic_text_consistency_issue: Literal["ALIGNMENT_TEXT_MISMATCH"] = "ALIGNMENT_TEXT_MISMATCH"
+    override_scope: Literal["candidate_and_audio_sha"] = "candidate_and_audio_sha"
+    global_gate_changed: Literal[False] = False
+
+
+class AlignmentReviewDocument(HumanAlignmentOverride):
+    schema_version: Literal["5.2"] = "5.2"
+    artifact_type: Literal["alignment_review"] = "alignment_review"
+    run_id: str
+    reviewed_at: str
+    reviewed_sentence_ids: list[str] = Field(min_length=1)
+    reviewed_coverage: str
+    voice_review_hash: str
+    model_id: str
+    model_revision: str
+    timestamps_modified: Literal[False] = False
+    raw_measurements_modified: Literal[False] = False
+
+
 class AlignmentDocument(StrictModel):
-    schema_version: Literal["5.0"] = "5.0"
+    schema_version: Literal["5.0", "5.2"] = "5.0"
     run_id: str
     audio_path: Literal["audio/narration.wav"] = "audio/narration.wav"
     audio_sha256: str
@@ -161,6 +197,65 @@ class AlignmentDocument(StrictModel):
     confidence: float = Field(ge=0, le=1)
     fallback_used: bool = False
     warnings: list[str] = Field(default_factory=list)
+    model_id: str | None = None
+    model_revision: str | None = None
+    confidence_source: str | None = None
+    recognized_text: str | None = None
+    normalized_ref: str | None = None
+    normalized_asr: str | None = None
+    text_match_cer: float | None = Field(default=None, ge=0)
+    voice_review_hash: str | None = None
+    review_hash: str | None = None
+    human_review_override: HumanAlignmentOverride | None = None
+
+    @model_validator(mode="after")
+    def require_v52_provenance(self) -> "AlignmentDocument":
+        if self.schema_version == "5.2" and not all((
+            self.model_id, self.model_revision, self.confidence_source,
+            self.recognized_text, self.normalized_ref, self.normalized_asr,
+            self.voice_review_hash,
+        )):
+            raise ValueError("schema 5.2 requires alignment provenance")
+        if self.schema_version == "5.2" and any(
+            sentence.text is None
+            or not sentence.confidence_source
+            or not sentence.provider
+            or not sentence.method
+            or not sentence.audio_sha256
+            or sentence.measured is not True
+            or sentence.interpolated is not False
+            for sentence in self.sentences
+        ):
+            raise ValueError("schema 5.2 requires alignment provenance")
+        return self
+
+
+class AlignmentCandidateDocument(AlignmentDocument):
+    schema_version: Literal["5.2"] = "5.2"
+    artifact_type: Literal["alignment_candidate"] = "alignment_candidate"
+    model_id: str
+    model_revision: str
+    confidence_source: str
+    recognized_text: str
+    normalized_ref: str
+    normalized_asr: str
+    text_match_cer: float = Field(ge=0)
+    voice_review_hash: str
+
+    @model_validator(mode="after")
+    def require_measured_sentence_provenance(self) -> "AlignmentCandidateDocument":
+        for sentence in self.sentences:
+            if (
+                sentence.text is None
+                or not sentence.confidence_source
+                or not sentence.provider
+                or not sentence.method
+                or not sentence.audio_sha256
+                or sentence.measured is not True
+                or sentence.interpolated is not False
+            ):
+                raise ValueError("schema 5.2 requires measured sentence provenance")
+        return self
 
 
 class TimelineSpan(StrictModel):

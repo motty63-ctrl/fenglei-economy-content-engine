@@ -1,5 +1,8 @@
 """Explicitly opt-in Volcengine TTS smoke test; skipped in offline suites."""
 import os
+import json
+from pathlib import Path
+import wave
 
 import pytest
 
@@ -20,6 +23,8 @@ def test_real_volcengine_speech_one_sentence() -> None:
     )
     if not all(os.environ.get(name) for name in required):
         pytest.skip("Volcengine TTS environment not configured")
+    assert os.environ["VOLCENGINE_TTS_SPEAKER"] == "zh_male_liufei_uranus_bigtts"
+    assert os.environ["VOLCENGINE_TTS_RESOURCE_ID"] == "seed-tts-2.0"
 
     document = normalize_script({
         "script_id": "volcengine-smoke",
@@ -38,3 +43,20 @@ def test_real_volcengine_speech_one_sentence() -> None:
     assert bundle.quality.production_eligible
     assert bundle.metadata.provider == "volcengine_tts"
     assert bundle.metadata.provider_type == "real"
+
+    output_dir = Path(__file__).parents[2] / "output" / "volcengine-smoke"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = output_dir / "narration.wav"
+    wav_path.write_bytes(bundle.audio_bytes)
+    with wave.open(str(wav_path), "rb") as stream:
+        assert stream.getsampwidth() == 2
+        assert stream.getframerate() == 24000
+        assert stream.getnchannels() == 1
+    report = {
+        "wav_path": str(wav_path.resolve()),
+        "metadata": bundle.metadata.model_dump(mode="json"),
+        "quality": bundle.quality.model_dump(mode="json"),
+    }
+    (output_dir / "smoke-report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
+    )

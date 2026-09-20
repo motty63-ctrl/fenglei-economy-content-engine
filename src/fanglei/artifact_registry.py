@@ -42,6 +42,8 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "audio/metadata.json": ("audio_generation", ("audio/narration.wav", "narration.json")),
     "audio/quality.json": ("audio_generation", ("audio/narration.wav", "audio/metadata.json")),
     "audio/review.json": ("voice_review", ("audio/narration.wav", "audio/quality.json")),
+    "alignment_candidate.json": ("audio_alignment", ("narration.json", "audio/narration.wav", "audio/metadata.json", "audio/quality.json", "audio/review.json")),
+    "alignment_review.json": ("alignment_review", ("alignment_candidate.json", "audio/review.json")),
     "alignment.json": ("audio_alignment", ("narration.json", "audio/narration.wav", "audio/metadata.json", "audio/quality.json", "audio/review.json")),
     "timeline.json": ("timeline_compilation", ("alignment.json", "storyboard.json", "visual_beats.json", "audio/metadata.json")),
     "renderer_project": ("nikola_adaptation", ("storyboard.json", "timeline.json")),
