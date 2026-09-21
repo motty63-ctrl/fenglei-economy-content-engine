@@ -50,6 +50,29 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "render_manifest.json": ("nikola_adaptation", ("storyboard.json", "timeline.json", "renderer_project")),
     "preflight_report.json": ("render_preflight", ("render_manifest.json", "renderer_project")),
     "render_qa.json": ("render_preflight", ("render_manifest.json", "renderer_project", "preflight_report.json")),
+    "subtitle_track.json": ("subtitle_generation", ("script.json", "alignment.json")),
+    "audio/mastered_narration.wav": (
+        "audio_mastering",
+        ("audio/narration.wav", "audio/metadata.json", "audio/quality.json", "audio/review.json"),
+    ),
+    "audio_mastering.json": (
+        "audio_mastering",
+        (
+            "audio/narration.wav", "audio/metadata.json", "audio/quality.json",
+            "audio/review.json", "audio/mastered_narration.wav",
+        ),
+    ),
+    "renderer_project_v1b": (
+        "v1b_render_adaptation",
+        (
+            "storyboard.json", "timeline.json", "subtitle_track.json",
+            "audio/mastered_narration.wav", "audio_mastering.json",
+        ),
+    ),
+    "render_manifest_v1b.json": (
+        "v1b_render_adaptation",
+        ("renderer_project_v1b", "timeline.json", "subtitle_track.json", "audio_mastering.json"),
+    ),
 }
 
 
@@ -195,7 +218,7 @@ class ArtifactRegistry:
         text_value: str | None = None
         if path.is_dir():
             actual_hash = _directory_hash(path)
-        elif path.is_file() and name == "audio/narration.wav":
+        elif path.is_file() and name in {"audio/narration.wav", "audio/mastered_narration.wav"}:
             actual_hash = sha256_bytes(path.read_bytes())
         elif path.is_file():
             text_value = path.read_text(encoding="utf-8")
