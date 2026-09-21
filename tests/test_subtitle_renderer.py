@@ -50,4 +50,5 @@ def test_qa_probe_exports_actual_dom_bounds_hook():
     bundle = render_subtitle_layer(_track(), VisualTheme())
     assert "getBoundingClientRect" in bundle.javascript
     assert "v1b-layout-qa" in bundle.html
+    assert "primary_bounds" in bundle.javascript
     assert bundle.qa_metadata["reserved_zone"] == {"x": 96, "y": 1480, "width": 888, "height": 260}

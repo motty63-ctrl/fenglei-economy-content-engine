@@ -83,7 +83,6 @@ window.installFangleiSubtitles = function(totalDurationMs) {
     const end = Number(cue.dataset.endMs);
     cue.animate([{opacity:0},{opacity:1},{opacity:1},{opacity:0}], {
       duration: totalDurationMs, fill:'both', easing:'steps(1,end)',
-      keyframes: undefined,
       delay: 0,
       iterations: 1,
       composite: 'replace'
@@ -95,14 +94,22 @@ window.installFangleiSubtitles = function(totalDurationMs) {
   });
   const emitQa = () => {
     const zone = document.querySelector('#subtitle-layer').getBoundingClientRect();
-    const rows = cues.map((cue) => ({
+    const rows = cues.map((cue) => {
+      const midpoint = (Number(cue.dataset.startMs) + Number(cue.dataset.endMs)) / 2;
+      const activeScene = [...document.querySelectorAll('.visual-scene')].find(scene =>
+        Number(scene.dataset.startMs) <= midpoint && midpoint < Number(scene.dataset.holdEndMs));
+      const focalId = activeScene?.querySelector('[data-primary-focal]')?.dataset.primaryFocal;
+      const focal = focalId && [...activeScene.querySelectorAll('[data-object-id]')]
+        .find(node => node.dataset.objectId === focalId);
+      return ({
       cue_id: cue.id,
       sentence_id: cue.dataset.sentenceId,
       start_ms: Number(cue.dataset.startMs), end_ms: Number(cue.dataset.endMs),
       font_size_px: parseFloat(getComputedStyle(cue).fontSize),
       cue_bounds: rect(cue.getBoundingClientRect()),
-      line_bounds: [...cue.querySelectorAll('.subtitle-line')].map(x => rect(x.getBoundingClientRect()))
-    }));
+      line_bounds: [...cue.querySelectorAll('.subtitle-line')].map(x => rect(x.getBoundingClientRect())),
+      primary_bounds: focal ? [rect(focal.getBoundingClientRect())] : []
+    });});
     document.querySelector('#v1b-layout-qa').textContent = JSON.stringify({zone:rect(zone), cues:rows});
   };
   const rect = (r) => ({x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom});
