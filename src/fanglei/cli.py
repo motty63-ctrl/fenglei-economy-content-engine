@@ -29,6 +29,8 @@ from fanglei.v05_pipeline import run_v05_pipeline
 from fanglei.v05_pipeline import run_voice_generation, approve_voice_run
 from fanglei.provider_factory import build_narration_provider
 from fanglei.v05_models import NarrationSynthesisConfig
+from fanglei.v1b_pipeline import run_audio_mastering, run_subtitle_generation
+from fanglei.providers.mastering import FFmpegLoudnormMasteringEngine
 
 
 app = typer.Typer(no_args_is_help=True, help="Build durable research artifacts from economic source text.")
@@ -283,3 +285,32 @@ def approve_voice_command(
         typer.echo(f"Error: {safe_error_message(error)}", err=True)
         raise typer.Exit(code=2)
     typer.echo(f"Voice approved for current audio hash: {run / 'audio' / 'review.json'}")
+
+
+@app.command("subtitle")
+def subtitle_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Existing approved run ID.")],
+    force: Annotated[bool, typer.Option("--force", help="Recompile subtitle artifact.")] = False,
+) -> None:
+    try:
+        run = run_subtitle_generation(run_id, ctx.obj["runs_dir"], force=force)
+    except Exception as error:
+        typer.echo(f"Error: {safe_error_message(error)}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"Artifact: {run / 'subtitle_track.json'}")
+
+
+@app.command("master-audio")
+def master_audio_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Existing voice-approved run ID.")],
+    force: Annotated[bool, typer.Option("--force", help="Regenerate mastered playback audio.")] = False,
+) -> None:
+    try:
+        run = run_audio_mastering(run_id, ctx.obj["runs_dir"],
+                                  FFmpegLoudnormMasteringEngine(), force=force)
+    except Exception as error:
+        typer.echo(f"Error: {safe_error_message(error)}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"Artifacts: {run / 'audio' / 'mastered_narration.wav'}, {run / 'audio_mastering.json'}")

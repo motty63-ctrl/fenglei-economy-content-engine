@@ -65,6 +65,8 @@ STAGE_ARTIFACT = {
     "timeline_compilation": "timeline.json",
     "nikola_adaptation": "render_manifest.json",
     "render_preflight": "render_qa.json",
+    "subtitle_generation": "subtitle_track.json",
+    "audio_mastering": "audio_mastering.json",
 }
 
 STAGE_ARTIFACTS = {
@@ -76,6 +78,8 @@ STAGE_ARTIFACTS = {
     "timeline_compilation": ("timeline.json",),
     "nikola_adaptation": ("renderer_project", "render_manifest.json"),
     "render_preflight": ("preflight_report.json", "render_qa.json"),
+    "subtitle_generation": ("subtitle_track.json",),
+    "audio_mastering": ("audio/mastered_narration.wav", "audio_mastering.json"),
 }
 
 
