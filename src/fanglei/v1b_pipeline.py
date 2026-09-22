@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from .audio_mastering import master_audio
 from .paths import resolve_run_dir
@@ -11,6 +12,8 @@ from .providers.mastering import AudioMasteringEngine
 from .subtitle_generation import compile_subtitle_track
 from .content_models import ScriptDraft
 from .v05_models import AlignmentDocument, AudioMetadata, VoiceReviewDocument
+from .v1b_models import AudioMasteringDocument, SubtitleTrack
+from .visual_project_v1b import build_v1b_renderer_project
 
 
 def run_subtitle_generation(run_id: str, runs_dir: Path, *, force: bool = False) -> Path:
@@ -63,4 +66,40 @@ def run_audio_mastering(run_id: str, runs_dir: Path, engine: AudioMasteringEngin
             raise
 
     _execute(manifest, registry, "audio_mastering", stage, force)
+    return run_dir
+
+
+def run_v1b_render_adaptation(run_id: str, runs_dir: Path, *, force: bool = False) -> Path:
+    """Overlay approved V1.0b media onto the frozen V1.0a project."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+
+    def stage() -> None:
+        for name in ("storyboard.json", "timeline.json", "subtitle_track.json",
+                     "audio/mastered_narration.wav", "audio_mastering.json"):
+            registry.validate(name)
+        base_dir = run_dir / "renderer_project_v1a"
+        if not base_dir.is_dir():
+            raise ValueError("V1B_BASE_PROJECT_MISSING")
+        base_files: dict[str, str | bytes] = {}
+        for path in base_dir.rglob("*"):
+            if path.is_file():
+                relative = path.relative_to(base_dir).as_posix()
+                base_files[relative] = (path.read_bytes() if path.suffix == ".wav"
+                                        else path.read_text(encoding="utf-8"))
+        base_manifest_path = run_dir / "render_manifest_v1a.json"
+        if not base_manifest_path.is_file():
+            raise ValueError("V1B_BASE_MANIFEST_MISSING")
+        files, adapted = build_v1b_renderer_project(
+            base_files, json.loads(base_manifest_path.read_text(encoding="utf-8")),
+            SubtitleTrack.model_validate(registry.read_json("subtitle_track.json")),
+            AudioMasteringDocument.model_validate(registry.read_json("audio_mastering.json")),
+            (run_dir / "audio" / "mastered_narration.wav").read_bytes(),
+        )
+        registry.write_directory("renderer_project_v1b", files, "v1b_render_adaptation",
+                                 force=force)
+        registry.write_json("render_manifest_v1b.json", adapted, "v1b_render_adaptation",
+                            force=force)
+
+    _execute(manifest, registry, "v1b_render_adaptation", stage, force)
     return run_dir

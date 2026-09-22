@@ -67,6 +67,7 @@ STAGE_ARTIFACT = {
     "render_preflight": "render_qa.json",
     "subtitle_generation": "subtitle_track.json",
     "audio_mastering": "audio_mastering.json",
+    "v1b_render_adaptation": "render_manifest_v1b.json",
 }
 
 STAGE_ARTIFACTS = {
@@ -80,6 +81,7 @@ STAGE_ARTIFACTS = {
     "render_preflight": ("preflight_report.json", "render_qa.json"),
     "subtitle_generation": ("subtitle_track.json",),
     "audio_mastering": ("audio/mastered_narration.wav", "audio_mastering.json"),
+    "v1b_render_adaptation": ("renderer_project_v1b", "render_manifest_v1b.json"),
 }
 
 

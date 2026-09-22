@@ -62,6 +62,13 @@ def test_v1b_manifest_separates_timing_and_playback_audio():
     assert files["assets/mastered_narration.wav"] == mastered
 
 
+def test_v1b_render_gain_compensates_hyperframes_dual_mono_playback():
+    base, manifest, track, report, mastered = _inputs()
+    files, result = build_v1b_renderer_project(base, manifest, track, report, mastered)
+    assert 'data-volume="0.707107"' in files["index.html"]
+    assert result["playback_audio"]["render_gain"] == 0.707107
+
+
 def test_v1b_keeps_scene_ranges_and_primitive_markup():
     base, manifest, track, report, mastered = _inputs()
     files, result = build_v1b_renderer_project(base, manifest, track, report, mastered)

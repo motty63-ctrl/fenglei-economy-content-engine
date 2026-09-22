@@ -68,8 +68,9 @@ class FFmpegLoudnormMasteringEngine:
         return result
 
     def _measure(self, path: Path, config: AudioMasteringConfig, phase: str) -> dict[str, str]:
+        peak_target = config.maximum_true_peak_dbtp - config.true_peak_headroom_db
         filter_value = (
-            f"loudnorm=I={config.target_integrated_lufs}:TP={config.maximum_true_peak_dbtp}:"
+            f"loudnorm=I={config.target_integrated_lufs}:TP={peak_target:g}:"
             "LRA=11:print_format=json"
         )
         result = self._run([
@@ -80,8 +81,9 @@ class FFmpegLoudnormMasteringEngine:
 
     def master(self, source_path: Path, config: AudioMasteringConfig) -> EngineMasteringResult:
         measured = self._measure(source_path, config, "measure_input")
+        peak_target = config.maximum_true_peak_dbtp - config.true_peak_headroom_db
         applied = (
-            f"loudnorm=I={config.target_integrated_lufs}:TP={config.maximum_true_peak_dbtp}:LRA=11:"
+            f"loudnorm=I={config.target_integrated_lufs}:TP={peak_target:g}:LRA=11:"
             f"measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:"
             f"measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}:"
             f"offset={measured['target_offset']}:linear=true:print_format=summary"
@@ -120,4 +122,3 @@ class FFmpegLoudnormMasteringEngine:
             output_codec=codec, output_format="wav", output_sample_rate_hz=sample_rate,
             output_channels=channels,
         )
-

@@ -25,7 +25,8 @@ class AudioMasteringResult:
     document: AudioMasteringDocument
 
 
-def _pcm_measurement(audio: bytes, *, threshold_dbfs: float) -> tuple[int, int, int, int, int]:
+def _pcm_measurement(audio: bytes, *, threshold_dbfs: float,
+                     edge_activity_below_95th_db: float = 18.0) -> tuple[int, int, int, int, int]:
     with wave.open(io.BytesIO(audio), "rb") as stream:
         channels, width, rate = stream.getnchannels(), stream.getsampwidth(), stream.getframerate()
         count = stream.getnframes(); frames = stream.readframes(count)
@@ -34,14 +35,21 @@ def _pcm_measurement(audio: bytes, *, threshold_dbfs: float) -> tuple[int, int, 
     samples = array("h"); samples.frombytes(frames)
     if sys.byteorder != "little": samples.byteswap()
     frame_samples = max(1, rate * 20 // 1000)
-    voiced: list[int] = []
+    frame_levels: list[tuple[int, float]] = []
     for offset in range(0, len(samples), frame_samples):
         block = samples[offset:offset + frame_samples]
         if not block: continue
         rms = math.sqrt(sum(value * value for value in block) / len(block)) / 32768
-        if rms > 0 and 20 * math.log10(rms) >= threshold_dbfs:
-            voiced.append(offset)
+        frame_levels.append((offset, 20 * math.log10(rms) if rms > 0 else float("-inf")))
     duration = round(count * 1000 / rate)
+    finite = sorted(level for _, level in frame_levels if math.isfinite(level))
+    if not finite:
+        return duration, duration, duration, rate, channels
+    reference = finite[round((len(finite) - 1) * 0.95)]
+    # A relative, robust programme-level threshold measures the same acoustic edge
+    # before and after gain. The absolute floor only guards degenerate low-level data.
+    effective_threshold = max(reference - edge_activity_below_95th_db, threshold_dbfs - 20)
+    voiced = [offset for offset, level in frame_levels if level >= effective_threshold]
     if not voiced:
         return duration, duration, duration, rate, channels
     leading = round(voiced[0] * 1000 / rate)
@@ -70,7 +78,8 @@ def master_audio(source_path: Path, metadata: AudioMetadata, review: VoiceReview
     if not input_quality.production_eligible:
         raise ValueError("MASTERING_INPUT_QUALITY_FAILED")
     input_duration, input_leading, input_trailing, input_rate, input_channels = _pcm_measurement(
-        source_bytes, threshold_dbfs=config.silence_threshold_dbfs)
+        source_bytes, threshold_dbfs=config.silence_threshold_dbfs,
+        edge_activity_below_95th_db=config.edge_activity_below_95th_db)
     if input_duration != metadata.duration_ms:
         raise ValueError("MASTERING_INPUT_DURATION_MISMATCH")
 
@@ -80,7 +89,8 @@ def master_audio(source_path: Path, metadata: AudioMetadata, review: VoiceReview
     if not output_quality.production_eligible:
         raise ValueError("MASTERING_OUTPUT_QUALITY_FAILED")
     output_duration, output_leading, output_trailing, output_rate, output_channels = _pcm_measurement(
-        engine_result.audio_bytes, threshold_dbfs=config.silence_threshold_dbfs)
+        engine_result.audio_bytes, threshold_dbfs=config.silence_threshold_dbfs,
+        edge_activity_below_95th_db=config.edge_activity_below_95th_db)
     issues: list[str] = []
     if abs(engine_result.output_integrated_lufs - config.target_integrated_lufs) > config.loudness_tolerance_lu:
         issues.append("MASTERING_LOUDNESS_OUT_OF_RANGE")

@@ -142,10 +142,12 @@ class SubtitleTrack(StrictModel):
 class AudioMasteringConfig(StrictModel):
     target_integrated_lufs: float = -16.0
     maximum_true_peak_dbtp: float = -1.0
+    true_peak_headroom_db: float = Field(default=0.2, ge=0)
     loudness_tolerance_lu: float = Field(default=0.5, gt=0)
     maximum_duration_delta_ms: int = Field(default=20, ge=0)
     maximum_edge_silence_delta_ms: int = Field(default=20, ge=0)
     silence_threshold_dbfs: float = -45.0
+    edge_activity_below_95th_db: float = Field(default=18.0, gt=0)
     output_format: Literal["wav"] = "wav"
     output_codec: Literal["pcm_s16le"] = "pcm_s16le"
     sample_rate_hz: Literal[24000] = 24000
@@ -199,4 +201,3 @@ class AudioMasteringDocument(StrictModel):
         ):
             raise ValueError("trailing silence delta does not match measurements")
         return self
-

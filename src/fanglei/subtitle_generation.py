@@ -45,9 +45,9 @@ def measure_display_units(text: str) -> float:
     return total
 
 
-def _line_capacity(layout: SubtitleLayout, font_size_px: int) -> float:
+def _line_capacity(layout: SubtitleLayout, font_size_px: int, *, safety_factor: float = 1.0) -> float:
     usable_px = layout.reserved_zone.width - 2 * layout.horizontal_padding_px
-    return usable_px / font_size_px
+    return usable_px / (font_size_px * safety_factor)
 
 
 def _break_rank(text: str, index: int) -> int:
@@ -64,7 +64,9 @@ def _layout_lines(text: str, layout: SubtitleLayout) -> tuple[int, list[Subtitle
         if font_size < layout.minimum_font_size_px or font_size > layout.default_font_size_px:
             continue
         capacity = _line_capacity(layout, font_size)
-        if measure_display_units(text) <= capacity:
+        # Browser-measured GDP hook was ~13% wider than our one-line estimate.
+        # Prefer a line split when a single line only fits without this margin.
+        if measure_display_units(text) <= _line_capacity(layout, font_size, safety_factor=1.15):
             return font_size, [
                 SubtitleLine(line_id="line_01", text=text, start_char=0, end_char=len(text))
             ]
@@ -184,4 +186,3 @@ def compile_subtitle_track(
             issues=[],
         ),
     )
-

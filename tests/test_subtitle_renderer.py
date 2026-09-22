@@ -30,6 +30,12 @@ def test_layer_uses_reserved_zone_and_does_not_target_primitives():
     assert "pointer-events:none" in bundle.css
 
 
+def test_layer_uses_registered_project_font_for_hyperframes_compatibility():
+    bundle = render_subtitle_layer(_track(), VisualTheme())
+    assert "font-family:'FangleiSans'" in bundle.css
+    assert "Noto Sans SC" not in bundle.css
+
+
 def test_layer_keeps_exact_gap_timing_and_accessible_text():
     bundle = render_subtitle_layer(_track(), VisualTheme())
     assert 'data-start-ms="500"' in bundle.html

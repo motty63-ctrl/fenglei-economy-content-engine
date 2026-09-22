@@ -42,6 +42,8 @@ def test_ffmpeg_engine_uses_measure_then_apply_then_verify(tmp_path: Path):
     assert all("atempo" not in " ".join(argv) and "atrim" not in " ".join(argv)
                for _, argv in runner.calls)
     assert result.output_integrated_lufs == -16.0
+    normalized_argv = runner.calls[1][1]
+    assert "TP=-1.2" in " ".join(normalized_argv)
 
 
 def test_ffmpeg_rejects_wrong_post_probe_contract(tmp_path: Path):

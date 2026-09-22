@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from .subtitle_renderer import render_subtitle_layer
 from .v1b_models import AudioMasteringDocument, SubtitleTrack
@@ -38,6 +39,19 @@ def build_v1b_renderer_project(
     html = _replace_one(html, "</style>", bundle.css + "</style>")
     html = _replace_one(html, '<audio id="full_narration"', bundle.html + '<audio id="full_narration"')
     html = _replace_one(html, 'src="assets/narration.wav"', 'src="assets/mastered_narration.wav"')
+    # HyperFrames 0.8.20 maps mono to identical stereo channels, adding ~3 LU.
+    # A per-track gain preserves the approved mastered asset and final LUFS.
+    render_gain = 0.707107
+    audio_tag = re.search(r'<audio id="full_narration"[^>]*>', html)
+    if audio_tag is None:
+        raise ValueError("V1B_BASE_PROJECT_ANCHOR_MISMATCH")
+    current_tag = audio_tag.group(0)
+    if 'data-volume="' in current_tag:
+        adapted_tag = re.sub(r'data-volume="[^"]*"', f'data-volume="{render_gain}"',
+                             current_tag, count=1)
+    else:
+        adapted_tag = current_tag.replace(' src=', f' data-volume="{render_gain}" src=', 1)
+    html = _replace_one(html, current_tag, adapted_tag)
     html = _replace_one(html, "</script></body>",
                         bundle.javascript + f"\nwindow.installFangleiSubtitles({duration});"
                         "</script></body>")
@@ -55,6 +69,7 @@ def build_v1b_renderer_project(
     project["playback_audio"] = {
         "path": "assets/mastered_narration.wav", "sha256": mastering.output.sha256,
         "source_sha256": mastering.input.sha256, "duration_ms": mastering.output.duration_ms,
+        "render_gain": render_gain,
     }
     files["project-manifest.json"] = json.dumps(project, ensure_ascii=False, indent=2) + "\n"
     manifest = json.loads(json.dumps(base_manifest))
@@ -65,4 +80,3 @@ def build_v1b_renderer_project(
                             "script_sha256": track.source.script_sha256,
                             "alignment_sha256": track.source.alignment_sha256}
     return files, manifest
-

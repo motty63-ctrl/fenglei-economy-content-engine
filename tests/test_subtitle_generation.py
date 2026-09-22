@@ -140,6 +140,14 @@ def test_measure_display_units_treats_ascii_as_narrower_than_cjk() -> None:
     assert measure_display_units("GDP") < measure_display_units("增长率")
 
 
+def test_gdp_hook_does_not_use_unmeasured_full_width_single_line() -> None:
+    # Browser calibration measured this 52 px single line at 891.75 px, beyond
+    # the 888 px reserved zone despite the approximate unit estimate.
+    script = _script(["同一个GDP，两个数字，到底谁错了？"])
+    cue = _compile(script, _alignment(script)).cues[0]
+    assert cue.font_size_px < 52 or len(cue.lines) == 2
+
+
 def test_non_monotonic_or_overlapping_timing_fails() -> None:
     script = _script()
     alignment = _alignment(script)
@@ -147,4 +155,3 @@ def test_non_monotonic_or_overlapping_timing_fails() -> None:
 
     with pytest.raises(ValueError, match="SUBTITLE_ALIGNMENT_OVERLAP"):
         _compile(script, alignment)
-

@@ -8,7 +8,7 @@ import wave
 
 import pytest
 
-from fanglei.audio_mastering import master_audio
+from fanglei.audio_mastering import _pcm_measurement, master_audio
 from fanglei.providers.mastering import EngineMasteringResult
 from fanglei.v05_models import AudioMetadata, VoiceReviewDocument
 
@@ -110,3 +110,28 @@ def test_temporal_edges_and_canonical_contract_are_recorded(tmp_path: Path):
     assert result.document.output.sample_rate_hz == 24000
     assert result.document.output.channels == 1
 
+
+def test_leading_silence_measurement_is_level_invariant_under_gain():
+    def signal(gain):
+        values = array("h", [100 * gain] * 3360 + [5000 * gain] * 20640)
+        out = io.BytesIO()
+        with wave.open(out, "wb") as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+            stream.writeframes(values.tobytes())
+        return out.getvalue()
+    original = _pcm_measurement(signal(1), threshold_dbfs=-45)
+    amplified = _pcm_measurement(signal(2), threshold_dbfs=-45)
+    assert original[1] == amplified[1] == 140
+
+
+def test_edge_detector_ignores_gain_lifted_low_level_background():
+    def signal(gain):
+        values = array("h", [50 * gain] * 3360 + [500 * gain] * 20640)
+        out = io.BytesIO()
+        with wave.open(out, "wb") as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+            stream.writeframes(values.tobytes())
+        return out.getvalue()
+    original = _pcm_measurement(signal(1), threshold_dbfs=-45)
+    amplified = _pcm_measurement(signal(4), threshold_dbfs=-45)
+    assert original[1] == amplified[1] == 140

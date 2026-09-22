@@ -66,7 +66,7 @@ def render_subtitle_layer(track: SubtitleTrack, theme: VisualTheme) -> SubtitleL
 #subtitle-layer{{position:absolute;left:{zone.x}px;top:{zone.y}px;width:{zone.width}px;
 height:{zone.height}px;z-index:80;pointer-events:none;display:flex;align-items:center;
 justify-content:center;text-align:center;color:{theme.colors.ink_primary};
-font-family:'Noto Sans SC','Microsoft YaHei',sans-serif;box-sizing:border-box;
+font-family:'FangleiSans','Microsoft YaHei',sans-serif;box-sizing:border-box;
 padding:24px 36px;background:rgba(247,242,232,.86);border-radius:24px;overflow:hidden}}
 .subtitle-cue{{position:absolute;inset:24px 36px;display:flex;flex-direction:column;
 align-items:center;justify-content:center;line-height:1.28;font-weight:700;opacity:0;
@@ -82,7 +82,7 @@ window.installFangleiSubtitles = function(totalDurationMs) {
     const start = Number(cue.dataset.startMs);
     const end = Number(cue.dataset.endMs);
     cue.animate([{opacity:0},{opacity:1},{opacity:1},{opacity:0}], {
-      duration: totalDurationMs, fill:'both', easing:'steps(1,end)',
+      duration: totalDurationMs, fill:'both', easing:'linear',
       delay: 0,
       iterations: 1,
       composite: 'replace'
