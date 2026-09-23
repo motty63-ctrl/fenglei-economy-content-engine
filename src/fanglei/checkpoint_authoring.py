@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -20,6 +20,7 @@ from fanglei.artifact_registry import ARTIFACT_GRAPH, ArtifactRegistry
 from fanglei.artifacts import read_json, sha256_text
 from fanglei.checkpoint_contract import (
     CheckpointAngle,
+    CheckpointApproval,
     CheckpointAuthoringBindingV1,
     CheckpointClaim,
     CheckpointDraft,
@@ -30,6 +31,7 @@ from fanglei.checkpoint_contract import (
     OfficialReview,
     canonical_body_sha256,
     canonical_json_bytes,
+    parse_approved_checkpoint_v2,
 )
 from fanglei.content_models import AngleCandidate
 from fanglei.errors import ArtifactConflictError
@@ -956,3 +958,229 @@ def validate_checkpoint_draft(draft: CheckpointDraft | Mapping[str, Any], runs_d
         )
         return ValidationReport(False, None, (issue,))
     return ValidationReport(True, digest, ())
+
+
+def approve_checkpoint(
+    draft: CheckpointDraft | Mapping[str, Any],
+    validation: ValidationReport,
+    *,
+    reviewer: str,
+    expected_body_sha256: str,
+    approved_at: str | None = None,
+) -> CheckpointApproval:
+    """Create an explicit approval bound to the exact validated V2 body."""
+    try:
+        parsed = draft if isinstance(draft, CheckpointDraft) else CheckpointDraft.model_validate(draft, strict=True)
+    except (ValidationError, TypeError) as error:
+        _fail("CHECKPOINT_NOT_VALIDATED", "checkpoint", f"draft does not satisfy the strict V2 contract: {error}")
+
+    if (
+        not isinstance(validation, ValidationReport)
+        or validation.passed is not True
+        or bool(validation.issues)
+    ):
+        _fail("CHECKPOINT_NOT_VALIDATED", "validation", "a passing validate_checkpoint_draft report is required")
+
+    body = parsed.model_dump(mode="python", by_alias=True)
+    try:
+        current_digest = canonical_body_sha256(body)
+    except (TypeError, ValueError) as error:
+        _fail("CHECKPOINT_CONTRACT_INVALID", "checkpoint", f"body cannot be canonicalized: {error}")
+
+    digest_pattern = re.compile(r"^[0-9a-f]{64}$")
+    if (
+        not isinstance(expected_body_sha256, str)
+        or digest_pattern.fullmatch(expected_body_sha256) is None
+        or not isinstance(validation.body_sha256, str)
+        or digest_pattern.fullmatch(validation.body_sha256) is None
+        or validation.body_sha256 != current_digest
+        or expected_body_sha256 != current_digest
+    ):
+        _fail(
+            "APPROVAL_BODY_HASH_MISMATCH",
+            "approval.body_sha256",
+            "expected digest, validation report, and current canonical draft body must match",
+        )
+
+    timestamp = approved_at
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        return CheckpointApproval.model_validate(
+            {
+                "status": "approved",
+                "reviewer": reviewer,
+                "approved_at": timestamp,
+                "body_sha256": current_digest,
+            },
+            strict=True,
+        )
+    except (ValidationError, TypeError) as error:
+        _fail("CHECKPOINT_NOT_APPROVED", "approval", f"explicit approval metadata is invalid: {error}")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
+
+def _existing_envelope_matches(path: Path, expected_canonical: bytes) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        value = json.loads(
+            path.read_bytes().decode("utf-8"),
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        parsed = parse_approved_checkpoint_v2(value)
+        existing = parsed.model_dump(mode="json", by_alias=True)
+        return canonical_json_bytes(existing) == expected_canonical
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, ValidationError):
+        return False
+
+
+def _seal_directories(repository_root: Path, case_id: str) -> tuple[Path, Path]:
+    root = repository_root.resolve(strict=True)
+    if not root.is_dir():
+        _fail("CHECKPOINT_SEAL_FAILED", str(repository_root), "repository root must be an existing directory")
+    cases_dir = root / "cases"
+    case_dir = cases_dir / case_id
+    checkpoint_dir = case_dir / "approved-checkpoints"
+    for directory in (cases_dir, case_dir, checkpoint_dir):
+        try:
+            if directory.is_symlink():
+                _fail("UNSAFE_SEAL_PATH", str(directory), "seal path components must not be symlinks")
+            directory.mkdir(exist_ok=True)
+            resolved = directory.resolve(strict=True)
+        except CheckpointAuthoringError:
+            raise
+        except OSError as error:
+            _fail("CHECKPOINT_SEAL_FAILED", str(directory), f"cannot create sealed checkpoint directory: {error}")
+        if not resolved.is_relative_to(root):
+            _fail("UNSAFE_SEAL_PATH", str(directory), "sealed checkpoint path escapes repository root")
+    return root, checkpoint_dir
+
+
+def seal_checkpoint(
+    draft: CheckpointDraft | Mapping[str, Any],
+    approval: CheckpointApproval | Mapping[str, Any],
+    repository_root: Path,
+    *,
+    runs_dir: Path,
+) -> Path:
+    """Revalidate, then atomically publish the approved V2 envelope once."""
+    try:
+        parsed_draft = draft if isinstance(draft, CheckpointDraft) else CheckpointDraft.model_validate(draft, strict=True)
+    except (ValidationError, TypeError) as error:
+        _fail("CHECKPOINT_CONTRACT_INVALID", "checkpoint", str(error))
+    _safe_component(parsed_draft.case_id, "case_id")
+    _safe_component(parsed_draft.checkpoint_id, "checkpoint_id")
+
+    try:
+        approval_value = approval.model_dump(mode="json", by_alias=True) if isinstance(approval, CheckpointApproval) else approval
+        parsed_approval = CheckpointApproval.model_validate(approval_value, strict=True)
+    except (ValidationError, TypeError, AttributeError) as error:
+        _fail("CHECKPOINT_NOT_APPROVED", "approval", f"approval record is invalid: {error}")
+
+    body = parsed_draft.model_dump(mode="json", by_alias=True)
+    envelope = {**body, "approval": parsed_approval.model_dump(mode="json", by_alias=True)}
+    try:
+        digest = canonical_body_sha256(envelope)
+        canonical_envelope = canonical_json_bytes(envelope)
+    except (TypeError, ValueError) as error:
+        _fail("CHECKPOINT_CONTRACT_INVALID", "checkpoint", f"envelope cannot be canonicalized: {error}")
+    if parsed_approval.body_sha256 != digest:
+        _fail(
+            "APPROVAL_BODY_HASH_MISMATCH",
+            "approval.body_sha256",
+            "approval is not bound to the current canonical draft body",
+        )
+    try:
+        parse_approved_checkpoint_v2(envelope)
+    except (ValidationError, TypeError, ValueError) as error:
+        _fail("CHECKPOINT_NOT_APPROVED", "checkpoint", f"strict V2 approval preflight failed: {error}")
+
+    try:
+        root = Path(repository_root).resolve(strict=True)
+    except OSError as error:
+        _fail("CHECKPOINT_SEAL_FAILED", str(repository_root), f"repository root is unavailable: {error}")
+    report = validate_checkpoint_draft(parsed_draft, Path(runs_dir))
+    if not report.passed:
+        issue = report.issues[0] if report.issues else ValidationIssue(
+            "CHECKPOINT_NOT_VALIDATED", "checkpoint", "final source-run validation failed"
+        )
+        _fail(issue.code, issue.path, f"final pre-seal validation failed: {issue.message}")
+    if report.body_sha256 != digest:
+        _fail(
+            "APPROVAL_BODY_HASH_MISMATCH",
+            "approval.body_sha256",
+            "final pre-seal validation did not confirm the approved body digest",
+        )
+
+    root, checkpoint_dir = _seal_directories(root, parsed_draft.case_id)
+    target = checkpoint_dir / f"{parsed_draft.checkpoint_id}.json"
+    if target.is_symlink():
+        _fail("CHECKPOINT_WRITE_ONCE_CONFLICT", str(target), "existing sealed path is not a regular checkpoint file")
+    if target.exists():
+        if _existing_envelope_matches(target, canonical_envelope):
+            return target
+        _fail(
+            "CHECKPOINT_WRITE_ONCE_CONFLICT",
+            str(target),
+            "existing checkpoint body or approval record differs; sealed files are write-once",
+        )
+
+    serialized = json.dumps(envelope, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=checkpoint_dir,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+        try:
+            os.link(temporary_path, target)
+        except FileExistsError as error:
+            if _existing_envelope_matches(target, canonical_envelope):
+                return target
+            raise CheckpointAuthoringError(
+                "CHECKPOINT_WRITE_ONCE_CONFLICT",
+                str(target),
+                "existing checkpoint body or approval record differs; sealed files are write-once",
+            ) from error
+    except CheckpointAuthoringError:
+        raise
+    except OSError as error:
+        if target.exists():
+            if _existing_envelope_matches(target, canonical_envelope):
+                return target
+            _fail(
+                "CHECKPOINT_WRITE_ONCE_CONFLICT",
+                str(target),
+                "another value already occupies the write-once sealed path",
+            )
+        _fail("CHECKPOINT_SEAL_FAILED", str(target), f"atomic no-replace publication failed: {error}")
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return target
