@@ -20,6 +20,10 @@ Runtime timestamps are audit metadata only. They are excluded from checkpoint fi
 
 The importer performs structural conversion and deterministic metadata derivation. It does not use an LLM to rewrite evidence, claims, angle, or script. Existing facts and script schemas remain authoritative; missing required semantic fields fail closed instead of receiving guessed values or defaults.
 
+## Approved-checkpoint recovery requires identity-bound source material
+
+Recover missing semantic values only from original approved material whose checkpoint identity, case context, and approval provenance bind it to the import being recovered. A complete artifact from another case or a test fixture is not a substitute. Do not infer, regenerate, default, or copy missing values; if the original approved material cannot be located with sufficient provenance, keep the import blocked.
+
 ## Provenance is limited to the checkpoint's source allowlist
 
 Only official HTTPS URLs explicitly listed by the checkpoint may be captured. A successful URL/content hash is pinned and reused. Changed content is surfaced instead of silently replacing the approved evidence basis.
