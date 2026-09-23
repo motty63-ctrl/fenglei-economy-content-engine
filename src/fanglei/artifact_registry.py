@@ -75,6 +75,37 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
+# Checkpoint imports enter the graph after research and script approval. Keep the
+# ordinary graph above byte-for-byte unchanged; the importer opts into this
+# separate profile through the checkpoint_import manifest stage.
+IMPORTED_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
+    **ARTIFACT_GRAPH,
+    "approved_checkpoint.json": ("checkpoint_import", ()),
+    "import_manifest.json": ("checkpoint_materialize", ("approved_checkpoint.json",)),
+    "id_mapping.json": ("checkpoint_materialize", ("approved_checkpoint.json",)),
+    "source_documents/index.json": (
+        "checkpoint_provenance", ("approved_checkpoint.json",)
+    ),
+    "sources.json": (
+        "checkpoint_provenance", ("approved_checkpoint.json", "source_documents/index.json")
+    ),
+    "facts.json": (
+        "checkpoint_materialize",
+        ("approved_checkpoint.json", "sources.json", "source_documents/index.json"),
+    ),
+    "research.md": (
+        "checkpoint_materialize", ("approved_checkpoint.json", "facts.json", "sources.json")
+    ),
+    "angles.json": (
+        "checkpoint_materialize", ("approved_checkpoint.json", "facts.json", "research.md")
+    ),
+    "angle.md": ("checkpoint_materialize", ("angles.json", "facts.json")),
+    "script.json": (
+        "checkpoint_materialize", ("approved_checkpoint.json", "angle.md", "facts.json", "research.md")
+    ),
+    "script.md": ("checkpoint_materialize", ("script.json",)),
+}
+
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -84,13 +115,19 @@ class ArtifactRegistry:
     def __init__(self, run_dir: Path, manifest: RunManifest):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
-        for name, (owner, dependencies) in ARTIFACT_GRAPH.items():
+        checkpoint_stage = manifest.stages.get("checkpoint_import")
+        self.graph = (
+            IMPORTED_ARTIFACT_GRAPH
+            if checkpoint_stage is not None and checkpoint_stage.status == "succeeded"
+            else ARTIFACT_GRAPH
+        )
+        for name, (owner, dependencies) in self.graph.items():
             self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
             )
 
     def _state(self, name: str) -> ArtifactState:
-        if name not in ARTIFACT_GRAPH:
+        if name not in self.graph:
             raise ArtifactConflictError(f"Unknown artifact: {name}")
         return self.manifest.artifacts[name]
 
@@ -101,7 +138,7 @@ class ArtifactRegistry:
         if state.status == "valid" and not force:
             raise ArtifactConflictError(f"Artifact already valid: {name}; use --force")
         dependency_hashes: dict[str, str] = {}
-        for dep in ARTIFACT_GRAPH[name][1]:
+        for dep in self.graph[name][1]:
             dep_state = self._state(dep)
             if dep_state.status != "valid" or not dep_state.content_hash:
                 raise ArtifactConflictError(f"Dependency {dep} is {dep_state.status}; rerun its owner stage")
@@ -113,7 +150,7 @@ class ArtifactRegistry:
         seen: set[str] = set()
         while queue:
             upstream = queue.pop(0)
-            for name, (_, dependencies) in ARTIFACT_GRAPH.items():
+            for name, (_, dependencies) in self.graph.items():
                 if upstream in dependencies and name not in seen:
                     seen.add(name)
                     state = self._state(name)

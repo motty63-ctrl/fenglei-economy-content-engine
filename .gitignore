@@ -229,6 +229,7 @@ token.txt
 secret.txt
 output/
 runs/
+.checkpoint-staging/
 projects/*/.fanglei/cache/
 projects/*/.fanglei/failed/
 *.tmp

@@ -20,18 +20,29 @@ def slugify(title: str) -> str:
 
 
 def allocate_run_dir(runs_dir: Path, title: str) -> Path:
-    date_prefix = datetime.now().astimezone().date().isoformat()
-    slug = slugify(title)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    for sequence in range(1, 1000):
-        if any(runs_dir.glob(f"{date_prefix}-{sequence:03d}-*")):
-            continue
-        candidate = runs_dir / f"{date_prefix}-{sequence:03d}-{slug}"
+    for _ in range(999):
+        run_id = next_run_id(runs_dir, title)
+        candidate = runs_dir / run_id
         try:
             candidate.mkdir()
         except FileExistsError:
             continue
         return candidate
+    raise RunPathError(f"No run ID available for {datetime.now().astimezone().date().isoformat()}")
+
+
+def next_run_id(runs_dir: Path, title: str) -> str:
+    """Return the standard available run ID without creating a directory."""
+    date_prefix = datetime.now().astimezone().date().isoformat()
+    slug = slugify(title)
+    for sequence in range(1, 1000):
+        run_id = f"{date_prefix}-{sequence:03d}-{slug}"
+        if any(Path(runs_dir).glob(f"{date_prefix}-{sequence:03d}-*")):
+            continue
+        if (Path(runs_dir) / run_id).exists():
+            continue
+        return run_id
     raise RunPathError(f"No run ID available for {date_prefix}")
 
 
