@@ -211,7 +211,7 @@ class CheckpointApproval(_StrictModel):
     body_sha256: Sha256
 
 
-class ApprovedCheckpointV2(_StrictModel):
+class CheckpointBodyV2(_StrictModel):
     checkpoint_schema_version: Literal["approved-checkpoint/2.0"]
     checkpoint_id: NonBlankStr
     case_id: NonBlankStr
@@ -224,6 +224,13 @@ class ApprovedCheckpointV2(_StrictModel):
     evidence: list[CheckpointEvidence] = Field(min_length=1)
     angle: CheckpointAngle
     script: CheckpointScript
+
+
+class CheckpointDraft(CheckpointBodyV2):
+    """Strict in-memory V2 checkpoint body; drafts have no approval field."""
+
+
+class ApprovedCheckpointV2(CheckpointBodyV2):
     approval: CheckpointApproval
 
 
