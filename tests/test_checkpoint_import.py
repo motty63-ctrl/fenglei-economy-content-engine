@@ -6,11 +6,14 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 import fanglei.checkpoint_import as checkpoint_import
+from test_checkpoint_contract import _checkpoint as _v2_checkpoint
 
 from fanglei.artifact_registry import ARTIFACT_GRAPH
 from fanglei.checkpoint_import import (
     CheckpointImporter,
+    CheckpointV2ImportNotImplementedError,
     SourceCapture,
     SourceContentChangedError,
 )
@@ -324,3 +327,43 @@ def test_failed_stage_leaves_gate_report_but_no_partial_production_run(tmp_path:
     assert not list((tmp_path / "runs").glob("20??-??-??-???-*"))
     assert (result.staging_dir / "gates.json").is_file()
     assert result.status == "failed"
+
+
+def test_v2_import_dispatches_to_strict_preflight_without_staging(tmp_path: Path) -> None:
+    importer = _importer(tmp_path)
+
+    with pytest.raises(ValidationError):
+        importer.stage({"checkpoint_schema_version": "approved-checkpoint/2.0"})
+
+    assert not importer.staging_root.exists()
+
+
+def test_approved_checkpoint_v1_label_stays_on_legacy_import_path(tmp_path: Path) -> None:
+    checkpoint = _checkpoint()
+    checkpoint["checkpoint_schema_version"] = "approved-checkpoint/1.0"
+
+    result = _importer(tmp_path).stage(checkpoint)
+
+    assert result.status == "passed"
+
+
+def test_valid_v2_dispatch_stops_after_contract_preflight(tmp_path: Path) -> None:
+    importer = _importer(tmp_path)
+
+    with pytest.raises(CheckpointV2ImportNotImplementedError):
+        importer.stage(_v2_checkpoint())
+
+    assert not importer.staging_root.exists()
+
+
+def test_legacy_fingerprint_values_remain_unchanged() -> None:
+    checkpoint = _checkpoint()
+    content_sha = checkpoint_import._digest_json(checkpoint_import._without_runtime(checkpoint))
+    fingerprint = checkpoint_import._digest_json({
+        "checkpoint_content_sha256": content_sha,
+        "checkpoint_schema_version": "1.0",
+        "importer_version": "test-1.0",
+    })
+
+    assert content_sha == "80d1b7b450fe51b532d188a31aea949eae8a7fb70769953ed93d9f94c287f669"
+    assert fingerprint == "38e86ec44b6fd8229e81391e7b3fd7f35d6800cf459b0be90b5a0818975e2f50"

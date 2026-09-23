@@ -23,6 +23,7 @@ from fanglei.models import ArtifactState, RunManifest
 
 ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "source.md": ("ingest", ()),
+    "checkpoint_authoring_binding": ("checkpoint_authoring_binding", ()),
     "questions.json": ("analyze", ("source.md",)),
     "search_results.json": ("search", ("questions.json",)),
     "source_documents/index.json": ("source_fetch", ("search_results.json",)),
@@ -131,8 +132,16 @@ class ArtifactRegistry:
             raise ArtifactConflictError(f"Unknown artifact: {name}")
         return self.manifest.artifacts[name]
 
+    def _artifact_path(self, name: str) -> Path:
+        filename = "checkpoint_authoring_binding.json" if name == "checkpoint_authoring_binding" else name
+        return self.run_dir / filename
+
     def _validate_write(self, name: str, owner: str, force: bool) -> dict[str, str]:
         state = self._state(name)
+        if name == "checkpoint_authoring_binding":
+            raise ArtifactConflictError(
+                "CASE_BINDING_WRITE_ONCE: use bind_source_run_to_case to create the case binding"
+            )
         if state.owner != owner:
             raise ArtifactConflictError(f"Only owner stage {state.owner} may write {name}")
         if state.status == "valid" and not force:
@@ -163,7 +172,7 @@ class ArtifactRegistry:
         deps = self._validate_write(name, owner, force)
         state = self._state(name)
         old_hash = state.content_hash
-        path = self.run_dir / name
+        path = self._artifact_path(name)
         atomic_write_text(path, value)
         timestamp = _now()
         state.status = "valid"
@@ -184,7 +193,7 @@ class ArtifactRegistry:
         deps = self._validate_write(name, owner, force)
         state = self._state(name)
         old_hash = state.content_hash
-        path = self.run_dir / name
+        path = self._artifact_path(name)
         atomic_write_bytes(path, value)
         timestamp = _now()
         state.status = "valid"
@@ -199,7 +208,7 @@ class ArtifactRegistry:
     def write_directory(self, name: str, files: dict[str, str | bytes], owner: str,
                         force: bool = False) -> Path:
         deps = self._validate_write(name, owner, force)
-        target = self.run_dir / name
+        target = self._artifact_path(name)
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
         state = self._state(name)
@@ -244,14 +253,14 @@ class ArtifactRegistry:
     def read_json(self, name: str) -> dict[str, Any]:
         self.validate(name)
         state = self._state(name)
-        path = self.run_dir / name
+        path = self._artifact_path(name)
         return read_json(path)
 
     def validate(self, name: str) -> None:
         state = self._state(name)
         if state.status != "valid":
             raise ArtifactConflictError(f"Artifact {name} is {state.status}")
-        path = self.run_dir / name
+        path = self._artifact_path(name)
         text_value: str | None = None
         if path.is_dir():
             actual_hash = _directory_hash(path)

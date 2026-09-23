@@ -22,6 +22,10 @@ import ssl
 
 from fanglei.artifact_registry import ArtifactRegistry, IMPORTED_ARTIFACT_GRAPH
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, atomic_write_text, sha256_bytes, sha256_text
+from fanglei.checkpoint_contract import (
+    classify_checkpoint_version,
+    parse_approved_checkpoint_v2,
+)
 from fanglei.content_models import AngleCandidate
 from fanglei.models import RunManifest, StageState
 from fanglei.paths import next_run_id
@@ -33,6 +37,10 @@ class SourceFetchError(RuntimeError):
 
 class SourceContentChangedError(RuntimeError):
     """An immutable pinned source URL returned different content."""
+
+
+class CheckpointV2ImportNotImplementedError(RuntimeError):
+    """V2 contract preflight exists, but V2 materialization is a later phase."""
 
 
 @dataclass(frozen=True)
@@ -660,6 +668,13 @@ class CheckpointImporter:
         self._last_allowlist: set[str] = set()
 
     def stage(self, checkpoint: dict[str, Any]) -> ImportResult:
+        if isinstance(checkpoint, dict):
+            version = classify_checkpoint_version(checkpoint)
+            if version == "v2":
+                parse_approved_checkpoint_v2(checkpoint)
+                raise CheckpointV2ImportNotImplementedError(
+                    "V2 checkpoint contract passed preflight; importer materialization is not implemented in Phase 1"
+                )
         issues = _validate_checkpoint_envelope(checkpoint)
         semantic_checkpoint = _without_runtime(checkpoint)
         content_sha = _digest_json(semantic_checkpoint)
