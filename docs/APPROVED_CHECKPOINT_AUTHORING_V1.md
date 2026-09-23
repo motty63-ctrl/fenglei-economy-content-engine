@@ -140,7 +140,7 @@ The approval record is excluded in full to avoid self-reference. In particular, 
 | `draft` | In-memory body assembled from one source run; no approval record | `build_draft` succeeds only if required source artifacts are present, current, and identity-consistent. |
 | `validated` | Draft plus validation report and canonical `body_sha256`; no approval | Every V2 structural, identity, artifact hash, source review, snapshot, facts, angle, and script check passes. Any failure leaves it a draft. |
 | `approved` | In-memory approval record bound to the validated body hash | Explicit human call supplies reviewer and the exact displayed hash. No automatic approval path. |
-| `sealed` | Write-once JSON at `cases/<case-id>/approved-checkpoints/<checkpoint-id>.json` | Before publication, revalidate the explicit source-run binding, source-run identity, artifact freshness, and all protected artifact hashes; recompute and compare body hash; publication must refuse replacement. |
+| `sealed` | Write-once JSON at `cases/<case-id>/approved-checkpoints/<checkpoint-id>.json` | Before publication, revalidate the explicit source-run binding, source-run identity, artifact freshness, and all protected artifact hashes using the caller-supplied `runs_dir`; recompute and compare body hash; publication must refuse replacement. `repository_root` determines storage only. |
 | `imported` | Existing importer reports `promoted`; imported run and manifest exist under `runs/` | Importer independently verifies V2 approval/body hash, checkpoint-internal identities and references, source snapshots/captures, schemas, provenance, fact coverage, and script coverage. It does not open the source run. |
 
 `CheckpointImporter.stage()` is not a pre-approval validator: it requires `status=approved`, writes `.checkpoint-staging/`, and may capture URLs. Draft validation must be pure and must not call it. A failed import leaves the sealed checkpoint unchanged and not `imported`.
@@ -309,7 +309,7 @@ The authoring builder opens one `source_run_id` and reads every source input fro
 - angle support claims, script claim references, claim source references, evidence references, and source IDs all resolve within that checkpoint; and
 - all source documents and protected artifact hashes resolve under that run, with no path traversal.
 
-`checkpoint_id` is unique within its case storage path. At final seal, authoring repeats the manifest/binding checks and validates every protected source artifact; any identity, freshness, or hash change prevents sealing and invalidates the approval. The sealed body retains `source_run_id` and `protected_artifact_hashes` as immutable approval-time provenance/audit evidence. Importer V2 verifies the checkpoint's own identity and references but never reads `runs/<source_run_id>/`; the sealed checkpoint remains importable when that directory is absent. Same-run provenance is established by authoring/validation/final seal and approved as part of the body; after seal, importer verifies body integrity and internal consistency but does not independently re-prove source-run membership. GDP artifacts and fixtures are never source-run inputs.
+`checkpoint_id` is unique within its case storage path. At final seal, authoring repeats the manifest/binding checks and validates every protected source artifact using the explicit `runs_dir` supplied to `seal_checkpoint()`; any identity, freshness, or hash change prevents sealing and invalidates the approval. `repository_root` is used only for the sealed storage path and must never be used to infer the source-run location. The sealed body retains `source_run_id` and `protected_artifact_hashes` as immutable approval-time provenance/audit evidence. Importer V2 verifies the checkpoint's own identity and references but never reads `runs/<source_run_id>/`; the sealed checkpoint remains importable when that directory is absent. Same-run provenance is established by authoring/validation/final seal and approved as part of the body; after seal, importer verifies body integrity and internal consistency but does not independently re-prove source-run membership. GDP artifacts and fixtures are never source-run inputs.
 
 ### Normative source-run-to-case binding
 
@@ -326,6 +326,8 @@ The exact V1 storage path is:
 ```text
 cases/<case-id>/approved-checkpoints/<checkpoint-id>.json
 ```
+
+The final pre-seal freshness, binding, and artifact validation uses the caller-supplied `runs_dir`. The authoring API requires `repository_root` and `runs_dir` as separate explicit inputs: `repository_root` determines only the sealed storage location above, while `runs_dir` determines where the selected source run is read and revalidated. It must not infer `runs_dir` from `repository_root`, `source_run_id`, a slug, or any other value.
 
 The directory is created under the repository root if needed. The path must be under a non-ignored case directory that is expected to be Git-tracked. IDs are validated as safe single path components; absolute paths, separators, `.`/`..`, and traversal are rejected. The sealed file is a complete V2 envelope, including the approval record. Draft and validation objects are in-memory only in V1; they are not written to `runs/` or `.checkpoint-staging/`.
 
@@ -392,11 +394,11 @@ build_checkpoint_draft(run_id, case_id, checkpoint_id, runs_dir,
 validate_checkpoint_draft(draft, runs_dir) -> ValidationReport
 approve_checkpoint(draft, validation, *, reviewer, expected_body_sha256,
                    approved_at=None) -> CheckpointApproval
-seal_checkpoint(draft, approval, repository_root) -> Path
+seal_checkpoint(draft, approval, repository_root, *, runs_dir) -> Path
 import_sealed_checkpoint(path, importer) -> ImportResult
 ```
 
-`CheckpointDraft` is body-only and cannot be passed as approved input. `approve_checkpoint` requires a passing report and an exact expected digest. `seal_checkpoint` recomputes the digest and enforces the fixed storage path/write-once policy. `import_sealed_checkpoint` parses the sealed file and delegates to the V2-enabled `CheckpointImporter`; it does not duplicate staging/promotion logic.
+`CheckpointDraft` is body-only and cannot be passed as approved input. `approve_checkpoint` requires a passing report and an exact expected digest. `seal_checkpoint` requires explicit `repository_root` and keyword-only `runs_dir`, recomputes the digest, revalidates the source run only under `runs_dir`, and writes only under the fixed storage path rooted at `repository_root`. It enforces the write-once policy and never guesses a source-run location. `import_sealed_checkpoint` parses the sealed file and delegates to the V2-enabled `CheckpointImporter`; it does not duplicate staging/promotion logic.
 
 `bind_source_run_to_case` always takes explicit IDs. First call creates the registered binding artifact; a matching existing binding is validated and idempotent, while any conflicting, malformed, stale, or unregistered existing binding fails without overwrite. Whether reviewer timestamps are caller-supplied or generated as timezone-aware UTC is an implementation detail, but the persisted format is fixed to timezone-aware ISO-8601.
 
