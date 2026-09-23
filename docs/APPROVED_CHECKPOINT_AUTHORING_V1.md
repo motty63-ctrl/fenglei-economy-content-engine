@@ -182,7 +182,7 @@ All listed artifacts must be valid, have matching recorded content hashes and de
 - `snapshot.source_text_sha256` ← matching `source_documents/index.json.documents[].content_hash`, defined as SHA-256 of the exact UTF-8 encoding of the extracted `doc.text` string written to the normalized document path.
 - `snapshot.raw_capture_bytes_sha256` ← the `content_hash` of the matching `files[]` entry with `role: "raw_response"` only when it identifies the persisted original PDF bytes; otherwise `null`. Do not treat `document_hash` as a uniform raw-byte digest.
 - `snapshot.indexed_file_hashes` ← every `documents[].files[]` entry in original order, preserving `role` and relative `path`, copying `content_hash` into `sha256`, and assigning `hash_kind` by the actual persisted representation: `normalized_text` and JSON `raw_response` are `utf8_text_sha256`; PDF `raw_response` and `page_index` are `file_bytes_sha256`.
-- The selected source row and document-index row must agree on `source_id`, URL/original URL, and case/run context. Missing or contradictory values fail.
+- The selected source row and document-index row must agree on `source_id` and the available URL/original-URL identity fields; missing or contradictory identity values fail. Their run/case provenance is established by the explicitly selected enclosing source run, its registered `checkpoint_authoring_binding.json`, and `ArtifactRegistry` state/hash/freshness validation. Row-local `run_id` or `case_id` fields are neither required nor inferred or added to native source artifacts.
 
 ### Angle
 
