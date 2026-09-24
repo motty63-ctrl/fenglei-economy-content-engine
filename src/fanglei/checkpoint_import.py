@@ -25,13 +25,15 @@ from fanglei.artifact_registry import ArtifactRegistry, IMPORTED_ARTIFACT_GRAPH
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, atomic_write_text, sha256_bytes, sha256_text
 from fanglei.checkpoint_contract import (
     ApprovedCheckpointV2,
-    UnsupportedCheckpointVersionError,
+    ApprovedCheckpointV21,
     classify_checkpoint_version,
     parse_approved_checkpoint_v2,
+    parse_approved_checkpoint_v21,
 )
 from fanglei.content_models import AngleCandidate
 from fanglei.models import RunManifest, StageState
 from fanglei.paths import next_run_id
+from fanglei.source_contract import AuthoritativePrimarySetPolicyV1
 
 
 class SourceFetchError(RuntimeError):
@@ -192,6 +194,49 @@ def _without_runtime(value: Any, *, normalize_run_id: bool = False) -> Any:
 
 def _digest_json(value: Any) -> str:
     return sha256_text(_canonical_json(value))
+
+
+def _validate_v21_staging_metadata(
+    metadata: dict[str, Any],
+    expected_immutable: dict[str, Any],
+    source_snapshot_hashes: dict[str, dict[str, Any]],
+) -> None:
+    dynamic_fields = {"imported_at", "pinned_capture_hashes"}
+    if set(metadata) != set(expected_immutable) | dynamic_fields:
+        raise RuntimeError("Staging V2.1 fingerprint metadata has missing or unknown fields")
+
+    for key, expected in expected_immutable.items():
+        try:
+            matches = _canonical_json(metadata[key]) == _canonical_json(expected)
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise RuntimeError(
+                f"Staging V2.1 fingerprint metadata does not match approved checkpoint: {key}"
+            )
+
+    imported_at = metadata["imported_at"]
+    if not isinstance(imported_at, str):
+        raise RuntimeError("Staging V2.1 imported_at metadata is invalid")
+    try:
+        timestamp = datetime.fromisoformat(imported_at)
+    except ValueError as error:
+        raise RuntimeError("Staging V2.1 imported_at metadata is invalid") from error
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise RuntimeError("Staging V2.1 imported_at metadata must be timezone-aware")
+
+    pinned_capture_hashes = metadata["pinned_capture_hashes"]
+    if not isinstance(pinned_capture_hashes, dict):
+        raise RuntimeError("Staging V2.1 pinned_capture_hashes metadata is invalid")
+    source_urls = set(source_snapshot_hashes)
+    if pinned_capture_hashes and set(pinned_capture_hashes) != source_urls:
+        raise RuntimeError("Staging V2.1 pinned_capture_hashes metadata is incomplete")
+    for url, digest in pinned_capture_hashes.items():
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise RuntimeError("Staging V2.1 pinned capture digest is invalid")
+        raw_digest = source_snapshot_hashes[url]["raw_capture_bytes_sha256"]
+        if raw_digest is not None and digest != raw_digest:
+            raise RuntimeError("Staging V2.1 pinned capture digest does not match its raw snapshot")
 
 
 def _text_from_capture(capture: SourceCapture) -> str:
@@ -437,8 +482,34 @@ def _ensure_v2_pin_directory(cache_root: Path, pin_dir: Path) -> Path:
 
 
 def _v2_preflight(checkpoint: dict[str, Any]) -> tuple[ApprovedCheckpointV2, str]:
-    """Validate approval and all body-local references before any I/O or staging writes."""
-    parsed = parse_approved_checkpoint_v2(checkpoint)
+    """Validate the frozen 2.0 contract and references before importer I/O."""
+    return _versioned_preflight(checkpoint, parse_approved_checkpoint_v2)
+
+
+def _v21_preflight(checkpoint: dict[str, Any]) -> tuple[ApprovedCheckpointV21, str]:
+    """Strictly validate checkpoint 2.1 before any fetch, pin, or staging write."""
+    return _versioned_preflight(checkpoint, parse_approved_checkpoint_v21)
+
+
+def _versioned_preflight(
+    checkpoint: dict[str, Any],
+    parser: Any,
+) -> tuple[ApprovedCheckpointV2 | ApprovedCheckpointV21, str]:
+    """Validate approval, policy consistency, and all body-local references."""
+    parsed = parser(checkpoint)
+
+    if isinstance(parsed, ApprovedCheckpointV21) and not isinstance(
+        parsed.source_policy, AuthoritativePrimarySetPolicyV1
+    ):
+        expected_admissibility = (
+            "admissible" if parsed.source_selection.independent_source_count >= 3 else "inadmissible"
+        )
+        if parsed.source_selection.package_admissibility != expected_admissibility:
+            raise CheckpointV2PreflightError(
+                "SOURCE_SELECTION_INVALID",
+                "source_selection.package_admissibility",
+                "independent_sources package admissibility must match the existing three-source threshold",
+            )
 
     def unique_ids(values: list[str], path: str) -> set[str]:
         if len(values) != len(set(values)):
@@ -712,6 +783,53 @@ class ApprovedCheckpointMaterializer:
     def materialize(self, checkpoint: dict[str, Any], staging_dir: Path, captures: dict[str, SourceCapture],
                     checkpoint_content_sha256: str, checkpoint_fingerprint: str,
                     *, v2_metadata: dict[str, Any] | None = None) -> ImportResult:
+        return self._materialize(
+            checkpoint,
+            staging_dir,
+            captures,
+            checkpoint_content_sha256,
+            checkpoint_fingerprint,
+            v2_metadata=v2_metadata,
+        )
+
+    def materialize_v21(
+        self,
+        checkpoint: dict[str, Any],
+        staging_dir: Path,
+        captures: dict[str, SourceCapture],
+        checkpoint_content_sha256: str,
+        checkpoint_fingerprint: str,
+        *,
+        v21_metadata: dict[str, Any],
+    ) -> ImportResult:
+        """Materialize the explicit 2.1 projection, preserving authority semantics."""
+        return self._materialize(
+            checkpoint,
+            staging_dir,
+            captures,
+            checkpoint_content_sha256,
+            checkpoint_fingerprint,
+            v2_metadata=v21_metadata,
+            formal_facts_schema_version="checkpoint-import-facts/2.1",
+            formal_facts_policy_version="approved-checkpoint-import/2.1",
+            preserve_verification_basis=True,
+            preserve_authority_audit=True,
+        )
+
+    def _materialize(
+        self,
+        checkpoint: dict[str, Any],
+        staging_dir: Path,
+        captures: dict[str, SourceCapture],
+        checkpoint_content_sha256: str,
+        checkpoint_fingerprint: str,
+        *,
+        v2_metadata: dict[str, Any] | None = None,
+        formal_facts_schema_version: str = "2.0",
+        formal_facts_policy_version: str = "approved-checkpoint-import/1.0",
+        preserve_verification_basis: bool = False,
+        preserve_authority_audit: bool = False,
+    ) -> ImportResult:
         staging_dir = Path(staging_dir)
         materialized = staging_dir / "materialized"
         if materialized.exists():
@@ -878,6 +996,18 @@ class ApprovedCheckpointMaterializer:
             }
             if v2_metadata is not None and isinstance(claim.get("native_metadata"), dict):
                 materialized_claim.update(claim["native_metadata"])
+            if preserve_verification_basis:
+                materialized_claim["verification_basis"] = claim.get("verification_basis")
+                attestation = claim.get("authority_attestation")
+                if isinstance(attestation, dict):
+                    materialized_attestation = dict(attestation)
+                    materialized_attestation["source_ids"] = [
+                        id_lookup["sources"][source_id]
+                        for source_id in attestation.get("source_ids", [])
+                    ]
+                    materialized_claim["authority_attestation"] = materialized_attestation
+                else:
+                    materialized_claim["authority_attestation"] = None
             facts_claims.append(materialized_claim)
 
         required_claim_fields = ("claim_text", "claim_type", "verification_status", "verification_reason", "allowed_downstream")
@@ -886,10 +1016,10 @@ class ApprovedCheckpointMaterializer:
                 if claim.get(key) is None or claim.get(key) == "":
                     issues.append({"code": "CLAIM_FIELD_MISSING", "message": f"Claim {claim.get('claim_external_id')} missing {key}"})
         facts = {
-            "schema_version": "2.0",
+            "schema_version": formal_facts_schema_version,
             "run_id": "checkpoint-import-staging",
             "checked_at": _now(),
-            "policy_version": "approved-checkpoint-import/1.0",
+            "policy_version": formal_facts_policy_version,
             "summary": {"source": "approved_checkpoint", "claim_count": len(facts_claims)},
             "claims": facts_claims,
         }
@@ -972,7 +1102,12 @@ class ApprovedCheckpointMaterializer:
             schema_issues = []
         schema_root = Path(__file__).resolve().parents[2]
         if facts_claims:
-            schema_issues.extend(_validate_json_schema(facts, schema_root / "docs/v0.2/facts.schema.json"))
+            facts_schema = (
+                "docs/v0.2/checkpoint-import-facts-2.1.schema.json"
+                if formal_facts_schema_version == "checkpoint-import-facts/2.1"
+                else "docs/v0.2/facts.schema.json"
+            )
+            schema_issues.extend(_validate_json_schema(facts, schema_root / facts_schema))
         else:
             schema_issues.append({"code": "CLAIMS_MISSING", "message": "At least one formal claim is required"})
         if script_payload:
@@ -1051,6 +1186,11 @@ class ApprovedCheckpointMaterializer:
                         url: values["content_sha256"] for url, values in capture_rows.items()
                     },
                 })
+            if preserve_authority_audit:
+                import_manifest.update({
+                    "source_policy": v2_metadata["source_policy"],
+                    "source_selection": v2_metadata["source_selection"],
+                })
             _write_json(materialized / "import_manifest.json", import_manifest)
             candidate_run = {
                 "schema_version": "2.0",
@@ -1088,9 +1228,8 @@ class CheckpointImporter:
             parsed, content_sha = _v2_preflight(checkpoint)
             return self._stage_v2(checkpoint, parsed, content_sha)
         if version == "v2_1":
-            raise UnsupportedCheckpointVersionError(
-                "approved-checkpoint/2.1 contract is recognized, but importer materialization is not implemented"
-            )
+            parsed, content_sha = _v21_preflight(checkpoint)
+            return self._stage_v21(checkpoint, parsed, content_sha)
 
         # Keep the legacy V1 envelope, fingerprint, capture, and materialization
         # path below unchanged. V2 has its own snapshot-bound branch above.
@@ -1158,11 +1297,59 @@ class CheckpointImporter:
         parsed: ApprovedCheckpointV2,
         content_sha: str,
     ) -> ImportResult:
+        return self._stage_snapshot_bound(checkpoint, parsed, content_sha, checkpoint_v21=False)
+
+    def _stage_v21(
+        self,
+        checkpoint: dict[str, Any],
+        parsed: ApprovedCheckpointV21,
+        content_sha: str,
+    ) -> ImportResult:
+        return self._stage_snapshot_bound(checkpoint, parsed, content_sha, checkpoint_v21=True)
+
+    def _stage_snapshot_bound(
+        self,
+        checkpoint: dict[str, Any],
+        parsed: ApprovedCheckpointV2 | ApprovedCheckpointV21,
+        content_sha: str,
+        *,
+        checkpoint_v21: bool,
+    ) -> ImportResult:
         fingerprint = _digest_json({
             "checkpoint_content_sha256": content_sha,
             "checkpoint_schema_version": parsed.checkpoint_schema_version,
             "importer_version": self.importer_version,
         })
+        source_snapshot_hashes: dict[str, dict[str, Any]] = {}
+        for source in parsed.sources:
+            snapshot_metadata: dict[str, Any] = {
+                "source_text_sha256": source.snapshot.source_text_sha256,
+                "raw_capture_bytes_sha256": source.snapshot.raw_capture_bytes_sha256,
+            }
+            if checkpoint_v21:
+                snapshot_metadata["indexed_file_hashes"] = [
+                    row.model_dump(mode="json") for row in source.snapshot.indexed_file_hashes
+                ]
+            source_snapshot_hashes[source.url] = snapshot_metadata
+        v21_audit_metadata: dict[str, Any] | None = None
+        if checkpoint_v21:
+            assert isinstance(parsed, ApprovedCheckpointV21)
+            v21_audit_metadata = {
+                "source_policy": parsed.source_policy.model_dump(mode="json"),
+                "source_selection": parsed.source_selection.model_dump(mode="json"),
+            }
+        expected_fingerprint_metadata = {
+            "checkpoint_content_sha256": content_sha,
+            "checkpoint_schema_version": parsed.checkpoint_schema_version,
+            "importer_version": self.importer_version,
+            "checkpoint_fingerprint": fingerprint,
+        }
+        if checkpoint_v21:
+            expected_fingerprint_metadata.update({
+                "source_snapshot_hashes": source_snapshot_hashes,
+                **(v21_audit_metadata or {}),
+            })
+
         staging = self.staging_root / f"cp-{fingerprint[:20]}"
         try:
             staging.mkdir(parents=True)
@@ -1179,16 +1366,16 @@ class CheckpointImporter:
                 previous = json.loads(fingerprint_path.read_text("utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise RuntimeError("Staging fingerprint metadata is invalid; refusing to reuse package") from error
-            expected_fingerprint_metadata = {
-                "checkpoint_content_sha256": content_sha,
-                "checkpoint_schema_version": parsed.checkpoint_schema_version,
-                "importer_version": self.importer_version,
-                "checkpoint_fingerprint": fingerprint,
-            }
             if not isinstance(previous, dict) or any(
                 previous.get(key) != value for key, value in expected_fingerprint_metadata.items()
             ):
                 raise RuntimeError("Staging fingerprint prefix collision; refusing to reuse package")
+            if checkpoint_v21:
+                _validate_v21_staging_metadata(
+                    previous,
+                    expected_fingerprint_metadata,
+                    source_snapshot_hashes,
+                )
         elif not package_is_new:
             raise RuntimeError("Staging package has no fingerprint metadata; refusing to reuse package")
 
@@ -1198,13 +1385,6 @@ class CheckpointImporter:
             shutil.rmtree(materialized_dir)
         (staging / "gates.json").unlink(missing_ok=True)
 
-        source_snapshot_hashes = {
-            source.url: {
-                "source_text_sha256": source.snapshot.source_text_sha256,
-                "raw_capture_bytes_sha256": source.snapshot.raw_capture_bytes_sha256,
-            }
-            for source in parsed.sources
-        }
         fingerprint_metadata = {
             "checkpoint_content_sha256": content_sha,
             "checkpoint_schema_version": parsed.checkpoint_schema_version,
@@ -1214,6 +1394,9 @@ class CheckpointImporter:
             "pinned_capture_hashes": {},
             "imported_at": _now(),
         }
+        if checkpoint_v21:
+            assert v21_audit_metadata is not None
+            fingerprint_metadata.update(v21_audit_metadata)
         atomic_write_json(fingerprint_path, fingerprint_metadata)
 
         self._last_allowlist = {source.url for source in parsed.sources}
@@ -1285,20 +1468,26 @@ class CheckpointImporter:
         }
         fingerprint_metadata["pinned_capture_hashes"] = pinned_capture_hashes
         atomic_write_json(fingerprint_path, fingerprint_metadata)
-        v2_metadata = {
+        versioned_metadata = {
             "case_id": parsed.case_id,
             "source_run_id": parsed.source_run_id,
             "facts_source": parsed.facts_source.model_dump(mode="json"),
             "source_snapshot_hashes": source_snapshot_hashes,
             "pinned_capture_hashes": pinned_capture_hashes,
         }
+        if checkpoint_v21:
+            assert v21_audit_metadata is not None
+            versioned_metadata.update(v21_audit_metadata)
+            return self.materializer.materialize_v21(
+                checkpoint,
+                staging,
+                captures,
+                content_sha,
+                fingerprint,
+                v21_metadata=versioned_metadata,
+            )
         return self.materializer.materialize(
-            checkpoint,
-            staging,
-            captures,
-            content_sha,
-            fingerprint,
-            v2_metadata=v2_metadata,
+            checkpoint, staging, captures, content_sha, fingerprint, v2_metadata=versioned_metadata
         )
 
     def refresh_source(self, url: str, fetcher: SourceFetcher | None = None) -> SourceCapture:
