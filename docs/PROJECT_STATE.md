@@ -1,5 +1,9 @@
 # Project State
 
+## Verified implementation baseline
+
+Approved Checkpoint Authoring Workflow V1 is implemented at commit `75436e1994ffe037f15f6eda706f98408fd3179e` on `main`. At the start of this documentation closeout, local `main`, `origin/main`, and GitHub `main` pointed to that commit and the working tree was clean. This hash records the implementation baseline; it is not a self-updating requirement for later documentation commits.
+
 ## Runtime and run storage
 
 The project is a local Python 3.11+ package with a Typer CLI (`fanglei`, also runnable as `python -m fanglei`). Runs are stored under `runs/` unless `--runs-dir` selects another directory. The standard allocator creates date/sequence/slug IDs and skips IDs already present. Each run is an artifact directory with `run.json` recording stage state, artifact ownership, dependency hashes, and run status.
@@ -14,11 +18,25 @@ Research is divided into search, source fetch, source selection, factcheck, and 
 
 The ordinary artifact dependency graph is `ARTIFACT_GRAPH` in `src/fanglei/artifact_registry.py`. Run status values currently include `created`, `analyzed`, `scripted`, `visual_planned`, `voice_review_pending`, `voice_approved`, `renderer_ready`, and `failed`.
 
-## Approved-checkpoint import
+## Approved-checkpoint authoring and import
 
-The code has a separate Python API path: `CheckpointImporter` stages an approved checkpoint, and `ApprovedCheckpointMaterializer` converts its structure into formal artifacts. Staging is under `.checkpoint-staging/`; promotion to `runs/<run_id>/` is attempted only when schema, provenance, fact-coverage, and script-coverage gates pass. The import profile has its own `IMPORTED_ARTIFACT_GRAPH`; the native graph remains a separate profile. There is no checkpoint-import command in `src/fanglei/cli.py`.
+Approved Checkpoint Authoring Workflow V1 is complete. Its implemented path is:
+
+`formal artifacts → deterministic approved-checkpoint/2.0 draft → pure validation → explicit hash-bound human approval → write-once seal → V2 importer → schema/provenance/fact-coverage/script-coverage gates → promotion`
+
+Authoring validates one explicitly selected source run and its case binding, hashes, and freshness before seal. The sealed V2 checkpoint contains that approval-time provenance; the importer does not require the original source-run directory to remain present. Approval binds the canonical checkpoint body SHA-256, excluding only the top-level approval record. Sealed checkpoints use `cases/<case-id>/approved-checkpoints/<checkpoint-id>.json`; `.checkpoint-staging/` remains importer-only staging, and `runs/` remains formal run storage.
+
+The separate Python API path uses `CheckpointImporter` to stage a checkpoint and `ApprovedCheckpointMaterializer` to convert it into formal artifacts. Promotion to `runs/<run_id>/` is attempted only when schema, provenance, fact-coverage, and script-coverage gates pass. The import profile has its own `IMPORTED_ARTIFACT_GRAPH`; the native graph remains a separate profile. There is no checkpoint-import or authoring command in `src/fanglei/cli.py`.
 
 Import IDs retain external IDs in `id_mapping.json`; the import manifest records checkpoint and importer fingerprints, pinned source hashes, and semantic artifact hashes. Provenance capture is restricted to official HTTPS URLs listed in the checkpoint. A previously pinned URL/content hash is reused; a content change is surfaced as `SOURCE_CONTENT_CHANGED`.
+
+The local end-to-end authoring → approval → seal → import → promotion acceptance path is covered by tests. It does not mean that the Fed SEP case has a new V2 checkpoint or production run.
+
+## Fed SEP revisions case
+
+The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`; its 12 missing formal `AngleCandidate` values were not recovered from original approved material. The completed authoring workflow does not repair that checkpoint. Do not repair, backfill, infer, default, copy, or upgrade it to V2. GDP artifacts and test fixtures are not Fed recovery sources.
+
+Fed Case 2 has not been rerun. Its next path is to create a new complete `approved-checkpoint/2.0` checkpoint, beginning with a read-only inventory to determine whether a complete formal source run is available.
 
 ## Voice, alignment, and renderer boundaries
 

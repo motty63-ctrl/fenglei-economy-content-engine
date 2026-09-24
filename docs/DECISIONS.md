@@ -14,7 +14,13 @@ Imported checkpoints enter through `CheckpointImporter` and `ApprovedCheckpointM
 
 Checkpoint IDs remain visible as source/external IDs, while deterministic canonical IDs satisfy formal artifact contracts. `id_mapping.json` and the import manifest preserve the mapping and its hash for auditability.
 
-Runtime timestamps are audit metadata only. They are excluded from checkpoint fingerprinting, deterministic ID assignment, mapping hashes, and semantic artifact hashes so repeat imports of the same checkpoint remain stable.
+Legacy V1 checkpoint fingerprinting retains its historical runtime-field exclusion and existing materialization behavior. V2 approval instead hashes the entire canonical checkpoint body, excluding only the top-level `approval` record; body timestamps and snapshot fields are protected. The V2 importer fingerprint derives from that verified body hash, checkpoint contract version, and importer version. Import-time audit fields remain importer-generated metadata and are not substituted into the approved checkpoint body.
+
+## Approved checkpoint authoring V1 is complete
+
+The supported new-checkpoint path is formal source-run artifacts → deterministic `approved-checkpoint/2.0` draft → pure validation → explicit human approval bound to the canonical body SHA-256 → write-once seal → V2 import → existing schema, provenance, fact-coverage, and script-coverage gates → promotion. The importer remains independent of the source-run directory after sealing; source-run identity, case binding, freshness, and protected hashes are verified before seal and retained as provenance evidence.
+
+V2 does not redefine legacy `1.0` or `approved-checkpoint/1.0`. Existing V1 fingerprint and materialization semantics remain in force. A V1 checkpoint is never silently upgraded, backfilled, or given V2 approval meaning.
 
 ## Import conversion preserves approved meaning
 
@@ -23,6 +29,12 @@ The importer performs structural conversion and deterministic metadata derivatio
 ## Approved-checkpoint recovery requires identity-bound source material
 
 Recover missing semantic values only from original approved material whose checkpoint identity, case context, and approval provenance bind it to the import being recovered. A complete artifact from another case or a test fixture is not a substitute. Do not infer, regenerate, default, or copy missing values; if the original approved material cannot be located with sufficient provenance, keep the import blocked.
+
+## Fed Case 2 uses a new V2 checkpoint
+
+The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. Its 12 missing `AngleCandidate` values have not been recovered from original approved material; do not repair, backfill, infer, default, copy, or upgrade that checkpoint to V2. GDP artifacts and test fixtures are not recovery sources.
+
+The next Fed Case 2 path is to create a separate, complete `approved-checkpoint/2.0` checkpoint. Begin with a read-only inventory for an existing complete formal source run; if none exists, decide which native pipeline stage to resume. Until then, no new Fed V2 checkpoint, promotion, or production run exists.
 
 ## Provenance is limited to the checkpoint's source allowlist
 
