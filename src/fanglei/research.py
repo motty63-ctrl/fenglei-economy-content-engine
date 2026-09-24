@@ -54,6 +54,158 @@ SOURCE_TIERS = {
 }
 
 
+_TABLE_TITLE = re.compile(r"^\s*Table\s+\d+\s*\.\s*.+$", re.IGNORECASE)
+_TABLE_PERIOD = re.compile(r"^(?:19|20)\d{2}$|^longer\s+run$", re.IGNORECASE)
+_TABLE_NUMBER = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:\s*(?:%|percent))?$", re.IGNORECASE)
+_MONTH_DATE_SUFFIX = re.compile(
+    r"\s*,?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_table_label(value: str) -> str:
+    return re.sub(r"(?<=[A-Za-z])\d+$", "", value.strip()).strip()
+
+
+def _table_signature(title: str) -> str:
+    without_release_date = _MONTH_DATE_SUFFIX.sub("", title.strip())
+    return " ".join(without_release_date.casefold().split())
+
+
+def _line_range(first: int, last: int) -> str:
+    return f"line:{first}" if first == last else f"line:{first}-{last}"
+
+
+def _structured_table_evidence(document: FetchedDocument) -> list[dict[str, Any]]:
+    """Extract only unambiguous first-column cells from line-oriented tables.
+
+    The normalized captures retain accessible tables as one cell per line. This
+    reader recognizes their explicit ``Variable`` / statistic / period header
+    shape and deliberately emits the first statistic/period cell only: later
+    cells cannot be aligned safely when a normalized table omits blank cells.
+    """
+    lines = document.text.splitlines()
+    nonempty = [(index, line.strip()) for index, line in enumerate(lines) if line.strip()]
+    output: list[dict[str, Any]] = []
+
+    for title_position, (_, table_title) in enumerate(nonempty):
+        if not _TABLE_TITLE.match(table_title):
+            continue
+        table_end = next(
+            (
+                position
+                for position in range(title_position + 1, len(nonempty))
+                if _TABLE_TITLE.match(nonempty[position][1])
+                or re.match(r"^(?:Note:|Figure\s+\d+\.)", nonempty[position][1], re.IGNORECASE)
+            ),
+            len(nonempty),
+        )
+        table_lines = nonempty[title_position + 1 : table_end]
+        variable_position = next(
+            (i for i, (_, line) in enumerate(table_lines[:24]) if line.casefold() == "variable"),
+            None,
+        )
+        if variable_position is None or variable_position == 0:
+            continue
+        unit_line_number, unit = table_lines[variable_position - 1]
+        first_period_position = next(
+            (
+                i
+                for i in range(variable_position + 1, min(len(table_lines), variable_position + 16))
+                if _TABLE_PERIOD.fullmatch(table_lines[i][1])
+            ),
+            None,
+        )
+        if first_period_position is None:
+            continue
+        statistic_rows = table_lines[variable_position + 1 : first_period_position]
+        statistics = [_clean_table_label(line) for _, line in statistic_rows]
+        if not statistics or any(not re.search(r"[A-Za-z]", item) for item in statistics):
+            continue
+
+        period_rows: list[tuple[int, str]] = []
+        for row in table_lines[first_period_position:]:
+            if not _TABLE_PERIOD.fullmatch(row[1]):
+                break
+            period_rows.append(row)
+        if not period_rows or len(period_rows) % len(statistics):
+            continue
+        period_width = len(period_rows) // len(statistics)
+        period_groups = [
+            [value.casefold() for _, value in period_rows[i * period_width : (i + 1) * period_width]]
+            for i in range(len(statistics))
+        ]
+        if not period_width or any(group != period_groups[0] for group in period_groups[1:]):
+            continue
+        first_period = period_rows[0][1]
+        if not re.fullmatch(r"(?:19|20)\d{2}", first_period):
+            continue
+
+        header_first_line = unit_line_number + 1
+        header_last_line = period_rows[-1][0] + 1
+        header_excerpt = "\n".join(lines[header_first_line - 1 : header_last_line])
+        first_statistic = statistics[0]
+        signature = _table_signature(table_title)
+
+        row_start = first_period_position + len(period_rows)
+        row_position = row_start
+        while row_position + 1 < len(table_lines):
+            raw_label = table_lines[row_position][1]
+            next_value = table_lines[row_position + 1][1]
+            if (
+                not _TABLE_NUMBER.fullmatch(next_value)
+                or _TABLE_PERIOD.fullmatch(raw_label)
+                or _TABLE_NUMBER.fullmatch(raw_label)
+            ):
+                row_position += 1
+                continue
+            row_label = _clean_table_label(raw_label)
+            if not row_label or not re.search(r"[A-Za-z]", row_label):
+                row_position += 1
+                continue
+
+            row_line = table_lines[row_position][0] + 1
+            value_line = table_lines[row_position + 1][0] + 1
+            value = re.sub(r"\s*(?:%|percent)$", "", next_value, flags=re.IGNORECASE).strip()
+            context = {
+                "table_title": table_title,
+                "table_signature": signature,
+                "row_label": row_label,
+                "statistic": first_statistic,
+                "period": first_period,
+                "unit": unit,
+                "value": value,
+                "header_locator": _line_range(header_first_line, header_last_line),
+                "header_excerpt": header_excerpt,
+            }
+            claim_key = "structured-table|" + "|".join(
+                " ".join(part.casefold().split())
+                for part in (signature, row_label, first_statistic, first_period, unit)
+            )
+            output.append(
+                {
+                    "source_id": document.source_id,
+                    "evidence_text": f"{lines[row_line - 1]}\n{lines[value_line - 1]}",
+                    "source_section": table_title,
+                    "paragraph_locator": _line_range(row_line, value_line),
+                    "published_at": document.published_at,
+                    "retrieved_at": document.retrieved_at,
+                    "original_url": document.original_url or document.url,
+                    "relation": "supports",
+                    "claim_type": "fact",
+                    "claim_key": claim_key,
+                    "claim_values": [value],
+                    "document_hash": document.document_hash,
+                    "document_format": document.document_format,
+                    "evidence_origin": "original_document",
+                    "table_context": context,
+                }
+            )
+            row_position += 2
+
+    return output
+
+
 def _canonical(url: str) -> str:
     parts = urlsplit(url)
     return f"{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path.rstrip('/')}"
@@ -195,6 +347,7 @@ class RuleBasedEvidenceExtractor:
                                 })
                         else:
                             evidence.append({**base, "claim_key": None, "claim_values": None})
+            evidence.extend(_structured_table_evidence(doc))
         return evidence
 
 
@@ -245,7 +398,13 @@ def verify_claims(
         status = "conflicted" if claim_type == "fact" and len(values) > 1 else (
             "verified" if claim_type == "fact" and minimum_sources_met and independent_count >= 2 and has_primary else "unverified"
         )
-        internal_fields = {"claim_type", "claim_key", "claim_values", "normalized_claim_text"}
+        internal_fields = {
+            "claim_type",
+            "claim_key",
+            "claim_values",
+            "normalized_claim_text",
+            "table_context",
+        }
         clean_evidence = [{key: value for key, value in item.items() if key not in internal_fields} for item in items]
         claims.append(
             {
@@ -322,11 +481,47 @@ def _authority_evidence_matches(
         or item["evidence_text"] not in document.text
     ):
         return False
+    table_context = item.get("table_context")
+    if table_context is not None:
+        reparsed = _structured_table_evidence(document)
+        if not any(
+            row["paragraph_locator"] == item.get("paragraph_locator")
+            and row["evidence_text"] == item.get("evidence_text")
+            and row["claim_key"] == item.get("claim_key")
+            and row["claim_values"] == item.get("claim_values")
+            and row["table_context"] == table_context
+            for row in reparsed
+        ):
+            return False
     has_locator = any(
         item.get(name) not in (None, "")
         for name in ("source_section", "paragraph_locator", "page_number", "json_pointer")
     )
     return has_locator
+
+
+def _authority_scope_matches(scope: Any, item: dict[str, Any]) -> bool:
+    context = item.get("table_context")
+    if context is None:
+        return _scope_terms_appear(scope, item["evidence_text"])
+    if (
+        scope.subject.casefold().strip() != context["row_label"].casefold().strip()
+        or scope.period.casefold().strip() != context["period"].casefold().strip()
+        or (scope.unit or "").casefold().strip() != context["unit"].casefold().strip()
+        or (scope.statistic or "").casefold().strip() != context["statistic"].casefold().strip()
+    ):
+        return False
+    heading = " ".join(
+        f"{context['table_title']} {context['header_excerpt']}".casefold().split()
+    )
+    for term in (scope.measure, scope.certainty):
+        folded = " ".join(term.casefold().split())
+        if folded in {"projection", "projections"}:
+            if re.search(r"\bprojections?\b", heading) is None:
+                return False
+        elif folded not in heading:
+            return False
+    return True
 
 
 def _verify_authority_candidate(
@@ -365,7 +560,7 @@ def _verify_authority_candidate(
     if any(
         source_id not in documents
         or not _authority_evidence_matches(item, documents[source_id], approved_by_id[source_id])
-        or not _scope_terms_appear(attestation.scope, item["evidence_text"])
+        or not _authority_scope_matches(attestation.scope, item)
         or _AUTHORITY_SCOPE_EXPANSION.search(item["evidence_text"])
         for item, source_id in zip(items, item_ids)
     ):
@@ -516,6 +711,18 @@ def verify_claims_v22(
             documents_by_id,
         )
         if verified is None:
+            if any(item.get("table_context") is not None for item in grouped_items[key]):
+                # Different published table values are a temporal comparison,
+                # not independent corroboration of one unchanged proposition.
+                # If its explicit authority candidate fails, keep it unresolved.
+                claim.update({
+                    "verification_status": "unverified",
+                    "verification_basis": "none",
+                    "authority_attestation": None,
+                    "verification_reason": "structured table comparison did not satisfy authority verification",
+                    "allowed_downstream": False,
+                    "script_usage": script_usage("unverified"),
+                })
             # An invalid authority proposal cannot confer authority status. If
             # the ordinary verifier independently verified it, that separate
             # basis remains intact; otherwise it stays unverified.
