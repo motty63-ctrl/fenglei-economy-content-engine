@@ -1,8 +1,13 @@
 # Approved Checkpoint Authoring Workflow V1
 
-**Status:** Design specification; implementation has not started.
+**Status:** Implementation contract; Approved Checkpoint Authoring Workflow V1 is implemented.
 **Checkpoint contract:** `approved-checkpoint/2.0`
 **Scope:** Deterministically package existing formal run artifacts, validate them, record an explicit human approval bound to the checkpoint body, seal the checkpoint in tracked case storage, then hand it to the existing importer.
+
+The `approved-checkpoint/2.0` contract defined here is frozen. The versioned
+`verification_basis`, source-policy, and checkpoint 2.1 contracts are specified
+separately in [Authoritative Primary Evidence Contract Closeout](AUTHORITATIVE_PRIMARY_EVIDENCE_CONTRACT.md);
+they do not change or reinterpret 2.0 checkpoints.
 
 ## 1. Goals / non-goals
 

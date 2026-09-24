@@ -27,7 +27,7 @@ python -m fanglei --runs-dir runs visual-plan RUN_ID
 python -m fanglei --runs-dir runs storyboard RUN_ID
 ```
 
-Review `facts.json`, `angle.md`, `script.json`, and `script.md` before downstream voice work. The formal facts and script contracts are in `docs/v0.2/facts.schema.json` and `docs/v0.3/script-contract.schema.json`.
+Review `facts.json`, `angle.md`, `script.json`, and `script.md` before downstream voice work. Native facts 2.1 and 2.2 use `docs/v0.2/native-facts-2.1.schema.json` and `docs/v0.2/native-facts-2.2.schema.json`. The existing imported formal facts 2.0 and script contracts remain in `docs/v0.2/facts.schema.json` and `docs/v0.3/script-contract.schema.json`; checkpoint-imported facts 2.1 use `docs/v0.2/checkpoint-import-facts-2.1.schema.json`.
 
 ## Production narration and voice review
 

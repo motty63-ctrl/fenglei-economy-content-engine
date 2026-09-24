@@ -9,7 +9,12 @@ import re
 from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+
+from fanglei.source_contract import (
+    AuthoritativePrimarySetPolicyV1,
+    SourcePolicyV21,
+)
 
 
 class CheckpointContractError(ValueError):
@@ -83,6 +88,12 @@ class FactsSource(_StrictModel):
     summary: dict[str, Any]
 
 
+class FactsSourceV22(_StrictModel):
+    schema_version: Literal["2.2"]
+    policy_version: NonBlankStr
+    summary: dict[str, Any]
+
+
 class Research(_StrictModel):
     content: NonBlankStr
 
@@ -141,6 +152,65 @@ class CheckpointClaim(_StrictModel):
     source_ids: list[NonBlankStr]
     evidence_ids: list[NonBlankStr]
     native_metadata: NativeClaimMetadata | None = None
+
+
+class AuthorityClaimScope(_StrictModel):
+    subject: NonBlankStr
+    measure: NonBlankStr
+    period: NonBlankStr
+    unit: NonBlankStr | None
+    statistic: NonBlankStr | None
+    certainty: NonBlankStr
+
+
+class AuthorityAttestation(_StrictModel):
+    kind: Literal["document_report", "deterministic_document_comparison"]
+    source_ids: list[NonBlankStr] = Field(min_length=1)
+    attribution: NonBlankStr
+    scope: AuthorityClaimScope
+
+    @model_validator(mode="after")
+    def comparison_uses_distinct_documents(self) -> "AuthorityAttestation":
+        if len(self.source_ids) != len(set(self.source_ids)):
+            raise ValueError("authority attestation source_ids must be unique")
+        if self.kind == "deterministic_document_comparison" and len(self.source_ids) < 2:
+            raise ValueError("document comparison requires at least two source documents")
+        return self
+
+
+class CheckpointClaimV21(CheckpointClaim):
+    verification_basis: Literal[
+        "independent_corroboration", "authoritative_primary_attestation", "none"
+    ]
+    authority_attestation: AuthorityAttestation | None
+
+    @model_validator(mode="after")
+    def basis_and_attribution_match(self) -> "CheckpointClaimV21":
+        if self.verification_status == "verified":
+            if self.verification_basis == "none":
+                raise ValueError("verified claims require a non-none verification_basis")
+            if self.classification != "fact":
+                raise ValueError("only fact claims may have verified status")
+        elif self.verification_basis != "none":
+            raise ValueError("conflicted and unverified claims require verification_basis=none")
+        if self.allowed_downstream and (
+            self.verification_status != "verified"
+            or self.classification != "fact"
+            or self.verification_basis == "none"
+        ):
+            raise ValueError("allowed_downstream requires a verified fact with an explicit basis")
+        if self.verification_basis == "authoritative_primary_attestation":
+            if self.authority_attestation is None:
+                raise ValueError("authority basis requires authority_attestation metadata")
+            normalized_claim = " ".join(self.proposition.split()).casefold()
+            normalized_attribution = " ".join(self.authority_attestation.attribution.split()).casefold()
+            if normalized_attribution not in normalized_claim:
+                raise ValueError("authority attribution must remain in the claim proposition")
+            if not set(self.authority_attestation.source_ids).issubset(self.source_ids):
+                raise ValueError("authority attestation sources must be claim sources")
+        elif self.authority_attestation is not None:
+            raise ValueError("authority_attestation is only valid with the authority verification basis")
+        return self
 
 
 class CheckpointEvidence(_StrictModel):
@@ -226,11 +296,131 @@ class CheckpointBodyV2(_StrictModel):
     script: CheckpointScript
 
 
+class CheckpointSourceSelectionV21(_StrictModel):
+    package_admissibility: Literal["admissible", "inadmissible"]
+    independent_source_count: int = Field(ge=0)
+    selection_status: Literal["selected", "insufficient_sources"]
+
+    @model_validator(mode="after")
+    def selection_status_preserves_independent_gate(self) -> "CheckpointSourceSelectionV21":
+        expected = "selected" if self.independent_source_count >= 3 else "insufficient_sources"
+        if self.selection_status != expected:
+            raise ValueError("selection_status must represent the independent-source gate")
+        return self
+
+
+class CheckpointSourceV21(CheckpointSource):
+    credibility_tier: NonBlankStr
+    independence_key: NonBlankStr
+    counts_as_independent: bool
+
+
+class CheckpointBodyV21(CheckpointBodyV2):
+    checkpoint_schema_version: Literal["approved-checkpoint/2.1"]
+    facts_source: FactsSourceV22
+    source_policy: SourcePolicyV21
+    source_selection: CheckpointSourceSelectionV21
+    sources: list[CheckpointSourceV21] = Field(min_length=1)
+    claims: list[CheckpointClaimV21] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def authority_claims_match_approved_package(self) -> "CheckpointBodyV21":
+        if self.source_selection.package_admissibility != "admissible":
+            raise ValueError("checkpoint claims require an admissible source package")
+        independent_keys = [
+            row.independence_key for row in self.sources if row.counts_as_independent
+        ]
+        if len(independent_keys) != len(set(independent_keys)):
+            raise ValueError("independent checkpoint sources must have distinct independence_key values")
+        recorded_independent_count = len(set(independent_keys))
+        if recorded_independent_count != self.source_selection.independent_source_count:
+            raise ValueError("source_selection independent_source_count must match distinct independence_key values")
+        authority_policy = isinstance(self.source_policy, AuthoritativePrimarySetPolicyV1)
+        if not authority_policy and any(
+            row.verification_basis == "authoritative_primary_attestation" for row in self.claims
+        ):
+            raise ValueError("authority attestations require authoritative_primary_set source policy")
+        source_by_id = {row.external_id: row for row in self.sources}
+        for claim in self.claims:
+            if claim.verification_basis == "independent_corroboration":
+                if self.source_selection.selection_status != "selected":
+                    raise ValueError("independent corroboration requires the existing source-selection gate")
+                independent_sources = [
+                    source_by_id[source_id]
+                    for source_id in claim.source_ids
+                    if source_id in source_by_id and source_by_id[source_id].counts_as_independent
+                ]
+                independent_claim_keys = {row.independence_key for row in independent_sources}
+                if len(independent_claim_keys) < 2:
+                    raise ValueError("independent corroboration requires two distinct claim independence_key values")
+                if not any(row.credibility_tier in {"A", "B", "C"} for row in independent_sources):
+                    raise ValueError("independent corroboration requires a primary-tier source")
+        if authority_policy:
+            assert isinstance(self.source_policy, AuthoritativePrimarySetPolicyV1)
+            if self.source_policy.run_id != self.source_run_id:
+                raise ValueError("authority source policy run_id must match checkpoint source_run_id")
+            if self.source_policy.case_id != self.case_id:
+                raise ValueError("authority source policy case_id must match checkpoint case_id")
+            documents = {row.source_id: row for row in self.source_policy.approved_documents}
+            checkpoint_sources = {row.external_id: row for row in self.sources}
+            if set(documents) != set(checkpoint_sources) or len(checkpoint_sources) != len(self.sources):
+                raise ValueError("checkpoint source rows must exactly match the approved source package")
+            for source_id, approved in documents.items():
+                checkpoint_source = checkpoint_sources[source_id]
+                if (
+                    checkpoint_source.url != approved.url
+                    or checkpoint_source.snapshot.source_text_sha256 != approved.source_text_sha256
+                    or checkpoint_source.snapshot.raw_capture_bytes_sha256 != approved.raw_capture_bytes_sha256
+                    or checkpoint_source.published_at is None
+                    or checkpoint_source.published_at[:10] != approved.release_date
+                ):
+                    raise ValueError("checkpoint source identity and snapshot must match the approved package")
+            for claim in self.claims:
+                if claim.verification_basis == "authoritative_primary_attestation":
+                    assert claim.authority_attestation is not None
+                    if not set(claim.authority_attestation.source_ids).issubset(documents):
+                        raise ValueError("authority attestation references a source outside the approved package")
+                    if claim.authority_attestation.kind == "deterministic_document_comparison":
+                        attested_docs = [
+                            documents[source_id]
+                            for source_id in claim.authority_attestation.source_ids
+                        ]
+                        if len({row.document_identity for row in attested_docs}) < 2:
+                            raise ValueError("document comparison requires distinct document identities")
+                        if len({row.evidence_role for row in attested_docs}) < 2:
+                            raise ValueError("document comparison requires distinct evidence roles")
+                        if len({row.release_date for row in attested_docs}) < 2:
+                            raise ValueError("document comparison requires distinct release dates")
+                    supporting_evidence = [
+                        row for row in self.evidence
+                        if claim.external_id in row.claim_ids
+                        and row.relation == "supports"
+                        and set(row.source_ids).intersection(claim.authority_attestation.source_ids)
+                        and (row.source_section is not None or row.paragraph_locator is not None)
+                        and row.evidence_text
+                        and row.excerpt_anchor
+                    ]
+                    evidenced_source_ids = {
+                        source_id for row in supporting_evidence for source_id in row.source_ids
+                    }
+                    if not set(claim.authority_attestation.source_ids).issubset(evidenced_source_ids):
+                        raise ValueError("each authority source must have claim-linked located supporting evidence")
+        return self
+
+
 class CheckpointDraft(CheckpointBodyV2):
     """Strict in-memory V2 checkpoint body; drafts have no approval field."""
 
 
 class ApprovedCheckpointV2(CheckpointBodyV2):
+    approval: CheckpointApproval
+
+
+class CheckpointDraftV21(CheckpointBodyV21):
+    """Strict in-memory V2.1 checkpoint body; drafts have no approval field."""
+
+
+class ApprovedCheckpointV21(CheckpointBodyV21):
     approval: CheckpointApproval
 
 
@@ -263,7 +453,7 @@ def canonical_body_sha256(checkpoint: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json_bytes(body)).hexdigest()
 
 
-def classify_checkpoint_version(checkpoint: Any) -> Literal["legacy_v1", "v2"]:
+def classify_checkpoint_version(checkpoint: Any) -> Literal["legacy_v1", "v2", "v2_1"]:
     if not isinstance(checkpoint, dict):
         raise UnsupportedCheckpointVersionError("Checkpoint must be an object with a supported version")
     version = checkpoint.get("checkpoint_schema_version")
@@ -271,11 +461,19 @@ def classify_checkpoint_version(checkpoint: Any) -> Literal["legacy_v1", "v2"]:
         return "legacy_v1"
     if version == "approved-checkpoint/2.0":
         return "v2"
+    if version == "approved-checkpoint/2.1":
+        return "v2_1"
     raise UnsupportedCheckpointVersionError(f"Unsupported checkpoint schema version: {version!r}")
 
 
 def verify_approval_body_hash(checkpoint: Mapping[str, Any]) -> str:
-    parsed = ApprovedCheckpointV2.model_validate(checkpoint)
+    version = classify_checkpoint_version(dict(checkpoint))
+    if version == "v2":
+        parsed = ApprovedCheckpointV2.model_validate(checkpoint)
+    elif version == "v2_1":
+        parsed = ApprovedCheckpointV21.model_validate(checkpoint)
+    else:
+        raise UnsupportedCheckpointVersionError("Legacy V1 checkpoints do not use the V2 approval hash contract")
     actual = canonical_body_sha256(checkpoint)
     expected = parsed.approval.body_sha256
     if actual != expected:
@@ -287,5 +485,11 @@ def verify_approval_body_hash(checkpoint: Mapping[str, Any]) -> str:
 
 def parse_approved_checkpoint_v2(checkpoint: Mapping[str, Any]) -> ApprovedCheckpointV2:
     parsed = ApprovedCheckpointV2.model_validate(checkpoint)
+    verify_approval_body_hash(checkpoint)
+    return parsed
+
+
+def parse_approved_checkpoint_v21(checkpoint: Mapping[str, Any]) -> ApprovedCheckpointV21:
+    parsed = ApprovedCheckpointV21.model_validate(checkpoint)
     verify_approval_body_hash(checkpoint)
     return parsed

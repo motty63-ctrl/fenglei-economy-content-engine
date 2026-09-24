@@ -12,6 +12,7 @@ from test_checkpoint_contract import _checkpoint as _v2_checkpoint
 
 from fanglei.artifact_registry import ARTIFACT_GRAPH
 from fanglei.checkpoint_contract import canonical_body_sha256
+from fanglei.checkpoint_contract import UnsupportedCheckpointVersionError
 from fanglei.checkpoint_import import (
     CheckpointImporter,
     SourceCapture,
@@ -334,6 +335,15 @@ def test_v2_import_dispatches_to_strict_preflight_without_staging(tmp_path: Path
 
     with pytest.raises(ValidationError):
         importer.stage({"checkpoint_schema_version": "approved-checkpoint/2.0"})
+
+    assert not importer.staging_root.exists()
+
+
+def test_checkpoint_v21_is_not_misrouted_to_legacy_materialization(tmp_path: Path) -> None:
+    importer = _importer(tmp_path)
+
+    with pytest.raises(UnsupportedCheckpointVersionError, match="2.1.*not implemented"):
+        importer.stage({"checkpoint_schema_version": "approved-checkpoint/2.1"})
 
     assert not importer.staging_root.exists()
 

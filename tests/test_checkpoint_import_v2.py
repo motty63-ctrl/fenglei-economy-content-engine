@@ -526,5 +526,6 @@ def test_v2_fingerprint_uses_approval_body_hash_and_v1_path_is_untouched(tmp_pat
     assert fingerprint["checkpoint_content_sha256"] == checkpoint["approval"]["body_sha256"]
     assert fingerprint["checkpoint_schema_version"] == "approved-checkpoint/2.0"
     assert fingerprint["checkpoint_fingerprint"] == result.checkpoint_fingerprint
+    assert result.checkpoint_fingerprint == "2a1619918c3470ae592f9dd06e03ba0f77b0151899deffef0bddbb6f58d1e135"
     assert fingerprint["source_snapshot_hashes"][checkpoint["sources"][0]["url"]]["source_text_sha256"] == checkpoint["sources"][0]["snapshot"]["source_text_sha256"]
     assert fingerprint["pinned_capture_hashes"][checkpoint["sources"][0]["url"]] == sha256_bytes(SOURCE_TEXT.encode("utf-8"))

@@ -25,6 +25,7 @@ from fanglei.artifact_registry import ArtifactRegistry, IMPORTED_ARTIFACT_GRAPH
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, atomic_write_text, sha256_bytes, sha256_text
 from fanglei.checkpoint_contract import (
     ApprovedCheckpointV2,
+    UnsupportedCheckpointVersionError,
     classify_checkpoint_version,
     parse_approved_checkpoint_v2,
 )
@@ -1086,6 +1087,10 @@ class CheckpointImporter:
         if version == "v2":
             parsed, content_sha = _v2_preflight(checkpoint)
             return self._stage_v2(checkpoint, parsed, content_sha)
+        if version == "v2_1":
+            raise UnsupportedCheckpointVersionError(
+                "approved-checkpoint/2.1 contract is recognized, but importer materialization is not implemented"
+            )
 
         # Keep the legacy V1 envelope, fingerprint, capture, and materialization
         # path below unchanged. V2 has its own snapshot-bound branch above.

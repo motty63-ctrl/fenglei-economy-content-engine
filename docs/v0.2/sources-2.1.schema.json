@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fanglei.local/schemas/native-sources-v2.1.json",
+  "title": "Native source selection artifact 2.1",
+  "$comment": "Cross-row checks enforced by the strict runtime model: true counts_as_independent rows require distinct independence_key values; independent_source_count is the number of distinct keys among those rows; an authoritative package requires distinct approved_documents source_text_sha256 values. JSON Schema cannot express these array-projection constraints portably.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_policy",
+    "package_admissibility",
+    "independent_source_count",
+    "selection_status",
+    "sources"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1"},
+    "source_policy": {"oneOf": [{"$ref": "#/$defs/independentSourcesPolicy"}, {"$ref": "#/$defs/authoritativePrimarySetPolicy"}]},
+    "package_admissibility": {"enum": ["admissible", "inadmissible"]},
+    "independent_source_count": {"type": "integer", "minimum": 0},
+    "selection_status": {"enum": ["selected", "insufficient_sources"]},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/sourceRow"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"independent_source_count": {"minimum": 3}}, "required": ["independent_source_count"]},
+      "then": {"properties": {"selection_status": {"const": "selected"}}},
+      "else": {"properties": {"selection_status": {"const": "insufficient_sources"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "source_policy": {"properties": {"name": {"const": "independent_sources"}}, "required": ["name"]},
+          "package_admissibility": {"const": "admissible"}
+        },
+        "required": ["source_policy", "package_admissibility"]
+      },
+      "then": {
+        "properties": {"independent_source_count": {"minimum": 3}, "selection_status": {"const": "selected"}}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonBlank": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+    "exactHttpsUrl": {"type": "string", "format": "uri", "pattern": "^https://[^\\s]+$"},
+    "sourceRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "url", "title", "published_at", "retrieved_at", "source_type", "credibility_tier", "independence_key", "counts_as_independent", "independence_reason", "origin_chain"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/nonBlank"},
+        "url": {"$ref": "#/$defs/exactHttpsUrl"},
+        "title": {"$ref": "#/$defs/nonBlank"},
+        "published_at": {"type": ["string", "null"]},
+        "retrieved_at": {"type": "string", "format": "date-time"},
+        "source_type": {"$ref": "#/$defs/nonBlank"},
+        "credibility_tier": {"$ref": "#/$defs/nonBlank"},
+        "independence_key": {"$ref": "#/$defs/nonBlank"},
+        "counts_as_independent": {"type": "boolean"},
+        "independence_reason": {"$ref": "#/$defs/nonBlank"},
+        "origin_chain": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}}
+      }
+    },
+    "independentSourcesPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {"name": {"const": "independent_sources"}, "version": {"const": "1.0"}}
+    },
+    "approvedDocument": {
+      "type": "object",
+      "$comment": "Across approved_documents, source_text_sha256 must be unique; strict model validation enforces this cross-item constraint.",
+      "additionalProperties": false,
+      "required": ["source_id", "url", "document_identity", "evidence_role", "release_date", "classification", "source_text_sha256", "raw_capture_bytes_sha256"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/nonBlank"},
+        "url": {"$ref": "#/$defs/exactHttpsUrl"},
+        "document_identity": {"$ref": "#/$defs/nonBlank"},
+        "evidence_role": {"$ref": "#/$defs/nonBlank"},
+        "release_date": {"type": "string", "format": "date"},
+        "classification": {"const": "official_primary"},
+        "source_text_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_capture_bytes_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+      }
+    },
+    "authoritativePrimarySetPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "run_id and case_id are explicit policy identity and are included in approval.package_sha256.",
+      "required": ["name", "version", "run_id", "case_id", "institution", "approved_documents", "approval"],
+      "properties": {
+        "name": {"const": "authoritative_primary_set"},
+        "version": {"const": "1.0"},
+        "run_id": {"$ref": "#/$defs/nonBlank"},
+        "case_id": {"$ref": "#/$defs/nonBlank"},
+        "institution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["institution_id", "display_name"],
+          "properties": {"institution_id": {"$ref": "#/$defs/nonBlank"}, "display_name": {"$ref": "#/$defs/nonBlank"}}
+        },
+        "approved_documents": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/approvedDocument"}, "uniqueItems": true},
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reviewer", "approved_at", "rationale", "package_sha256"],
+          "properties": {
+            "status": {"const": "approved"},
+            "reviewer": {"$ref": "#/$defs/nonBlank"},
+            "approved_at": {"type": "string", "format": "date-time"},
+            "rationale": {"$ref": "#/$defs/nonBlank"},
+            "package_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    }
+  }
+}
