@@ -34,9 +34,15 @@ The local end-to-end authoring → approval → seal → import → promotion ac
 
 ## Fed SEP revisions case
 
-The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`; its 12 missing formal `AngleCandidate` values were not recovered from original approved material. The completed authoring workflow does not repair that checkpoint. Do not repair, backfill, infer, default, copy, or upgrade it to V2. GDP artifacts and test fixtures are not Fed recovery sources.
+The legacy Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`; its 12 missing formal `AngleCandidate` values were not recovered from original approved material. The completed authoring workflow and later authority runtime do not repair that checkpoint. Do not repair, backfill, infer, default, copy, or upgrade it to V2. GDP artifacts and test fixtures are not Fed recovery sources.
 
-Fed Case 2 has not been rerun. Its next path is to create a new complete `approved-checkpoint/2.0` checkpoint, beginning with a read-only inventory to determine whether a complete formal source run is available.
+Fed Case 2 identity is locked in `cases/fed-sep-revisions/CASE_STATE.md`. The native source-inventory run is `2026-09-24-001-fed-sep-case-2-source-inventory`. Its four Federal Reserve documents and approved `authoritative_primary_set/1.0` package are current. Package SHA-256 is `32661017df86af572c91465bd0a1a5a21e9d0028554b8da7bdc061b702ee70eb`; independent source count remains `1`, and legacy `selection_status` remains `insufficient_sources`.
+
+The run now has native facts schema `2.2` (34 claims: 7 verified, 6 conflicted, 21 unverified). All five core 2026 SEP median comparisons are verified as `authoritative_primary_attestation`; see `docs/OVERNIGHT_REPORT_2026-09-24.md` for values, claim IDs, and artifact hashes. Deterministic Research synthesis is registered current, but its inherited questions remain source-inventory-oriented and include causal framing. It needs owner-stage correction and regeneration before final content planning.
+
+Angle generation was attempted with the existing local mock provider and failed closed with `AT_LEAST_THREE_DISTINCT_ANGLES_REQUIRED`; no angle or script artifact exists. No video, TTS, or renderer stage was run. Exact next step: a human/operator selects or authorizes a Fed-appropriate local/offline content-planning path and corrects `questions.json` through its formal owner; then regenerate Research and retry angle generation. Do not use a live provider without explicit authorization.
+
+The overnight work is on local branch `overnight/fed-sep-evidence-2026-09-24`, based on remote `main @ 4ec89bc6b59a128d24a75ca4fdcc776e3fe25f91`; it has three engineering commits and has not been pushed. The report/handoff documentation closeout is separate. See `docs/CURRENT_HANDOFF.md` for current continuation instructions.
 
 ## Voice, alignment, and renderer boundaries
 
