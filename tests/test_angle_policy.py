@@ -8,6 +8,34 @@ def _claim() -> ScriptReadyClaim:
                             evidence=[{"source_id": "bea", "evidence_eligible": True}])
 
 
+def _authority_claim() -> ScriptReadyClaim:
+    return ScriptReadyClaim(
+        claim_id="claim_authority",
+        claim_text="Federal Reserve FOMC participants (SEP): published Median projection for Federal funds rate (2026) changed from 3.8 Percent in June SEP to 4.1 Percent in September SEP.",
+        source_ids=["src_june", "src_september"],
+        evidence=[
+            {"source_id": "src_june", "evidence_eligible": True,
+             "evidence_text": "Federal funds rate\n3.8", "original_url": "https://example.test/june"},
+            {"source_id": "src_september", "evidence_eligible": True,
+             "evidence_text": "Federal funds rate\n4.1", "original_url": "https://example.test/september"},
+        ],
+        verification_basis="authoritative_primary_attestation",
+        authority_attestation={
+            "kind": "deterministic_document_comparison",
+            "source_ids": ["src_june", "src_september"],
+            "attribution": "Federal Reserve FOMC participants (SEP)",
+            "scope": {
+                "subject": "Federal funds rate",
+                "measure": "projection",
+                "period": "2026",
+                "unit": "Percent",
+                "statistic": "Median",
+                "certainty": "projection",
+            },
+        },
+    )
+
+
 def _proposal(angle_id: str, insight: str, hook: str = "2.8和2.7938，真的矛盾吗？",
               framing: str = "misconception_correction") -> AngleProposal:
     return AngleProposal(angle_id=angle_id, title=f"角度{angle_id}", hook=hook,
@@ -38,6 +66,27 @@ def test_unknown_claim_and_false_conflict_are_rejected() -> None:
     results = score_angles([unknown, false_conflict, _proposal("angle_003", "精度差异")], (_claim(),), "原文")
     assert "UNKNOWN_CLAIM" in results[0].rejection_codes
     assert "FALSE_CONFLICT" in results[1].rejection_codes
+
+
+def test_authority_angle_preserves_attribution_scope_and_rejects_expansion() -> None:
+    valid = _proposal(
+        "angle_authority",
+        "\u7f8e\u8054\u50a8FOMC\u53c2\u4e0e\u8005\u7684SEP\u4e2d\u4f4d\u6570\u9884\u6d4b\uff0c2026\u5e74\u8054\u90a6\u57fa\u91d1\u5229\u7387\u4ece3.8%\u8c03\u6574\u52304.1%",
+        hook="\u7f8e\u8054\u50a8FOMC\u53c2\u4e0e\u8005\u7684SEP\u4e2d\u4f4d\u6570\u9884\u6d4b\uff0c2026\u5e74\u8054\u90a6\u57fa\u91d1\u5229\u7387\u600e\u4e48\u53d8\uff1f",
+    ).model_copy(update={"supporting_claim_ids": ["claim_authority"]})
+    unsafe = valid.model_copy(update={
+        "angle_id": "angle_unsafe",
+        "title": "Why inflation forced a rate-path revision",
+        "hook": "Because inflation worsened, the Fed was forced to raise its forecast?",
+        "core_question": "How did inflation cause the Fed to increase rates?",
+        "core_insight": "Inflation forced the Fed to raise its rate path",
+    })
+
+    candidates = score_angles([valid, unsafe], (_authority_claim(),), "unrelated source text")
+
+    assert candidates[0].eligibility == "eligible"
+    assert "AUTHORITY_ATTRIBUTION_MISSING" in candidates[1].rejection_codes
+    assert "AUTHORITY_SCOPE_EXPANSION" in candidates[1].rejection_codes
 
 
 def test_diversity_requires_distinct_question_hook_takeaway_and_framing() -> None:

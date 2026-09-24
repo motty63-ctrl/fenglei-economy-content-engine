@@ -1,6 +1,7 @@
 """Local scoring and selection for content angles."""
 import re
 from fanglei.content_models import AngleCandidate, AngleDiversityResult, AngleProposal, ScriptReadyClaim
+from fanglei.authority_safety import authority_text_issues
 from fanglei.originality import check_originality
 
 
@@ -22,6 +23,15 @@ def score_angles(proposals: list[AngleProposal], palette: tuple[ScriptReadyClaim
         if semantic in seen: rejected.append("DUPLICATE_ANGLE")
         seen.add(semantic)
         usable = [allowed[cid] for cid in proposal.supporting_claim_ids if cid in allowed]
+        authority_claims = [claim for claim in usable
+                            if claim.verification_basis == "authoritative_primary_attestation"]
+        if authority_claims:
+            angle_text = " ".join((proposal.title, proposal.hook, proposal.core_question,
+                                   proposal.core_insight))
+            for claim in authority_claims:
+                rejected.extend(code for code in authority_text_issues(
+                    angle_text, claim.model_dump(mode="python")
+                ) if code not in rejected)
         institutions = {sid for claim in usable for sid in claim.source_ids}
         evidence = 0 if not usable else (4 if len(usable) >= 2 and len(institutions) >= 3 else 3 if len(institutions) >= 3 else 2)
         if evidence < 2: rejected.append("INSUFFICIENT_EVIDENCE")

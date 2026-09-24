@@ -148,6 +148,8 @@ class DeepSeekContentPlanningProvider:
                 "claim_text": claim.claim_text,
                 "source_ids": claim.source_ids,
                 "evidence": evidence,
+                "verification_basis": claim.verification_basis,
+                "authority_attestation": claim.authority_attestation,
             })
         return claims
 
@@ -169,6 +171,8 @@ class DeepSeekContentPlanningProvider:
             "生成 JSON，不要输出 Markdown。候选角度必须真正不同，并覆盖 misconception_correction、"
             "economic_data_literacy、media_literacy 三种 narrative_framing。Hook 不得制造假冲突。"
             "所有评分字段必须使用0到5的整数，5为最高，不得使用10分制。"
+            "如claim的verification_basis为authoritative_primary_attestation，必须在角度文案中保留机构/文件归因和attestation中的"
+            "指标、期间、统计口径、单位与预测属性；不得把projection写成承诺，也不得添加未被原文直接支持的因果、动机或市场影响。"
         )
         user = json.dumps({
             "task": "生成3到5个中文经济短视频候选角度 JSON",
@@ -212,6 +216,8 @@ class DeepSeekContentPlanningProvider:
             "脚本目标60到90秒，总口播字符严格控制在260到310个，必须先自行核对字数；第一句 hook 最多20个口播字符。"
             "按现象、机制、核心判断推进，语言口语化。不要把 selected_angle 中未经 verified claims 支持的内容当作事实。"
             "绑定 claim_ids 的句子只能陈述该 claim 及 evidence 明确包含的数字、机构和指标；不要给纯观点或比喻绑定 claim。"
+            "对authoritative_primary_attestation，必须保留claim的机构/文件归因、attestation scope和certainty；projection不能改写成承诺或政策决定。"
+            "不得添加原文未直接支持的因果、动机或市场影响；document_report必须保留来源归因并逐字保留被引用的attested evidence。"
             "请输出12到15句，每句推动当前问题向答案前进。事实句可有多句，但每句都必须忠实复述对应 claim 或 evidence，"
             "并绑定支持它的 claim_ids。API observation 后不要擅自添加百分号，必须按 evidence 中的原始值表达。"
             "若 hook 包含已验证数字或机构名，hook 本身也必须标为 verified_fact 并绑定 claim。"

@@ -1,3 +1,5 @@
+import pytest
+
 from fanglei.content_models import AngleCandidate, ScriptDraft, ScriptSentence
 from fanglei.script_lint import lint_script
 from fanglei.content_render import render_script_json, render_script_markdown
@@ -16,6 +18,69 @@ def _facts() -> dict:
         "source_ids": ["src_1"],
         "evidence": [{"evidence_eligible": True, "evidence_text": "2024 real GDP grew 2.8 percent",
                       "source_id": "src_1", "original_url": "https://example.test/data", "observation": 2.7938}]}]}
+
+
+def _authority_facts() -> dict:
+    return {"claims": [{
+        "claim_id": "claim_authority",
+        "claim_text": "Federal Reserve FOMC participants (SEP): published Median projection for Federal funds rate (2026) changed from 3.8 Percent in federal-reserve-sep-2026-06-17 (2026-06-17) to 4.1 Percent in federal-reserve-sep-2026-09-16 (2026-09-16).",
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "authority_attestation": {
+            "kind": "deterministic_document_comparison",
+            "source_ids": ["src_june", "src_september"],
+            "attribution": "Federal Reserve FOMC participants (SEP)",
+            "scope": {
+                "subject": "Federal funds rate",
+                "measure": "projection",
+                "period": "2026",
+                "unit": "Percent",
+                "statistic": "Median",
+                "certainty": "projection",
+            },
+        },
+        "allowed_downstream": True,
+        "source_ids": ["src_june", "src_september"],
+        "evidence": [
+            {"evidence_eligible": True, "evidence_text": "Federal funds rate\n3.8",
+             "source_id": "src_june", "original_url": "https://example.test/june"},
+            {"evidence_eligible": True, "evidence_text": "Federal funds rate\n4.1",
+             "source_id": "src_september", "original_url": "https://example.test/september"},
+        ],
+    }]}
+
+
+def _statement_authority_facts() -> dict:
+    excerpt = "Today's policy action will support a timelier return to the Committee's 2 percent goal"
+    return {"claims": [{
+        "claim_id": "claim_statement",
+        "claim_text": f'Federal Reserve September FOMC statement says: "{excerpt}"',
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "authority_attestation": {
+            "kind": "document_report",
+            "source_ids": ["src_statement"],
+            "attribution": "Federal Reserve September FOMC statement says",
+            "scope": {
+                "subject": "Today's policy action",
+                "measure": "support a timelier return",
+                "period": "the Committee's 2 percent goal",
+                "unit": None,
+                "statistic": None,
+                "certainty": "will support",
+            },
+        },
+        "allowed_downstream": True,
+        "source_ids": ["src_statement"],
+        "evidence": [{
+            "evidence_eligible": True,
+            "evidence_text": excerpt,
+            "source_id": "src_statement",
+            "original_url": "https://example.test/statement",
+        }],
+    }]}
 
 
 def _draft(extra: str = "") -> ScriptDraft:
@@ -53,6 +118,74 @@ def test_valid_script_has_configurable_duration_and_clean_markdown() -> None:
     assert payload["sentences"][1]["claim_ids"] == ["claim_007"]
     spoken = render_script_markdown(_draft(), result)
     assert "claim_" not in spoken and "sentence_" not in spoken and "---" not in spoken
+
+
+def test_authority_script_preserves_attribution_projection_statistic_and_scope() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "\u6839\u636e\u7f8e\u8054\u50a8FOMC\u53c2\u4e0e\u8005\u7684SEP\u4e2d\u4f4d\u6570\u9884\u6d4b\uff0c2026\u5e74\u8054\u90a6\u57fa\u91d1\u5229\u7387\u4ece3.8%\u8c03\u6574\u4e3a4.1%\u3002"
+    draft.sentences[1].claim_ids = ["claim_authority"]
+    result = lint_script(draft, _angle(), _authority_facts(), "unrelated source", speaking_rate=4.0)
+    codes = {issue.code for issue in result.issues}
+    assert result.passed is True
+    assert not codes.intersection({
+        "AUTHORITY_ATTRIBUTION_MISSING",
+        "AUTHORITY_SCOPE_MISMATCH",
+        "AUTHORITY_SCOPE_EXPANSION",
+    })
+
+
+def test_statement_authority_fact_keeps_attribution_and_exact_attested_text() -> None:
+    draft = _draft()
+    draft.sentences[1].text = (
+        'The Federal Reserve September FOMC statement says: '
+        '"Today\'s policy action will support a timelier return to the Committee\'s 2 percent goal."'
+    )
+    draft.sentences[1].claim_ids = ["claim_statement"]
+    result = lint_script(draft, _angle(), _statement_authority_facts(), "unrelated source", speaking_rate=4.0)
+
+    assert not {issue.code for issue in result.issues}.intersection({
+        "AUTHORITY_ATTRIBUTION_MISSING", "AUTHORITY_SCOPE_MISMATCH", "AUTHORITY_SCOPE_EXPANSION"
+    })
+
+
+def test_statement_text_without_fomc_attribution_is_rejected() -> None:
+    draft = _draft()
+    draft.sentences[1].text = "Today's policy action will support a timelier return to the Committee's 2 percent goal."
+    draft.sentences[1].claim_ids = ["claim_statement"]
+    result = lint_script(draft, _angle(), _statement_authority_facts(), "unrelated source", speaking_rate=4.0)
+
+    assert "AUTHORITY_ATTRIBUTION_MISSING" in {issue.code for issue in result.issues}
+
+
+def test_authority_attestation_source_ids_must_match_claim_sources() -> None:
+    facts = _authority_facts()
+    facts["claims"][0]["source_ids"] = ["src_june"]
+    draft = _draft()
+    draft.sentences[1].text = "\u6839\u636e\u7f8e\u8054\u50a8FOMC\u53c2\u4e0e\u8005\u7684SEP\u4e2d\u4f4d\u6570\u9884\u6d4b\uff0c2026\u5e74\u8054\u90a6\u57fa\u91d1\u5229\u7387\u4ece3.8%\u8c03\u6574\u4e3a4.1%\u3002"
+    draft.sentences[1].claim_ids = ["claim_authority"]
+
+    result = lint_script(draft, _angle(), facts, "unrelated source", speaking_rate=4.0)
+
+    assert "AUTHORITY_SCOPE_MISMATCH" in {issue.code for issue in result.issues}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_code"),
+    [
+        ("The 2026 median projection for Federal funds rate changed from 3.8 percent to 4.1 percent.", "AUTHORITY_ATTRIBUTION_MISSING"),
+        ("Federal Reserve FOMC participants committed to set the Federal funds rate at 4.1 percent in 2026.", "AUTHORITY_SCOPE_MISMATCH"),
+        ("The Federal Reserve FOMC participants' SEP median projection changed because inflation worsened, from 3.8 to 4.1 percent for the 2026 Federal funds rate.", "AUTHORITY_SCOPE_EXPANSION"),
+        ("The Federal Reserve FOMC participants' SEP median projection for the 2026 unemployment rate changed from 3.8 to 4.1 percent.", "AUTHORITY_SCOPE_MISMATCH"),
+    ],
+)
+def test_authority_script_fails_closed_on_attribution_or_scope_laundering(
+    text: str, expected_code: str
+) -> None:
+    draft = _draft()
+    draft.sentences[1].text = text
+    draft.sentences[1].claim_ids = ["claim_authority"]
+    result = lint_script(draft, _angle(), _authority_facts(), "unrelated source", speaking_rate=4.0)
+    assert expected_code in {issue.code for issue in result.issues}
 
 
 def test_repeated_sentence_fails_quality_gate() -> None:

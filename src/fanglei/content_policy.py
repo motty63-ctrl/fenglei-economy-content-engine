@@ -20,5 +20,7 @@ def build_fact_palette(facts: dict) -> tuple[ScriptReadyClaim, ...]:
         ready.append(ScriptReadyClaim(
             claim_id=claim["claim_id"], claim_text=claim["claim_text"],
             source_ids=claim.get("source_ids", []), evidence=evidence,
+            verification_basis=claim.get("verification_basis", "independent_corroboration"),
+            authority_attestation=claim.get("authority_attestation"),
         ))
     return tuple(ready)

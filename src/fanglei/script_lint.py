@@ -2,6 +2,7 @@
 from __future__ import annotations
 from decimal import Decimal
 import re
+from fanglei.authority_safety import authority_text_issues
 from fanglei.content_models import AngleCandidate, LintIssue, ScriptDraft, ScriptLintResult
 from fanglei.originality import check_fact_originality, check_originality
 
@@ -26,7 +27,7 @@ _ENTITY_PATTERNS = {
     "metric:gdp": r"\bGDP\b|国内生产总值",
     "metric:inflation": r"\binflation\b|\bCPI\b|通胀率|消费者价格指数",
     "metric:unemployment": r"\bunemployment\b|失业率",
-    "metric:interest_rate": r"\binterest rate\b|政策利率|利率",
+    "metric:interest_rate": r"\b(?:interest rate|federal funds rate)\b|联邦基金利率|政策利率|利率",
     "metric:exchange_rate": r"\bexchange rate\b|汇率",
     "metric:employment": r"\bemployment\b|\bjobs?\b|就业",
     "metric:wages": r"\bwages?\b|工资|薪资",
@@ -175,6 +176,13 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
                                  or e.get("value") is not None)]
                 if not eligible: valid = False
                 contexts.append(_evidence_context(claim, eligible))
+                if claim.get("verification_basis") == "authoritative_primary_attestation":
+                    for code in authority_text_issues(sentence.text, claim):
+                        issues.append(LintIssue(
+                            code=code,
+                            message="authority-backed claim attribution and scope must remain intact",
+                            sentence_id=sentence.sentence_id,
+                        ))
             clauses = [part for part in re.split(r"[，,；;。]", sentence.text) if part.strip()]
             factual_clauses = [part for part in clauses if _value_tokens(part) or _entities(part)]
             supported = all(any(

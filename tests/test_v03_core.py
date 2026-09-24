@@ -53,3 +53,36 @@ def test_fact_palette_requires_evidence_source_to_match_claim_sources() -> None:
         "source_ids": ["src_1"], "evidence": [{"source_id": "src_other",
         "original_url": "https://example.test/data", "evidence_text": "增长2.8%", "evidence_eligible": True}]}]}
     assert build_fact_palette(facts) == ()
+
+
+def test_fact_palette_preserves_authority_basis_and_attestation() -> None:
+    attestation = {
+        "kind": "deterministic_document_comparison",
+        "source_ids": ["src_june", "src_september"],
+        "attribution": "Federal Reserve FOMC participants (SEP)",
+        "scope": {
+            "subject": "Federal funds rate",
+            "measure": "projection",
+            "period": "2026",
+            "unit": "Percent",
+            "statistic": "Median",
+            "certainty": "projection",
+        },
+    }
+    facts = {"claims": [{
+        "claim_id": "claim_authority",
+        "claim_text": "Federal Reserve FOMC participants' median projection changed.",
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "authority_attestation": attestation,
+        "allowed_downstream": True,
+        "source_ids": ["src_june", "src_september"],
+        "evidence": [{"source_id": "src_june", "original_url": "https://example.test/june",
+                      "evidence_text": "Federal funds rate\\n3.8", "evidence_eligible": True}],
+    }]}
+
+    claim = build_fact_palette(facts)[0]
+
+    assert claim.verification_basis == "authoritative_primary_attestation"
+    assert claim.authority_attestation == attestation
