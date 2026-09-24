@@ -11,9 +11,9 @@ import fanglei.checkpoint_import as checkpoint_import
 from test_checkpoint_contract import _checkpoint as _v2_checkpoint
 
 from fanglei.artifact_registry import ARTIFACT_GRAPH
+from fanglei.checkpoint_contract import canonical_body_sha256
 from fanglei.checkpoint_import import (
     CheckpointImporter,
-    CheckpointV2ImportNotImplementedError,
     SourceCapture,
     SourceContentChangedError,
 )
@@ -347,13 +347,18 @@ def test_approved_checkpoint_v1_label_stays_on_legacy_import_path(tmp_path: Path
     assert result.status == "passed"
 
 
-def test_valid_v2_dispatch_stops_after_contract_preflight(tmp_path: Path) -> None:
+def test_valid_v2_dispatch_reaches_snapshot_verification(tmp_path: Path) -> None:
     importer = _importer(tmp_path)
+    checkpoint = _v2_checkpoint()
+    for sentence in checkpoint["script"]["sentences"]:
+        sentence["evidence_ids"] = []
+    checkpoint["approval"]["body_sha256"] = canonical_body_sha256(checkpoint)
 
-    with pytest.raises(CheckpointV2ImportNotImplementedError):
-        importer.stage(_v2_checkpoint())
+    result = importer.stage(checkpoint)
 
-    assert not importer.staging_root.exists()
+    assert result.status == "failed"
+    assert any(issue["code"] == "SOURCE_SNAPSHOT_MISMATCH" for issue in result.gates["issues"])
+    assert not (result.staging_dir / "materialized").exists()
 
 
 def test_legacy_fingerprint_values_remain_unchanged() -> None:

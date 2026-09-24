@@ -19,10 +19,12 @@ import os
 import re
 import shutil
 import ssl
+import tempfile
 
 from fanglei.artifact_registry import ArtifactRegistry, IMPORTED_ARTIFACT_GRAPH
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, atomic_write_text, sha256_bytes, sha256_text
 from fanglei.checkpoint_contract import (
+    ApprovedCheckpointV2,
     classify_checkpoint_version,
     parse_approved_checkpoint_v2,
 )
@@ -39,8 +41,19 @@ class SourceContentChangedError(RuntimeError):
     """An immutable pinned source URL returned different content."""
 
 
-class CheckpointV2ImportNotImplementedError(RuntimeError):
-    """V2 contract preflight exists, but V2 materialization is a later phase."""
+class CheckpointV2PreflightError(ValueError):
+    """A well-formed V2 envelope has inconsistent checkpoint identities or references."""
+
+    def __init__(self, code: str, path: str, message: str) -> None:
+        self.code = code
+        self.path = path
+        super().__init__(f"{code} at {path}: {message}")
+
+
+class SourceSnapshotMismatchError(SourceFetchError):
+    """A captured source does not match its hash-bound V2 snapshot."""
+
+    code = "SOURCE_SNAPSHOT_MISMATCH"
 
 
 @dataclass(frozen=True)
@@ -241,6 +254,57 @@ def _read_capture(cache_dir: Path, url: str) -> SourceCapture | None:
     )
 
 
+def _read_capture_v2(cache_dir: Path, url: str) -> SourceCapture | None:
+    """Read an immutable V2 pin, validating its exact URL and local file identity."""
+    index = cache_dir / _source_cache_key(url) / "pinned.json"
+    if index.is_symlink():
+        raise SourceFetchError(f"Pinned source metadata is not a regular file for {url}")
+    if not index.is_file():
+        return None
+    try:
+        cache_root = cache_dir.resolve(strict=True)
+        pin_root = index.parent.resolve(strict=True)
+    except OSError as error:
+        raise SourceFetchError(f"Pinned source cache is unavailable for {url}: {error}") from error
+    if not pin_root.is_relative_to(cache_root):
+        raise SourceFetchError(f"Pinned source cache path escapes its configured root for {url}")
+    try:
+        metadata = json.loads(index.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SourceFetchError(f"Pinned source metadata is invalid for {url}: {error}") from error
+    if not isinstance(metadata, dict) or metadata.get("url") != url:
+        raise SourceFetchError(f"Pinned source URL does not exactly match the approved URL {url}")
+    digest = metadata.get("content_sha256")
+    content_file = metadata.get("content_file")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise SourceFetchError(f"Pinned source digest is invalid for {url}")
+    if content_file != f"{digest}.bin":
+        raise SourceFetchError(f"Pinned source content path is invalid for {url}")
+    content_path = index.parent / content_file
+    if content_path.is_symlink() or not content_path.is_file():
+        raise SourceFetchError(f"Pinned source capture is incomplete for {url}")
+    try:
+        content = content_path.read_bytes()
+    except OSError as error:
+        raise SourceFetchError(f"Pinned source capture cannot be read for {url}: {error}") from error
+    if sha256_bytes(content) != digest:
+        raise SourceFetchError(f"Pinned source capture hash mismatch for {url}")
+    content_type = metadata.get("content_type")
+    if not isinstance(content_type, str) or not content_type:
+        raise SourceFetchError(f"Pinned source content type is invalid for {url}")
+    for name in ("title", "published_at", "retrieved_at"):
+        if metadata.get(name) is not None and not isinstance(metadata.get(name), str):
+            raise SourceFetchError(f"Pinned source {name} is invalid for {url}")
+    return SourceCapture(
+        url=url,
+        content=content,
+        content_type=content_type,
+        title=metadata.get("title"),
+        published_at=metadata.get("published_at"),
+        retrieved_at=metadata.get("retrieved_at"),
+    )
+
+
 def _pin_capture(cache_dir: Path, capture: SourceCapture) -> SourceCapture:
     root = cache_dir / _source_cache_key(capture.url)
     root.mkdir(parents=True, exist_ok=True)
@@ -268,6 +332,335 @@ def _pin_capture(cache_dir: Path, capture: SourceCapture) -> SourceCapture:
         "retrieved_at": capture.retrieved_at or _now(),
     })
     return _read_capture(cache_dir, capture.url) or capture
+
+
+def _pin_capture_v2(cache_dir: Path, capture: SourceCapture) -> SourceCapture:
+    """Pin only a previously verified capture, without replacing an existing V2 pin."""
+    if not capture.url.startswith("https://"):
+        raise SourceFetchError("Only exact HTTPS provenance URLs can be pinned")
+    cache_dir = Path(cache_dir)
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_root = cache_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise SourceFetchError(f"Configured source cache root is unavailable: {error}") from error
+    if not cache_root.is_dir():
+        raise SourceFetchError("Configured source cache root is not a directory")
+
+    root = cache_root / _source_cache_key(capture.url)
+    root = _ensure_v2_pin_directory(cache_root, root)
+    current = _read_capture_v2(cache_dir, capture.url)
+    if current is not None:
+        if current.content_sha256 != capture.content_sha256:
+            raise SourceContentChangedError(
+                f"SOURCE_CONTENT_CHANGED: {capture.url} pinned={current.content_sha256} observed={capture.content_sha256}"
+            )
+        return current
+    content_file = f"{capture.content_sha256}.bin"
+    content_path = root / content_file
+    if not content_path.exists():
+        try:
+            with content_path.open("xb") as handle:
+                handle.write(capture.content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileExistsError:
+            pass
+    if content_path.is_symlink() or not content_path.is_file():
+        raise SourceFetchError(f"Existing source bytes are not a regular file for {capture.url}")
+    if sha256_bytes(content_path.read_bytes()) != capture.content_sha256:
+        raise SourceContentChangedError(
+            f"SOURCE_CONTENT_CHANGED: conflicting source bytes are already present for {capture.url}"
+        )
+    metadata = {
+        "url": capture.url,
+        "content_sha256": capture.content_sha256,
+        "content_file": content_file,
+        "content_type": capture.content_type,
+        "title": capture.title,
+        "published_at": capture.published_at,
+        "retrieved_at": capture.retrieved_at or _now(),
+    }
+    index = root / "pinned.json"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=root,
+            prefix=".pinned.", suffix=".tmp", delete=False,
+        ) as handle:
+            json.dump(metadata, handle, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+        try:
+            os.link(temporary_path, index)
+        except FileExistsError:
+            current = _read_capture_v2(cache_dir, capture.url)
+            if current is None or current.content_sha256 != capture.content_sha256:
+                raise SourceContentChangedError(
+                    f"SOURCE_CONTENT_CHANGED: a different source capture was pinned concurrently for {capture.url}"
+                )
+            return current
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return _read_capture_v2(cache_dir, capture.url) or capture
+
+
+def _ensure_v2_pin_directory(cache_root: Path, pin_dir: Path) -> Path:
+    """Create a V2 pin directory only after checking its resolved containment."""
+    try:
+        resolved_cache_root = cache_root.resolve(strict=True)
+        resolved_parent = pin_dir.parent.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise SourceFetchError(f"Source pin directory cannot be resolved safely: {error}") from error
+    if not resolved_cache_root.is_dir():
+        raise SourceFetchError("Configured source cache root is not a directory")
+    if not resolved_parent.is_relative_to(resolved_cache_root):
+        raise SourceFetchError("Source pin parent escapes its configured cache root")
+
+    try:
+        if pin_dir.exists() or pin_dir.is_symlink():
+            resolved_pin_dir = pin_dir.resolve(strict=True)
+        else:
+            pin_dir.mkdir(exist_ok=True)
+            resolved_pin_dir = pin_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise SourceFetchError(f"Source pin directory cannot be created or resolved safely: {error}") from error
+    if not resolved_pin_dir.is_relative_to(resolved_cache_root):
+        raise SourceFetchError("Source pin directory escapes its configured cache root")
+    if not resolved_pin_dir.is_dir():
+        raise SourceFetchError("Source pin path is not a directory")
+    return resolved_pin_dir
+
+
+def _v2_preflight(checkpoint: dict[str, Any]) -> tuple[ApprovedCheckpointV2, str]:
+    """Validate approval and all body-local references before any I/O or staging writes."""
+    parsed = parse_approved_checkpoint_v2(checkpoint)
+
+    def unique_ids(values: list[str], path: str) -> set[str]:
+        if len(values) != len(set(values)):
+            raise CheckpointV2PreflightError("CHECKPOINT_IDENTITY_MISMATCH", path, "IDs must be unique within their artifact kind")
+        return set(values)
+
+    claims = {row.external_id: row for row in parsed.claims}
+    evidence = {row.external_id: row for row in parsed.evidence}
+    source_ids = unique_ids([row.external_id for row in parsed.sources], "sources")
+    claim_ids = unique_ids([row.external_id for row in parsed.claims], "claims")
+    evidence_ids = unique_ids([row.external_id for row in parsed.evidence], "evidence")
+    unique_ids([row.external_id for row in parsed.script.sentences], "script.sentences")
+    unique_ids([parsed.angle.external_id], "angle")
+    unique_ids([parsed.script.external_id], "script")
+
+    snapshots_by_url: dict[str, tuple[str, str | None]] = {}
+    for source in parsed.sources:
+        if not source.url.startswith("https://"):
+            raise CheckpointV2PreflightError(
+                "SOURCE_NOT_ALLOWLISTABLE", f"sources.{source.external_id}.url",
+                "the importer requires the exact lowercase HTTPS URL form",
+            )
+        snapshot = source.snapshot
+        normalized = [item for item in snapshot.indexed_file_hashes if item.role == "normalized_text"]
+        if len(normalized) != 1 or normalized[0].hash_kind != "utf8_text_sha256" or normalized[0].sha256 != snapshot.source_text_sha256:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID",
+                f"sources.{source.external_id}.snapshot.indexed_file_hashes",
+                "exactly one normalized_text hash must equal source_text_sha256",
+            )
+        raw_files = [
+            item for item in snapshot.indexed_file_hashes
+            if item.role == "raw_response" and item.hash_kind == "file_bytes_sha256"
+        ]
+        if snapshot.raw_capture_bytes_sha256 is not None:
+            if len(raw_files) != 1 or raw_files[0].sha256 != snapshot.raw_capture_bytes_sha256:
+                raise CheckpointV2PreflightError(
+                    "CHECKPOINT_REFERENCE_INVALID",
+                    f"sources.{source.external_id}.snapshot.raw_capture_bytes_sha256",
+                    "raw capture digest must identify exactly one indexed raw byte file",
+                )
+        elif raw_files:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID",
+                f"sources.{source.external_id}.snapshot.raw_capture_bytes_sha256",
+                "an indexed raw byte capture requires its explicit raw capture digest",
+            )
+        snapshot_key = (snapshot.source_text_sha256, snapshot.raw_capture_bytes_sha256)
+        previous = snapshots_by_url.setdefault(source.url, snapshot_key)
+        if previous != snapshot_key:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_IDENTITY_MISMATCH",
+                f"sources.{source.external_id}.url",
+                "duplicate exact URLs must carry the same approved source snapshot hashes",
+            )
+
+    for row in parsed.claims:
+        if len(row.source_ids) != len(set(row.source_ids)) or len(row.evidence_ids) != len(set(row.evidence_ids)):
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"claims.{row.external_id}",
+                "source_ids and evidence_ids must not contain duplicates",
+            )
+        if not row.source_ids or not row.evidence_ids:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"claims.{row.external_id}",
+                "each claim must reference at least one source and evidence row",
+            )
+        unknown = (set(row.source_ids) - source_ids) | (set(row.evidence_ids) - evidence_ids)
+        if unknown:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"claims.{row.external_id}",
+                f"unknown source/evidence references: {sorted(unknown)!r}",
+            )
+    for row in parsed.evidence:
+        if len(row.claim_ids) != len(set(row.claim_ids)) or len(row.source_ids) != len(set(row.source_ids)):
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"evidence.{row.external_id}",
+                "claim_ids and source_ids must not contain duplicates",
+            )
+        if len(row.source_ids) != 1 or not set(row.source_ids) <= source_ids:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"evidence.{row.external_id}.source_ids",
+                "each evidence row must reference exactly one known source",
+            )
+        unknown_claims = set(row.claim_ids) - claim_ids
+        if unknown_claims:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"evidence.{row.external_id}.claim_ids",
+                f"unknown claim references: {sorted(unknown_claims)!r}",
+            )
+        for claim_id in row.claim_ids:
+            claim = claims[claim_id]
+            if row.external_id not in claim.evidence_ids or row.source_ids[0] not in claim.source_ids:
+                raise CheckpointV2PreflightError(
+                    "CHECKPOINT_REFERENCE_INVALID", f"evidence.{row.external_id}",
+                    f"evidence and claim {claim_id} references are not reciprocal",
+                )
+    for claim in parsed.claims:
+        for evidence_id in claim.evidence_ids:
+            if claim.external_id not in evidence[evidence_id].claim_ids:
+                raise CheckpointV2PreflightError(
+                    "CHECKPOINT_REFERENCE_INVALID", f"claims.{claim.external_id}.evidence_ids",
+                    f"evidence {evidence_id} does not reference this claim",
+                )
+
+    unknown_angle_claims = set(parsed.angle.supporting_claim_ids) - claim_ids
+    if len(parsed.angle.supporting_claim_ids) != len(set(parsed.angle.supporting_claim_ids)):
+        raise CheckpointV2PreflightError(
+            "CHECKPOINT_REFERENCE_INVALID", "angle.supporting_claim_ids",
+            "claim references must not contain duplicates",
+        )
+    if unknown_angle_claims:
+        raise CheckpointV2PreflightError(
+            "CHECKPOINT_REFERENCE_INVALID", "angle.supporting_claim_ids",
+            f"unknown claim references: {sorted(unknown_angle_claims)!r}",
+        )
+    angle_data = parsed.angle.model_dump(mode="python")
+    angle_data["angle_id"] = angle_data.pop("external_id")
+    try:
+        validated_angle = AngleCandidate.model_validate(angle_data, strict=True)
+    except ValueError as error:
+        raise CheckpointV2PreflightError("ANGLE_INVALID", "angle", str(error)) from error
+    if validated_angle.eligibility != "eligible":
+        raise CheckpointV2PreflightError(
+            "ANGLE_NOT_ELIGIBLE", "angle.eligibility", "the selected approved angle is not eligible"
+        )
+    if parsed.script.angle_external_id != parsed.angle.external_id:
+        raise CheckpointV2PreflightError(
+            "CHECKPOINT_IDENTITY_MISMATCH", "script.angle_external_id",
+            "script must reference the checkpoint's selected angle",
+        )
+    script_bytes = parsed.script.text.encode("utf-8")
+    previous_end = 0
+    for sentence in parsed.script.sentences:
+        if len(sentence.claim_ids) != len(set(sentence.claim_ids)) or len(sentence.evidence_ids) != len(set(sentence.evidence_ids)):
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"script.sentences.{sentence.external_id}",
+                "claim_ids and evidence_ids must not contain duplicates",
+            )
+        unknown_claims = set(sentence.claim_ids) - claim_ids
+        unknown_evidence = set(sentence.evidence_ids) - evidence_ids
+        if unknown_claims or unknown_evidence:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"script.sentences.{sentence.external_id}",
+                f"unknown claim/evidence references: {sorted(unknown_claims | unknown_evidence)!r}",
+            )
+        if sentence.evidence_ids:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"script.sentences.{sentence.external_id}.evidence_ids",
+                "formal V0.3 script has no evidence_ids field; V2 native script evidence references must be empty",
+            )
+        if sentence.sentence_type != "verified_fact" and sentence.claim_ids:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"script.sentences.{sentence.external_id}.claim_ids",
+                "only verified_fact sentences can preserve formal claim references",
+            )
+        if sentence.sentence_type == "verified_fact" and not sentence.claim_ids:
+            raise CheckpointV2PreflightError(
+                "CHECKPOINT_REFERENCE_INVALID", f"script.sentences.{sentence.external_id}.claim_ids",
+                "verified_fact sentences must reference at least one approved claim",
+            )
+        start, end = sentence.byte_start, sentence.byte_end
+        if start < previous_end or end <= start or end > len(script_bytes):
+            raise CheckpointV2PreflightError(
+                "SCRIPT_OFFSETS_INVALID", f"script.sentences.{sentence.external_id}",
+                "UTF-8 byte offsets must be ordered, non-overlapping, and within the script",
+            )
+        try:
+            gap_text = script_bytes[previous_end:start].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise CheckpointV2PreflightError(
+                "SCRIPT_OFFSETS_INVALID", f"script.sentences.{sentence.external_id}",
+                "uncovered bytes between sentence offsets are not valid UTF-8",
+            ) from error
+        if any(not character.isspace() for character in gap_text):
+            raise CheckpointV2PreflightError(
+                "SCRIPT_OFFSETS_INVALID", f"script.sentences.{sentence.external_id}",
+                "sentence offsets leave uncovered non-whitespace text",
+            )
+        try:
+            slice_text = script_bytes[start:end].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise CheckpointV2PreflightError(
+                "SCRIPT_OFFSETS_INVALID", f"script.sentences.{sentence.external_id}",
+                "UTF-8 byte offsets split a code point",
+            ) from error
+        if slice_text != sentence.text:
+            raise CheckpointV2PreflightError(
+                "SCRIPT_OFFSETS_INVALID", f"script.sentences.{sentence.external_id}",
+                "UTF-8 byte slice differs from the approved sentence text",
+            )
+        previous_end = end
+    try:
+        script_tail = script_bytes[previous_end:].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CheckpointV2PreflightError(
+            "SCRIPT_OFFSETS_INVALID", "script.text", "uncovered script bytes are not valid UTF-8"
+        ) from error
+    if any(not character.isspace() for character in script_tail):
+        raise CheckpointV2PreflightError(
+            "SCRIPT_OFFSETS_INVALID", "script.text", "sentence offsets leave uncovered non-whitespace text"
+        )
+
+    return parsed, parsed.approval.body_sha256
+
+
+def _verify_v2_snapshot(capture: SourceCapture, source: Any) -> None:
+    if capture.url != source.url:
+        raise SourceFetchError("Fetcher or pinned capture URL differs from the exact approved URL")
+    expected_raw = source.snapshot.raw_capture_bytes_sha256
+    if expected_raw is not None and sha256_bytes(capture.content) != expected_raw:
+        raise SourceSnapshotMismatchError(
+            f"SOURCE_SNAPSHOT_MISMATCH: raw capture hash differs for {source.url}"
+        )
+    try:
+        extracted_text = _text_from_capture(capture)
+    except SourceFetchError as error:
+        raise SourceFetchError(f"PROVENANCE_TEXT_EXTRACTION_FAILED: {error}") from error
+    actual_text = sha256_text(extracted_text)
+    if actual_text != source.snapshot.source_text_sha256:
+        raise SourceSnapshotMismatchError(
+            f"SOURCE_SNAPSHOT_MISMATCH: extracted-text hash differs for {source.url}"
+        )
 
 
 def _source_text_and_excerpt(capture: SourceCapture, anchor: str) -> tuple[str, str, str | None]:
@@ -316,14 +709,18 @@ class ApprovedCheckpointMaterializer:
         self.importer_version = importer_version
 
     def materialize(self, checkpoint: dict[str, Any], staging_dir: Path, captures: dict[str, SourceCapture],
-                    checkpoint_content_sha256: str, checkpoint_fingerprint: str) -> ImportResult:
+                    checkpoint_content_sha256: str, checkpoint_fingerprint: str,
+                    *, v2_metadata: dict[str, Any] | None = None) -> ImportResult:
         staging_dir = Path(staging_dir)
         materialized = staging_dir / "materialized"
         if materialized.exists():
             shutil.rmtree(materialized)
         materialized.mkdir(parents=True)
         issues: list[dict[str, str]] = []
-        cp = _without_runtime(checkpoint)
+        # V2 approval binds every body byte semantically, including capture and
+        # review timestamps. Preserve its sealed envelope exactly. Legacy V1
+        # retains the historical runtime-field stripping behavior.
+        cp = checkpoint if v2_metadata is not None else _without_runtime(checkpoint)
         source_rows = cp.get("sources", [])
         claim_rows = cp.get("claims", [])
         evidence_rows = cp.get("evidence", [])
@@ -354,12 +751,16 @@ class ApprovedCheckpointMaterializer:
                 for unknown in missing:
                     issues.append({"code": "UNKNOWN_CLAIM_ID" if unknown in claim_ids else "UNKNOWN_EVIDENCE_ID",
                                    "message": f"Sentence {external_sentence} references unknown ID {unknown}"})
-            binding_rows.append({
+            binding = {
                 "sentence_source_id": external_sentence,
                 "sentence_id": id_lookup["sentences"].get(external_sentence),
                 "claim_ids": [id_lookup["claims"][item] for item in claim_ids if item in id_lookup["claims"]],
                 "evidence_ids": [id_lookup["evidence"][item] for item in evidence_ids if item in id_lookup["evidence"]],
-            })
+            }
+            if v2_metadata is not None:
+                binding["byte_start"] = sentence.get("byte_start")
+                binding["byte_end"] = sentence.get("byte_end")
+            binding_rows.append(binding)
         mapping = {
             "schema_version": "1.0",
             "checkpoint_fingerprint": checkpoint_fingerprint,
@@ -435,7 +836,7 @@ class ApprovedCheckpointMaterializer:
                 "evidence_external_id": external_evidence_id,
                 "source_id": resolved_sources[source_external]["source_id"],
                 "source_external_id": source_external,
-                "evidence_text": excerpt,
+                "evidence_text": evidence.get("evidence_text") if v2_metadata is not None else excerpt,
                 "source_section": evidence.get("source_section"),
                 "paragraph_locator": evidence.get("paragraph_locator") or locator,
                 "published_at": evidence.get("published_at") or resolved_sources[source_external]["published_at"],
@@ -460,7 +861,7 @@ class ApprovedCheckpointMaterializer:
             if not evidence_items:
                 provenance_ok = False
                 issues.append({"code": "CLAIM_EVIDENCE_MISSING", "message": f"Claim {external_id} has no completed evidence"})
-            facts_claims.append({
+            materialized_claim = {
                 "claim_id": id_lookup["claims"].get(external_id),
                 "claim_external_id": external_id,
                 "claim_text": claim.get("proposition"),
@@ -473,7 +874,10 @@ class ApprovedCheckpointMaterializer:
                 )} for item in evidence_items],
                 "verification_reason": claim.get("rationale") or claim.get("verification_reason"),
                 "allowed_downstream": claim.get("allowed_downstream"),
-            })
+            }
+            if v2_metadata is not None and isinstance(claim.get("native_metadata"), dict):
+                materialized_claim.update(claim["native_metadata"])
+            facts_claims.append(materialized_claim)
 
         required_claim_fields = ("claim_text", "claim_type", "verification_status", "verification_reason", "allowed_downstream")
         for claim in facts_claims:
@@ -636,6 +1040,16 @@ class ApprovedCheckpointMaterializer:
                 "gates": gates,
                 "imported_at": _now(),
             }
+            if v2_metadata is not None:
+                import_manifest.update({
+                    "case_id": v2_metadata["case_id"],
+                    "source_run_id": v2_metadata["source_run_id"],
+                    "facts_source": v2_metadata["facts_source"],
+                    "source_snapshot_hashes": v2_metadata["source_snapshot_hashes"],
+                    "pinned_capture_hashes": {
+                        url: values["content_sha256"] for url, values in capture_rows.items()
+                    },
+                })
             _write_json(materialized / "import_manifest.json", import_manifest)
             candidate_run = {
                 "schema_version": "2.0",
@@ -668,13 +1082,13 @@ class CheckpointImporter:
         self._last_allowlist: set[str] = set()
 
     def stage(self, checkpoint: dict[str, Any]) -> ImportResult:
-        if isinstance(checkpoint, dict):
-            version = classify_checkpoint_version(checkpoint)
-            if version == "v2":
-                parse_approved_checkpoint_v2(checkpoint)
-                raise CheckpointV2ImportNotImplementedError(
-                    "V2 checkpoint contract passed preflight; importer materialization is not implemented in Phase 1"
-                )
+        version = classify_checkpoint_version(checkpoint)
+        if version == "v2":
+            parsed, content_sha = _v2_preflight(checkpoint)
+            return self._stage_v2(checkpoint, parsed, content_sha)
+
+        # Keep the legacy V1 envelope, fingerprint, capture, and materialization
+        # path below unchanged. V2 has its own snapshot-bound branch above.
         issues = _validate_checkpoint_envelope(checkpoint)
         semantic_checkpoint = _without_runtime(checkpoint)
         content_sha = _digest_json(semantic_checkpoint)
@@ -732,6 +1146,155 @@ class CheckpointImporter:
             atomic_write_json(staging / "gates.json", result.gates)
             result.semantic_artifact_hashes = _semantic_hashes(staging / "materialized")
         return result
+
+    def _stage_v2(
+        self,
+        checkpoint: dict[str, Any],
+        parsed: ApprovedCheckpointV2,
+        content_sha: str,
+    ) -> ImportResult:
+        fingerprint = _digest_json({
+            "checkpoint_content_sha256": content_sha,
+            "checkpoint_schema_version": parsed.checkpoint_schema_version,
+            "importer_version": self.importer_version,
+        })
+        staging = self.staging_root / f"cp-{fingerprint[:20]}"
+        try:
+            staging.mkdir(parents=True)
+            package_is_new = True
+        except FileExistsError:
+            package_is_new = False
+        if not staging.is_dir():
+            raise RuntimeError("Staging package path is not a directory; refusing to reuse package")
+        fingerprint_path = staging / "checkpoint_fingerprint.json"
+        if fingerprint_path.is_symlink():
+            raise RuntimeError("Staging fingerprint metadata is not a regular file; refusing to reuse package")
+        if fingerprint_path.exists():
+            try:
+                previous = json.loads(fingerprint_path.read_text("utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RuntimeError("Staging fingerprint metadata is invalid; refusing to reuse package") from error
+            expected_fingerprint_metadata = {
+                "checkpoint_content_sha256": content_sha,
+                "checkpoint_schema_version": parsed.checkpoint_schema_version,
+                "importer_version": self.importer_version,
+                "checkpoint_fingerprint": fingerprint,
+            }
+            if not isinstance(previous, dict) or any(
+                previous.get(key) != value for key, value in expected_fingerprint_metadata.items()
+            ):
+                raise RuntimeError("Staging fingerprint prefix collision; refusing to reuse package")
+        elif not package_is_new:
+            raise RuntimeError("Staging package has no fingerprint metadata; refusing to reuse package")
+
+        # A collision must be rejected before touching any existing package files.
+        materialized_dir = staging / "materialized"
+        if materialized_dir.exists():
+            shutil.rmtree(materialized_dir)
+        (staging / "gates.json").unlink(missing_ok=True)
+
+        source_snapshot_hashes = {
+            source.url: {
+                "source_text_sha256": source.snapshot.source_text_sha256,
+                "raw_capture_bytes_sha256": source.snapshot.raw_capture_bytes_sha256,
+            }
+            for source in parsed.sources
+        }
+        fingerprint_metadata = {
+            "checkpoint_content_sha256": content_sha,
+            "checkpoint_schema_version": parsed.checkpoint_schema_version,
+            "importer_version": self.importer_version,
+            "checkpoint_fingerprint": fingerprint,
+            "source_snapshot_hashes": source_snapshot_hashes,
+            "pinned_capture_hashes": {},
+            "imported_at": _now(),
+        }
+        atomic_write_json(fingerprint_path, fingerprint_metadata)
+
+        self._last_allowlist = {source.url for source in parsed.sources}
+        captures: dict[str, SourceCapture] = {}
+        pending_pins: dict[str, SourceCapture] = {}
+        provenance_issues: list[dict[str, str]] = []
+        for source in parsed.sources:
+            url = source.url
+            try:
+                capture = captures.get(url) or pending_pins.get(url)
+                if capture is None:
+                    capture = _read_capture_v2(self.source_cache_dir, url)
+                    if capture is None:
+                        capture = self.source_fetcher.fetch(url)
+                        if capture.url != url:
+                            raise SourceFetchError(
+                                "Fetcher returned a URL different from the exact approved URL"
+                            )
+                        _verify_v2_snapshot(capture, source)
+                        pending_pins[url] = capture
+                    else:
+                        _verify_v2_snapshot(capture, source)
+                    captures[url] = capture
+                else:
+                    _verify_v2_snapshot(capture, source)
+            except SourceSnapshotMismatchError as error:
+                provenance_issues.append({"code": error.code, "message": str(error)})
+            except SourceContentChangedError as error:
+                provenance_issues.append({"code": "SOURCE_CONTENT_CHANGED", "message": str(error)})
+            except Exception as error:
+                provenance_issues.append({"code": "SOURCE_CAPTURE_FAILED", "message": str(error)})
+
+        if not provenance_issues:
+            for url, capture in pending_pins.items():
+                try:
+                    pinned = _pin_capture_v2(self.source_cache_dir, capture)
+                    matching_sources = [source for source in parsed.sources if source.url == url]
+                    for source in matching_sources:
+                        _verify_v2_snapshot(pinned, source)
+                    captures[url] = pinned
+                except SourceSnapshotMismatchError as error:
+                    provenance_issues.append({"code": error.code, "message": str(error)})
+                except SourceContentChangedError as error:
+                    provenance_issues.append({"code": "SOURCE_CONTENT_CHANGED", "message": str(error)})
+                except Exception as error:
+                    provenance_issues.append({"code": "SOURCE_CAPTURE_FAILED", "message": str(error)})
+
+        if provenance_issues:
+            gates = {
+                "schema": {"passed": False},
+                "provenance": {"passed": False},
+                "fact_coverage": {"passed": False, "coverage": 0.0},
+                "script_coverage": {"passed": False, "coverage": 0.0},
+                "issues": _dedupe_issues(provenance_issues),
+            }
+            atomic_write_json(staging / "gates.json", gates)
+            return ImportResult(
+                staging_dir=staging,
+                checkpoint_fingerprint=fingerprint,
+                mapping_sha256="",
+                semantic_artifact_hashes={},
+                gates=gates,
+                status="failed",
+                artifact_graph=IMPORTED_ARTIFACT_GRAPH.copy(),
+            )
+
+        pinned_capture_hashes = {
+            url: capture.content_sha256 for url, capture in captures.items()
+        }
+        fingerprint_metadata["pinned_capture_hashes"] = pinned_capture_hashes
+        atomic_write_json(fingerprint_path, fingerprint_metadata)
+        v2_metadata = {
+            "case_id": parsed.case_id,
+            "source_run_id": parsed.source_run_id,
+            "facts_source": parsed.facts_source.model_dump(mode="json"),
+            "source_snapshot_hashes": source_snapshot_hashes,
+            "pinned_capture_hashes": pinned_capture_hashes,
+        }
+        return self.materializer.materialize(
+            checkpoint,
+            staging,
+            captures,
+            content_sha,
+            fingerprint,
+            v2_metadata=v2_metadata,
+        )
 
     def refresh_source(self, url: str, fetcher: SourceFetcher | None = None) -> SourceCapture:
         if url not in self._last_allowlist:
