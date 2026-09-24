@@ -7,7 +7,7 @@ import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_bytes, sha256_text
@@ -15,7 +15,8 @@ from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
 from fanglei.providers.document import FetchContext
-from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims
+from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims, verify_claims_v22
+from fanglei.source_contract import build_sources_artifact_v21, parse_sources_artifact
 from fanglei.security import safe_error_message, sanitize_url
 from fanglei.evidence_policy import gate_evidence
 
@@ -211,6 +212,8 @@ def run_v02_pipeline(
     *,
     stop_after: str | None = None,
     force_stage: str | None = None,
+    source_policy: Mapping[str, Any] | None = None,
+    authority_claims: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Path:
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
     manifest, registry = _load(run_dir)
@@ -342,23 +345,83 @@ def run_v02_pipeline(
 
     def select() -> None:
         rows = deduplicate_sources(documents)
+        if source_policy is None:
+            # An omitted policy keeps the existing pipeline contract for
+            # ordinary and already-running work. New V2.1 policy artifacts
+            # are written only from an explicit policy input.
+            independent_count = sum(row["counts_as_independent"] for row in rows)
+            sources = {
+                "schema_version": "2.0",
+                "selection_status": "selected" if independent_count >= 3 else "insufficient_sources",
+                "sources": rows,
+            }
+        else:
+            document_index = registry.read_json("source_documents/index.json")
+            policy_case_id = (
+                source_policy.get("case_id")
+                if source_policy.get("name") == "authoritative_primary_set"
+                else None
+            )
+            sources = build_sources_artifact_v21(
+                rows,
+                documents=documents,
+                document_index=document_index,
+                run_id=run_id,
+                case_id=policy_case_id,
+                source_policy=source_policy,
+            )
         registry.write_json(
             "sources.json",
-            {"schema_version": "2.0", "selection_status": "selected" if sum(r["counts_as_independent"] for r in rows) >= 3 else "insufficient_sources", "sources": rows},
-            "source_selection", force=force_stage == "source_selection",
+            sources,
+            "source_selection", force=force_source_selection,
         )
-    _execute(manifest, registry, "source_selection", select, force_stage == "source_selection")
+    existing_sources = run_dir / "sources.json"
+    force_source_selection = force_stage == "source_selection"
+    if source_policy is not None:
+        requested_policy = dict(source_policy)
+        if existing_sources.is_file():
+            existing_value = read_json(existing_sources)
+            force_source_selection = force_source_selection or existing_value.get("source_policy") != requested_policy
+        else:
+            force_source_selection = True
+    _execute(manifest, registry, "source_selection", select, force_source_selection)
     if stop_after == "source_selection": return run_dir
 
     def factcheck() -> None:
         source_artifact = registry.read_json("sources.json")
+        source_version = source_artifact.get("schema_version")
+        parsed_source_artifact = parse_sources_artifact(source_artifact) if source_version != "2.0" else None
         sources = source_artifact["sources"]
         source_context = {row["source_id"]: row for row in sources}
+        if source_artifact.get("schema_version") == "2.0" and authority_claims:
+            raise ValueError("AUTHORITY_CLAIMS_REQUIRE_SOURCES_2_1: authority claims need a versioned approved source package")
+        if source_artifact.get("schema_version") == "2.1" and source_artifact.get("package_admissibility") != "admissible":
+            raise ValueError("SOURCE_PACKAGE_INADMISSIBLE: source package does not permit claim extraction")
         evidence = RuleBasedEvidenceExtractor().extract(documents, _question_texts(registry.read_json("questions.json")))
         evidence = gate_evidence(evidence, documents)
-        facts = verify_claims(evidence, source_context, minimum_sources_met=source_artifact["selection_status"] == "selected")
-        facts["run_id"] = run_id
-        facts["checked_at"] = _now()
+        if source_artifact.get("schema_version") == "2.0":
+            # Preserve the complete historical path for already materialized V2.0 runs.
+            facts = verify_claims(evidence, source_context, minimum_sources_met=source_artifact["selection_status"] == "selected")
+            facts["run_id"] = run_id
+            facts["checked_at"] = _now()
+        else:
+            assert parsed_source_artifact is not None
+            policy_case_id = (
+                parsed_source_artifact.source_policy.case_id
+                if hasattr(parsed_source_artifact.source_policy, "case_id")
+                else None
+            )
+            facts = verify_claims_v22(
+                evidence,
+                source_context,
+                source_artifact,
+                documents,
+                registry.read_json("source_documents/index.json"),
+                run_id=run_id,
+                case_id=policy_case_id,
+                authority_claims={key: dict(value) for key, value in (authority_claims or {}).items()},
+                checked_at=_now(),
+            )
         registry.write_json("facts.json", facts, "factcheck", force=force_stage == "factcheck")
     _execute(manifest, registry, "factcheck", factcheck, force_stage == "factcheck")
     if stop_after == "factcheck": return run_dir

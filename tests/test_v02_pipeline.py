@@ -46,11 +46,56 @@ def test_complete_pipeline_has_traceable_artifacts_and_three_independent_sources
     facts = json.loads((run / "facts.json").read_text(encoding="utf-8"))
     research = (run / "research.md").read_text(encoding="utf-8")
     assert sum(s["counts_as_independent"] for s in sources["sources"]) >= 3
+    assert sources["schema_version"] == "2.0"
+    assert facts["schema_version"] == "2.1"
     assert any(c["verification_status"] == "verified" for c in facts["claims"])
     assert "claim_001" in research and "https://source1.example/data" in research
     manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
     assert manifest["artifacts"]["research.md"]["owner"] == "research_synthesis"
     assert manifest["artifacts"]["research.md"]["status"] == "valid"
+
+
+def test_explicit_sources_21_policy_produces_native_facts_22(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+    run_v02_pipeline(
+        run.name,
+        tmp_path,
+        FakeSearch(),
+        FakeFetcher(),
+        source_policy={"name": "independent_sources", "version": "1.0"},
+    )
+    sources = json.loads((run / "sources.json").read_text(encoding="utf-8"))
+    facts = json.loads((run / "facts.json").read_text(encoding="utf-8"))
+
+    assert sources["schema_version"] == "2.1"
+    assert sources["source_policy"] == {"name": "independent_sources", "version": "1.0"}
+    assert sources["package_admissibility"] == "admissible"
+    assert sources["independent_source_count"] == 3
+    assert sources["selection_status"] == "selected"
+    assert facts["schema_version"] == "2.2"
+    assert all(claim["verification_basis"] in {"independent_corroboration", "none"} for claim in facts["claims"])
+
+
+def test_explicit_sources_21_policy_rebuilds_legacy_source_stage_only_when_requested(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+    search = FakeSearch()
+    fetcher = FakeFetcher()
+    run_v02_pipeline(run.name, tmp_path, search, fetcher)
+    first_sources = json.loads((run / "sources.json").read_text(encoding="utf-8"))
+    assert first_sources["schema_version"] == "2.0"
+
+    run_v02_pipeline(
+        run.name,
+        tmp_path,
+        search,
+        fetcher,
+        source_policy={"name": "independent_sources", "version": "1.0"},
+    )
+    upgraded_sources = json.loads((run / "sources.json").read_text(encoding="utf-8"))
+    upgraded_facts = json.loads((run / "facts.json").read_text(encoding="utf-8"))
+
+    assert upgraded_sources["schema_version"] == "2.1"
+    assert upgraded_facts["schema_version"] == "2.2"
 
 
 def test_provider_failure_records_failed_stage_and_can_resume(tmp_path: Path) -> None:

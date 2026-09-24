@@ -6,10 +6,17 @@ import hashlib
 from difflib import SequenceMatcher
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import datetime
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from fanglei.evidence_policy import script_usage
+from fanglei.evidence_policy import gate_evidence, script_usage
+from fanglei.source_contract import (
+    AuthoritativePrimarySetPolicyV1,
+    SourcePackageValidationError,
+    SourceRowV21,
+    validate_sources_artifact_v21,
+)
 
 
 @dataclass(frozen=True)
@@ -272,3 +279,278 @@ def verify_claims(
             "unverified": sum(c["verification_status"] == "unverified" for c in claims),
         },
     }
+
+
+_AUTHORITY_SCOPE_EXPANSION = re.compile(
+    r"\b(?:because|cause[sd]?|causal(?:ly)?|due\s+to|led\s+to|prompted|resulted\s+in|"
+    r"forced|motive|motivated|intended\s+to|market\s+(?:impact|effect|reaction)|"
+    r"will\s+(?:cause|lead|make)|therefore)\b|因为|导致|促使|由于|动机|市场(?:影响|反应)",
+    re.IGNORECASE,
+)
+
+
+def evidence_claim_key(item: dict[str, Any]) -> str:
+    """Return the same deterministic grouping key used by ``verify_claims``."""
+    compact = re.sub(r"\s+", "", item["evidence_text"]).lower()
+    return item.get("claim_key") or (
+        _claim_identity(compact)[0] if item.get("claim_type") == "fact" else compact
+    )
+
+
+def _scope_terms_appear(scope: Any, text: str) -> bool:
+    folded = " ".join(text.casefold().split())
+    required = [scope.subject, scope.measure, scope.period, scope.certainty]
+    required.extend(value for value in (scope.unit, scope.statistic) if value is not None)
+    return all(" ".join(value.casefold().split()) in folded for value in required)
+
+
+def _value_appears(value: str, text: str) -> bool:
+    return re.search(rf"(?<![\w.]){re.escape(value)}(?![\w.])", text, re.IGNORECASE) is not None
+
+
+def _authority_evidence_matches(
+    item: dict[str, Any], document: FetchedDocument, approved: Any
+) -> bool:
+    if (
+        item.get("source_id") != approved.source_id
+        or item.get("original_url") != approved.url
+        or item.get("document_hash") != document.document_hash
+        or item.get("relation") != "supports"
+        or item.get("evidence_eligible") is not True
+        or not isinstance(item.get("evidence_text"), str)
+        or not item["evidence_text"]
+        or item["evidence_text"] not in document.text
+    ):
+        return False
+    has_locator = any(
+        item.get(name) not in (None, "")
+        for name in ("source_section", "paragraph_locator", "page_number", "json_pointer")
+    )
+    return has_locator
+
+
+def _verify_authority_candidate(
+    candidate: dict[str, Any],
+    items: list[dict[str, Any]],
+    source_policy: AuthoritativePrimarySetPolicyV1,
+    documents: dict[str, FetchedDocument],
+) -> tuple[str, dict[str, Any]] | None:
+    """Verify only exact attributed reports or a fixed deterministic comparison wording."""
+    if set(candidate) - {"claim_text", "claim_type", "authority_attestation", "comparison"}:
+        return None
+    if candidate.get("claim_type") != "fact" or not isinstance(candidate.get("claim_text"), str):
+        return None
+    try:
+        from fanglei.checkpoint_contract import AuthorityAttestation
+
+        attestation = AuthorityAttestation.model_validate(candidate.get("authority_attestation"))
+    except Exception:
+        return None
+    approved_by_id = {row.source_id: row for row in source_policy.approved_documents}
+    if not set(attestation.source_ids).issubset(approved_by_id):
+        return None
+    if source_policy.institution.display_name.casefold() not in attestation.attribution.casefold():
+        return None
+    if attestation.attribution not in candidate["claim_text"]:
+        return None
+    if _AUTHORITY_SCOPE_EXPANSION.search(candidate["claim_text"]):
+        return None
+    if not items or any(item.get("claim_type") != "fact" for item in items):
+        return None
+    if any(item.get("relation") != "supports" for item in items):
+        return None
+    item_ids = [item.get("source_id") for item in items]
+    if len(item_ids) != len(set(item_ids)) or set(item_ids) != set(attestation.source_ids):
+        return None
+    if any(
+        source_id not in documents
+        or not _authority_evidence_matches(item, documents[source_id], approved_by_id[source_id])
+        or not _scope_terms_appear(attestation.scope, item["evidence_text"])
+        or _AUTHORITY_SCOPE_EXPANSION.search(item["evidence_text"])
+        for item, source_id in zip(items, item_ids)
+    ):
+        return None
+
+    if attestation.kind == "document_report":
+        if len(items) != 1 or len(attestation.source_ids) != 1 or "comparison" in candidate:
+            return None
+        exact_proposition = f'{attestation.attribution}: "{items[0]["evidence_text"]}"'
+        if candidate["claim_text"] != exact_proposition:
+            return None
+        return candidate["claim_text"], attestation.model_dump(mode="json")
+
+    if attestation.kind != "deterministic_document_comparison" or len(items) != 2:
+        return None
+    comparison = candidate.get("comparison")
+    if not isinstance(comparison, dict) or set(comparison) != {"values"}:
+        return None
+    values = comparison.get("values")
+    if not isinstance(values, dict) or set(values) != set(attestation.source_ids):
+        return None
+    source_documents = [approved_by_id[source_id] for source_id in attestation.source_ids]
+    if (
+        len({row.document_identity for row in source_documents}) != 2
+        or len({row.source_text_sha256 for row in source_documents}) != 2
+        or len({row.release_date for row in source_documents}) != 2
+        or len({row.evidence_role for row in source_documents}) != 2
+    ):
+        return None
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        return None
+    ordered = sorted(
+        attestation.source_ids,
+        key=lambda source_id: approved_by_id[source_id].release_date,
+    )
+    earlier_id, later_id = ordered
+    earlier_value, later_value = values[earlier_id], values[later_id]
+    if earlier_value == later_value:
+        return None
+    item_by_id = {item["source_id"]: item for item in items}
+    if any(
+        not _value_appears(values[source_id], item_by_id[source_id]["evidence_text"])
+        for source_id in ordered
+    ):
+        return None
+    scope = attestation.scope
+    unit = f" {scope.unit}" if scope.unit else ""
+    comparison_text = (
+        f"{attestation.attribution}: published {scope.statistic or 'value'} {scope.measure} for "
+        f"{scope.subject} ({scope.period}) changed from {earlier_value}{unit} in "
+        f"{approved_by_id[earlier_id].document_identity} ({approved_by_id[earlier_id].release_date}) "
+        f"to {later_value}{unit} in {approved_by_id[later_id].document_identity} "
+        f"({approved_by_id[later_id].release_date})."
+    )
+    if candidate["claim_text"] != comparison_text:
+        return None
+    return comparison_text, attestation.model_dump(mode="json")
+
+
+def verify_claims_v22(
+    evidence: list[dict[str, Any]],
+    source_context: dict[str, bool | dict[str, Any]],
+    source_artifact: dict[str, Any],
+    documents: list[FetchedDocument],
+    document_index: dict[str, Any],
+    *,
+    run_id: str,
+    case_id: str | None = None,
+    authority_claims: Mapping[str, Mapping[str, Any]] | None = None,
+    checked_at: str | None = None,
+) -> dict[str, Any]:
+    """Produce native facts 2.2 with independently gated verification bases.
+
+    Authority candidates are opt-in records keyed by the same evidence claim key
+    used by ``verify_claims``. Only exact attributed quotation or a fixed
+    two-document numeric comparison wording can receive an authority basis.
+    """
+    from fanglei.source_contract import AuthoritativePrimarySetPolicyV1
+
+    parsed = validate_sources_artifact_v21(
+        source_artifact,
+        documents=documents,
+        document_index=document_index,
+        run_id=run_id,
+        case_id=case_id,
+    )
+    if parsed.package_admissibility != "admissible":
+        raise SourcePackageValidationError("claim extraction is blocked for an inadmissible source package")
+    if authority_claims is not None and (
+        not isinstance(authority_claims, Mapping)
+        or any(not isinstance(key, str) or not isinstance(value, Mapping) for key, value in authority_claims.items())
+    ):
+        raise SourcePackageValidationError("authority_claims must map evidence claim keys to objects")
+    expected_context = {row.source_id: row.model_dump(mode="python") for row in parsed.sources}
+    expected_source_rows = {
+        row["source_id"]: SourceRowV21.model_validate(row).model_dump(mode="python")
+        for row in deduplicate_sources(documents)
+    }
+    actual_source_rows = {row.source_id: row.model_dump(mode="python") for row in parsed.sources}
+    if actual_source_rows != expected_source_rows:
+        raise SourcePackageValidationError("source rows do not match the existing deduplication algorithm for this capture")
+    if set(source_context) != set(expected_context):
+        raise SourcePackageValidationError("source context must exactly match registered source rows")
+    for source_id, expected in expected_context.items():
+        context = source_context[source_id]
+        if not isinstance(context, dict) or context != expected:
+            raise SourcePackageValidationError(f"source context differs from registered source row {source_id}")
+
+    source_policy = parsed.source_policy
+    policy_is_authority = isinstance(source_policy, AuthoritativePrimarySetPolicyV1)
+    grouped_items: dict[str, list[dict[str, Any]]] = {}
+    for item in evidence:
+        grouped_items.setdefault(evidence_claim_key(item), []).append(item)
+    unknown_candidates = set(authority_claims or {}) - set(grouped_items)
+    if unknown_candidates:
+        raise SourcePackageValidationError(
+            "authority claim keys do not match captured evidence groups: " + ", ".join(sorted(unknown_candidates))
+        )
+
+    # The V2.1 verifier remains the sole implementation of ordinary
+    # corroboration. Its status/risk thresholds are unchanged.
+    facts = verify_claims(
+        evidence,
+        source_context,
+        minimum_sources_met=parsed.selection_status == "selected",
+    )
+    group_keys = list(grouped_items)
+    documents_by_id = {document.source_id: document for document in documents}
+    gated_by_key: dict[str, list[dict[str, Any]]] = {}
+    if policy_is_authority and authority_claims:
+        for item in gate_evidence(evidence, documents):
+            gated_by_key.setdefault(evidence_claim_key(item), []).append(item)
+    for index, claim in enumerate(facts["claims"]):
+        key = group_keys[index]
+        claim["verification_basis"] = (
+            "independent_corroboration" if claim["verification_status"] == "verified" else "none"
+        )
+        claim["authority_attestation"] = None
+        if claim["verification_status"] != "verified":
+            claim["allowed_downstream"] = False
+        candidate = (authority_claims or {}).get(key)
+        if candidate is None or not policy_is_authority:
+            continue
+        verified = _verify_authority_candidate(
+            candidate,
+            gated_by_key.get(key, []),
+            source_policy,
+            documents_by_id,
+        )
+        if verified is None:
+            # An invalid authority proposal cannot confer authority status. If
+            # the ordinary verifier independently verified it, that separate
+            # basis remains intact; otherwise it stays unverified.
+            continue
+        proposition, attestation = verified
+        claim.update({
+            "claim_text": proposition,
+            "claim_type": "fact",
+            "verification_status": "verified",
+            "verification_basis": "authoritative_primary_attestation",
+            "authority_attestation": attestation,
+            "source_ids": list(attestation["source_ids"]),
+            "verification_reason": "exact attributed proposition is directly supported by the approved primary document package",
+            "allowed_downstream": True,
+            "script_usage": {
+                "status": "assertion_allowed",
+                "reason": "verified attributed primary-document statement",
+            },
+        })
+    final_checked_at = checked_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        timestamp_value = final_checked_at[:-1] + "+00:00" if final_checked_at.endswith("Z") else final_checked_at
+        parsed_timestamp = datetime.fromisoformat(timestamp_value)
+    except (AttributeError, ValueError) as error:
+        raise SourcePackageValidationError("checked_at must be a timezone-aware ISO-8601 timestamp") from error
+    if parsed_timestamp.tzinfo is None or parsed_timestamp.utcoffset() is None:
+        raise SourcePackageValidationError("checked_at must be a timezone-aware ISO-8601 timestamp")
+    facts.update({
+        "schema_version": "2.2",
+        "run_id": run_id,
+        "checked_at": final_checked_at,
+        "policy_version": "economics-v1.2",
+    })
+    facts["summary"] = {
+        status: sum(claim["verification_status"] == status for claim in facts["claims"])
+        for status in ("verified", "conflicted", "unverified")
+    }
+    return facts
