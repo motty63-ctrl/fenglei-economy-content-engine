@@ -143,6 +143,7 @@ def _structured_table_evidence(document: FetchedDocument) -> list[dict[str, Any]
 
         header_first_line = unit_line_number + 1
         header_last_line = period_rows[-1][0] + 1
+        header_locator = _line_range(header_first_line, header_last_line)
         header_excerpt = "\n".join(lines[header_first_line - 1 : header_last_line])
         first_statistic = statistics[0]
         signature = _table_signature(table_title)
@@ -166,6 +167,7 @@ def _structured_table_evidence(document: FetchedDocument) -> list[dict[str, Any]
 
             row_line = table_lines[row_position][0] + 1
             value_line = table_lines[row_position + 1][0] + 1
+            row_locator = _line_range(row_line, value_line)
             value = re.sub(r"\s*(?:%|percent)$", "", next_value, flags=re.IGNORECASE).strip()
             context = {
                 "table_title": table_title,
@@ -175,9 +177,10 @@ def _structured_table_evidence(document: FetchedDocument) -> list[dict[str, Any]
                 "period": first_period,
                 "unit": unit,
                 "value": value,
-                "header_locator": _line_range(header_first_line, header_last_line),
+                "header_locator": header_locator,
                 "header_excerpt": header_excerpt,
             }
+            evidence_locator = f"{row_locator}; header={header_locator}"
             claim_key = "structured-table|" + "|".join(
                 " ".join(part.casefold().split())
                 for part in (signature, row_label, first_statistic, first_period, unit)
@@ -187,7 +190,7 @@ def _structured_table_evidence(document: FetchedDocument) -> list[dict[str, Any]
                     "source_id": document.source_id,
                     "evidence_text": f"{lines[row_line - 1]}\n{lines[value_line - 1]}",
                     "source_section": table_title,
-                    "paragraph_locator": _line_range(row_line, value_line),
+                    "paragraph_locator": evidence_locator,
                     "published_at": document.published_at,
                     "retrieved_at": document.retrieved_at,
                     "original_url": document.original_url or document.url,

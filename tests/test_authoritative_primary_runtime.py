@@ -370,7 +370,6 @@ def test_authority_deterministic_comparison_requires_two_distinct_captures() -> 
     assert result["verification_basis"] == "authoritative_primary_attestation"
     assert result["authority_attestation"]["kind"] == "deterministic_document_comparison"
     assert result["allowed_downstream"] is True
-    assert all("table_context" not in item for item in result["evidence"])
     assert artifact["independent_source_count"] == 1
     schema = json.loads((ROOT / "docs/v0.2/native-facts-2.2.schema.json").read_text("utf-8"))
     jsonschema.validate(facts, schema)
@@ -446,6 +445,8 @@ def test_table_authority_comparison_uses_reparsed_median_2026_cells() -> None:
     assert result["verification_basis"] == "authoritative_primary_attestation"
     assert result["authority_attestation"]["kind"] == "deterministic_document_comparison"
     assert result["allowed_downstream"] is True
+    assert all("table_context" not in item for item in result["evidence"])
+    assert all("; header=line:" in item["paragraph_locator"] for item in result["evidence"])
 
     tampered = deepcopy(evidence)
     target_item = next(item for item in tampered if item.get("source_id") == "src-2" and item.get("table_context", {}).get("period") == "2026")

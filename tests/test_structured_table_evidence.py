@@ -61,6 +61,7 @@ def test_extractor_binds_multilevel_table_row_statistic_period_value_and_unit() 
     assert median_2026["table_context"]["header_excerpt"] in document.text
     assert median_2026["evidence_text"] in document.text
     assert median_2026["paragraph_locator"].startswith("line:")
+    assert "; header=line:" in median_2026["paragraph_locator"]
 
 
 def test_table_claim_key_matches_same_semantic_table_across_release_dates() -> None:
