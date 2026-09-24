@@ -11,12 +11,18 @@ from typing import Any, Mapping, Protocol
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_bytes, sha256_text
+from fanglei.errors import ArtifactConflictError
 from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
 from fanglei.providers.document import FetchContext
 from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims, verify_claims_v22
 from fanglei.source_contract import build_sources_artifact_v21, parse_sources_artifact
+from fanglei.publication_metadata import (
+    PublicationDateReviewV1,
+    apply_publication_date_reviews_to_index,
+    validate_publication_date_review,
+)
 from fanglei.security import safe_error_message, sanitize_url
 from fanglei.evidence_policy import gate_evidence
 
@@ -117,6 +123,149 @@ def _execute(manifest: RunManifest, registry: ArtifactRegistry, stage: str, acti
 
 def _question_texts(questions: dict[str, Any]) -> list[str]:
     return [q["question"] for q in questions.get("research_questions", []) if q.get("question")]
+
+
+def _documents_from_index(run_dir: Path, registry: ArtifactRegistry) -> tuple[dict[str, Any], list[FetchedDocument]]:
+    try:
+        document_index = registry.read_json("source_documents/index.json")
+    except ArtifactConflictError:
+        # Validation marks a changed capture/index stale in the in-memory manifest.
+        # Persist that fail-closed state without writing any source artifact.
+        registry.save_manifest()
+        raise
+    fields = FetchedDocument.__dataclass_fields__
+    documents: list[FetchedDocument] = []
+    for row in document_index.get("documents", []):
+        values = {key: value for key, value in row.items() if key in fields}
+        review_value = row.get("publication_date_review")
+        if review_value is not None:
+            normalized_path = run_dir / row.get("path", "")
+            normalized_text = normalized_path.read_text(encoding="utf-8")
+            review = validate_publication_date_review(
+                review_value,
+                source_id=row.get("source_id"),
+                url=row.get("url"),
+                source_text=normalized_text,
+            )
+            if row.get("published_at") != review.published_at:
+                raise ValueError(f"reviewed publication date does not match index metadata for {row.get('source_id')}")
+        for asset in row.get("files", []):
+            asset_path = run_dir / asset.get("path", "")
+            if asset.get("role") == "raw_response" and asset_path.suffix == ".json":
+                values["raw_content"] = asset_path.read_text(encoding="utf-8")
+            elif asset.get("role") == "raw_response" and asset_path.suffix == ".pdf":
+                values["raw_bytes"] = asset_path.read_bytes()
+        documents.append(FetchedDocument(**values))
+    return document_index, documents
+
+
+def _source_selection_artifact(
+    run_id: str,
+    registry: ArtifactRegistry,
+    documents: list[FetchedDocument],
+    *,
+    source_policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    rows = deduplicate_sources(documents)
+    if source_policy is None:
+        independent_count = sum(row["counts_as_independent"] for row in rows)
+        return {
+            "schema_version": "2.0",
+            "selection_status": "selected" if independent_count >= 3 else "insufficient_sources",
+            "sources": rows,
+        }
+    document_index = registry.read_json("source_documents/index.json")
+    policy_case_id = source_policy.get("case_id") if source_policy.get("name") == "authoritative_primary_set" else None
+    return build_sources_artifact_v21(
+        rows,
+        documents=documents,
+        document_index=document_index,
+        run_id=run_id,
+        case_id=policy_case_id,
+        source_policy=source_policy,
+    )
+
+
+def apply_publication_date_reviews(
+    run_id: str,
+    runs_dir: Path,
+    reviews: list[PublicationDateReviewV1 | Mapping[str, Any]],
+) -> Path:
+    """Apply explicit date reviews offline through the source-index owner."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
+    registry = ArtifactRegistry(run_dir, manifest)
+    if manifest.run_id != run_id:
+        raise ValueError("run manifest identity does not match the requested run")
+    try:
+        document_index = registry.read_json("source_documents/index.json")
+    except ArtifactConflictError:
+        registry.save_manifest()
+        raise
+    run_root = run_dir.resolve()
+    source_root = (run_dir / "source_documents").resolve()
+    if not source_root.is_relative_to(run_root):
+        raise ValueError("source_documents directory resolves outside the run directory")
+    normalized_text_by_source_id: dict[str, str] = {}
+    for row in document_index.get("documents", []):
+        source_id = row.get("source_id")
+        relative = Path(row.get("path", ""))
+        if not source_id or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("source document index contains an unsafe normalized-text path or identity")
+        normalized_path = (run_dir / relative).resolve()
+        if not normalized_path.is_relative_to(source_root) or not normalized_path.is_file():
+            raise ValueError(f"normalized source text is missing or outside source_documents for {source_id}")
+        normalized_files = [
+            asset for asset in row.get("files", [])
+            if asset.get("role") == "normalized_text"
+        ]
+        if (
+            len(normalized_files) != 1
+            or normalized_files[0].get("path") != row.get("path")
+            or normalized_files[0].get("content_hash") != row.get("content_hash")
+        ):
+            raise ValueError(f"normalized source text index entry is invalid for {source_id}")
+        text = normalized_path.read_text(encoding="utf-8")
+        if sha256_text(text) != row.get("content_hash"):
+            raise ValueError(f"normalized source text hash does not match the index for {source_id}")
+        normalized_text_by_source_id[source_id] = text
+
+    rebuilt_index = apply_publication_date_reviews_to_index(
+        document_index,
+        reviews,
+        normalized_text_by_source_id=normalized_text_by_source_id,
+    )
+    if rebuilt_index == document_index:
+        return run_dir / "source_documents" / "index.json"
+    registry.write_json("source_documents/index.json", rebuilt_index, "source_fetch", force=True)
+    registry.save_manifest()
+    return run_dir / "source_documents" / "index.json"
+
+
+def rebuild_source_selection_from_index(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    source_policy: Mapping[str, Any] | None = None,
+) -> Path:
+    """Rebuild only sources.json from the current local source-document index."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+    if manifest.run_id != run_id:
+        raise ValueError("run manifest identity does not match the requested run")
+    _, documents = _documents_from_index(run_dir, registry)
+
+    def select() -> None:
+        artifact = _source_selection_artifact(
+            run_id,
+            registry,
+            documents,
+            source_policy=source_policy,
+        )
+        registry.write_json("sources.json", artifact, "source_selection", force=True)
+
+    _execute(manifest, registry, "source_selection", select, force=True)
+    return run_dir
 
 
 def _search_requests(questions: dict[str, Any]) -> list[SearchRequest]:
@@ -332,44 +481,15 @@ def run_v02_pipeline(
     _execute(manifest, registry, "source_fetch", fetch, force_stage == "source_fetch")
     if stop_after == "source_fetch": return run_dir
     if not documents:
-        fields = FetchedDocument.__dataclass_fields__
-        for row in registry.read_json("source_documents/index.json")["documents"]:
-            values = {key: value for key, value in row.items() if key in fields}
-            for asset in row.get("files", []):
-                asset_path = run_dir / asset.get("path", "")
-                if asset.get("role") == "raw_response" and asset_path.suffix == ".json":
-                    values["raw_content"] = asset_path.read_text(encoding="utf-8")
-                elif asset.get("role") == "raw_response" and asset_path.suffix == ".pdf":
-                    values["raw_bytes"] = asset_path.read_bytes()
-            documents.append(FetchedDocument(**values))
+        _, documents = _documents_from_index(run_dir, registry)
 
     def select() -> None:
-        rows = deduplicate_sources(documents)
-        if source_policy is None:
-            # An omitted policy keeps the existing pipeline contract for
-            # ordinary and already-running work. New V2.1 policy artifacts
-            # are written only from an explicit policy input.
-            independent_count = sum(row["counts_as_independent"] for row in rows)
-            sources = {
-                "schema_version": "2.0",
-                "selection_status": "selected" if independent_count >= 3 else "insufficient_sources",
-                "sources": rows,
-            }
-        else:
-            document_index = registry.read_json("source_documents/index.json")
-            policy_case_id = (
-                source_policy.get("case_id")
-                if source_policy.get("name") == "authoritative_primary_set"
-                else None
-            )
-            sources = build_sources_artifact_v21(
-                rows,
-                documents=documents,
-                document_index=document_index,
-                run_id=run_id,
-                case_id=policy_case_id,
-                source_policy=source_policy,
-            )
+        sources = _source_selection_artifact(
+            run_id,
+            registry,
+            documents,
+            source_policy=source_policy,
+        )
         registry.write_json(
             "sources.json",
             sources,
