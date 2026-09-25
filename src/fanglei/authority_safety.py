@@ -58,6 +58,22 @@ _EXPANSION_RE = re.compile(
 _NUMBER_RE = re.compile(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?(?![\w.])")
 
 
+def compact_authority_attribution(attribution: str) -> str:
+    """Use only already-approved attribution aliases to shorten spoken labels."""
+    if not isinstance(attribution, str) or not attribution.strip():
+        raise ValueError("AUTHORITY_ATTRIBUTION_REQUIRED")
+    text = attribution.strip()
+    for pattern, aliases in _ATTRIBUTION_ALIASES:
+        def replacement(match: re.Match[str], *, choices: tuple[str, ...] = aliases) -> str:
+            localized = [alias for alias in choices
+                         if re.search(r"[\u4e00-\u9fff]", alias)
+                         and len(alias) < len(match.group(0))]
+            return min(localized, key=len) if localized else match.group(0)
+        text = re.sub(pattern, replacement, text, flags=re.I)
+    text = re.sub(r"\b(?:says|said|reports|reported|states|stated)\b", "", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip(" \t,:;—-")
+
+
 def _has_alias(text: str, alias: str) -> bool:
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9 ]*", alias):
         return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])", text, re.I))

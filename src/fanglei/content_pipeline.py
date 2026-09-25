@@ -165,7 +165,9 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
                     manifest.artifacts[artifact_name].status = "stale"
             registry.save_manifest()
         draft = provider.generate_script(ScriptGenerationInput(run_id=run_id, selected_angle=selected,
-            research_md=research, fact_palette=palette))
+            research_md=research, fact_palette=palette,
+            research_focus=focus.model_dump(mode="json") if focus else None,
+            authority_metadata=authority_metadata))
         initial_draft = draft.model_dump(mode="json")
         lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
         initial_issues = _repair_issues(lint, draft)

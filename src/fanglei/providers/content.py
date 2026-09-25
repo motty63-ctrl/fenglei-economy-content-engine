@@ -4,6 +4,7 @@ import re
 import urllib.request
 from typing import Any, Callable, Protocol
 from pydantic import BaseModel, Field
+from fanglei.authority_safety import compact_authority_attribution
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
 from fanglei.content_style import FANGLEI_ECONOMY_STYLE_GUIDE
 from fanglei.errors import ProviderError
@@ -26,6 +27,8 @@ class ScriptGenerationInput(BaseModel):
     selected_angle: AngleCandidate
     research_md: str
     fact_palette: tuple[ScriptReadyClaim, ...]
+    research_focus: dict[str, Any] | None = None
+    authority_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RepairIssue(BaseModel):
@@ -439,7 +442,7 @@ class MockContentPlanningProvider:
     name = "mock-content"
     model = None
     angle_prompt_version = "offline-generic-angles-v1"
-    script_prompt_version = "script-v1"
+    script_prompt_version = "offline-evidence-script-v2"
 
     @staticmethod
     def _spoken_fact(claim_text: str) -> str:
@@ -458,7 +461,189 @@ class MockContentPlanningProvider:
 
         return plan_offline_angles(request)
 
+    @staticmethod
+    def _spoken_count(text: str) -> int:
+        return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
+
+    @staticmethod
+    def _authority_subject(scope: dict[str, Any]) -> str:
+        subject = str(scope.get("subject", "")).strip()
+        labels = {
+            "change in real gdp": "实际GDP增速",
+            "unemployment rate": "失业率",
+            "pce inflation": "PCE通胀",
+            "core pce inflation": "核心PCE通胀",
+            "federal funds rate": "联邦基金利率",
+        }
+        return labels.get(subject.casefold(), subject)
+
+    @staticmethod
+    def _authority_scope_term(value: str) -> str:
+        labels = {
+            "projection": "预测",
+            "assessment": "评估",
+            "measurement": "测量",
+            "report": "记录",
+        }
+        return labels.get(value.casefold(), value)
+
+    @staticmethod
+    def _approved_source_ids(request: ScriptGenerationInput) -> set[str]:
+        policy = request.authority_metadata.get("source_policy")
+        if not isinstance(policy, dict) or policy.get("name") != "authoritative_primary_set":
+            raise ValueError("AUTHORITY_SCRIPT_REQUIRES_APPROVED_SOURCE_POLICY")
+        approval = policy.get("approval")
+        documents = policy.get("approved_documents")
+        if (not isinstance(approval, dict) or approval.get("status") != "approved"
+                or request.authority_metadata.get("package_admissibility") != "admissible"
+                or not isinstance(documents, list)):
+            raise ValueError("AUTHORITY_SCRIPT_REQUIRES_ADMISSIBLE_APPROVED_PACKAGE")
+        return {row["source_id"] for row in documents
+                if isinstance(row, dict) and isinstance(row.get("source_id"), str)}
+
+    @staticmethod
+    def _source_attribution(claim: ScriptReadyClaim) -> str:
+        attestation = claim.authority_attestation or {}
+        attribution = attestation.get("attribution")
+        if not isinstance(attribution, str) or not attribution.strip():
+            raise ValueError("AUTHORITY_CLAIM_ATTRIBUTION_MISSING")
+        return compact_authority_attribution(attribution)
+
+    @classmethod
+    def _comparison_sentence(cls, claim: ScriptReadyClaim) -> str:
+        attestation = claim.authority_attestation or {}
+        scope = attestation.get("scope")
+        if attestation.get("kind") != "deterministic_document_comparison" or not isinstance(scope, dict):
+            raise ValueError("AUTHORITY_COMPARISON_SCOPE_MISSING")
+        attribution = cls._source_attribution(claim)
+        required = ("subject", "period", "unit", "statistic", "certainty")
+        if any(not isinstance(scope.get(key), str) or not scope[key].strip() for key in required):
+            raise ValueError("AUTHORITY_COMPARISON_SCOPE_INCOMPLETE")
+        source_ids = set(attestation.get("source_ids", []))
+        if source_ids != set(claim.source_ids) or len(source_ids) != 2:
+            raise ValueError("AUTHORITY_COMPARISON_SOURCE_IDENTITY_MISMATCH")
+        evidence = [item for item in claim.evidence
+                    if item.get("source_id") in source_ids and item.get("evidence_eligible") is True
+                    and isinstance(item.get("original_url"), str)
+                    and isinstance(item.get("published_at"), str)
+                    and isinstance(item.get("evidence_text"), str)]
+        if len(evidence) != 2 or {item["source_id"] for item in evidence} != source_ids:
+            raise ValueError("AUTHORITY_COMPARISON_EVIDENCE_INCOMPLETE")
+        evidence.sort(key=lambda item: (item["published_at"], item["source_id"]))
+        months_and_values = []
+        for item in evidence:
+            date_match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", item["published_at"])
+            values = re.findall(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?(?![\w.])", item["evidence_text"])
+            if not date_match or not values or not 1 <= int(date_match.group(2)) <= 12:
+                raise ValueError("AUTHORITY_COMPARISON_DATE_OR_VALUE_MISSING")
+            months_and_values.append((int(date_match.group(2)), values[-1].replace(",", "")))
+        if months_and_values[0][0] == months_and_values[1][0]:
+            raise ValueError("AUTHORITY_COMPARISON_RELEASE_MONTHS_NOT_DISTINCT")
+        period = scope["period"]
+        if re.fullmatch(r"\d{4}", period):
+            period = period + "年"
+        statistic = "中位数" if scope["statistic"].casefold() == "median" else scope["statistic"]
+        unit = "%" if scope["unit"].casefold() in {"percent", "%"} else scope["unit"]
+        subject = cls._authority_subject(scope)
+        scope_terms = list(dict.fromkeys(
+            cls._authority_scope_term(scope[key]) for key in ("measure", "certainty")
+        ))
+        scope_label = "".join(scope_terms)
+        months = ("一月", "二月", "三月", "四月", "五月", "六月",
+                  "七月", "八月", "九月", "十月", "十一月", "十二月")
+        first_month = months[months_and_values[0][0] - 1]
+        second_month = months[months_and_values[1][0] - 1]
+        text = (
+            f"{attribution.strip()}：{period}{subject}{statistic}{scope_label}记录变化，"
+            f"从{first_month}{months_and_values[0][1]}{unit}到"
+            f"{second_month}{months_and_values[1][1]}{unit}。"
+        )
+        if cls._spoken_count(text) > 48:
+            raise ValueError("AUTHORITY_COMPARISON_EXCEEDS_SCRIPT_SENTENCE_LIMIT")
+        return text
+
+    @classmethod
+    def _document_attribution(cls, claim: ScriptReadyClaim) -> str:
+        attestation = claim.authority_attestation or {}
+        if attestation.get("kind") != "document_report":
+            raise ValueError("AUTHORITY_DOCUMENT_REPORT_REQUIRED")
+        return cls._source_attribution(claim)
+
+    @classmethod
+    def _research_document_claim(cls, request: ScriptGenerationInput,
+                                 approved_source_ids: set[str]) -> tuple[ScriptReadyClaim, str] | None:
+        cited_ids = set(re.findall(r"\bclaim_[A-Za-z0-9_-]+\b", request.research_md))
+        candidates = []
+        for claim in request.fact_palette:
+            attestation = claim.authority_attestation or {}
+            if (claim.claim_id not in cited_ids or attestation.get("kind") != "document_report"
+                    or set(claim.source_ids) != set(attestation.get("source_ids", []))
+                    or not set(claim.source_ids) <= approved_source_ids):
+                continue
+            evidence = [item for item in claim.evidence
+                        if item.get("source_id") in claim.source_ids
+                        and item.get("evidence_eligible") is True
+                        and isinstance(item.get("original_url"), str)
+                        and isinstance(item.get("evidence_text"), str)
+                        and item["evidence_text"].strip()
+                        and "\n" not in item["evidence_text"].strip()]
+            for item in evidence:
+                sentence = f"{cls._document_attribution(claim)}: ‘{item['evidence_text'].strip()}’"
+                if cls._spoken_count(sentence) <= 48:
+                    candidates.append((cls._spoken_count(sentence), claim.claim_id, claim, sentence))
+        if not candidates:
+            return None
+        _, _, claim, sentence = min(candidates, key=lambda item: (item[0], item[1]))
+        return claim, sentence
+
+    @classmethod
+    def _generate_authority_script(cls, request: ScriptGenerationInput) -> ScriptDraft | None:
+        palette = {claim.claim_id: claim for claim in request.fact_palette}
+        selected = [palette[claim_id] for claim_id in request.selected_angle.supporting_claim_ids
+                    if claim_id in palette]
+        comparisons = [claim for claim in selected
+                       if (claim.authority_attestation or {}).get("kind")
+                       == "deterministic_document_comparison"]
+        if not comparisons:
+            return None
+        approved_source_ids = cls._approved_source_ids(request)
+        if any(not set(claim.source_ids) <= approved_source_ids for claim in comparisons):
+            raise ValueError("AUTHORITY_COMPARISON_OUTSIDE_APPROVED_PACKAGE")
+
+        hook = request.selected_angle.hook.strip()
+        if cls._spoken_count(hook) > 20:
+            hook = re.split(r"[，,；;。]", hook, maxsplit=1)[0].strip("？? ") + "？"
+        if cls._spoken_count(hook) > 20:
+            hook = "这些记录能回答什么？"
+        rows: list[tuple[str, str, str, list[str]]] = [
+            ("hook", "interpretation", hook, []),
+            ("phenomenon", "explanation", "先按各自文件记录的时间和口径逐项比较。", []),
+        ]
+        for index, claim in enumerate(comparisons):
+            section = "phenomenon" if index < 2 else "mechanism"
+            rows.append((section, "verified_fact",
+                         cls._comparison_sentence(claim), [claim.claim_id]))
+        rows.extend([
+            ("mechanism", "explanation", "每项比较只描述所引文件中的记录差异。", []),
+        ])
+        document_claim = cls._research_document_claim(request, approved_source_ids)
+        if document_claim:
+            claim, text = document_claim
+            rows.append(("mechanism", "verified_fact", text, [claim.claim_id]))
+        rows.extend([
+            ("mechanism", "interpretation", "并列呈现不代表文件之间存在因果关系。", []),
+            ("core_judgment", "interpretation", "结论仅限于获批文件及对应证据。", []),
+        ])
+        sentences = [ScriptSentence(sentence_id=f"sentence_{index:03d}", section=section,
+                                    sentence_type=kind, text=text, claim_ids=claim_ids)
+                     for index, (section, kind, text, claim_ids) in enumerate(rows, start=1)]
+        return ScriptDraft(angle_id=request.selected_angle.angle_id,
+                           title=request.selected_angle.title, sentences=sentences)
+
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
+        authority_draft = self._generate_authority_script(request)
+        if authority_draft is not None:
+            return authority_draft
         claim = request.fact_palette[0]
         texts = [
             ("hook", "interpretation", "同一个增长率，为什么会出现两种写法？"),
