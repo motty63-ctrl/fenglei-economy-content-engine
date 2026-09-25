@@ -17,7 +17,9 @@
 
 Fed Case 2 对比 2026 年 6 月与 9 月的 SEP，并将预测变化与 9 月 FOMC statement 并列呈现。最终视频为 **1080×1920、30 FPS、H.264/AAC、8 个场景、12 个句级字幕片段**。字幕采用 sentence-level proportional timing，不是 WhisperX word-level forced alignment。
 
-MP4 目前保留在本地 run 目录，未作为仓库资产提交；仓库也没有可确认的公开 Release 链接。请查看[完整案例记录](docs/FED_CASE_2_DEMO.md)。
+▶ [查看 / 下载 Fed Case 2 最终视频](https://github.com/motty63-ctrl/fenglei-economy-content-engine/releases/tag/v0.1.0)
+
+视频通过 GitHub Release 提供；来源、事实、画面与验证记录见[完整案例记录](docs/FED_CASE_2_DEMO.md)。
 
 ## 架构
 
