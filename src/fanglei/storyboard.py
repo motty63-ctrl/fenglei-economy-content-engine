@@ -25,18 +25,19 @@ PLACEMENTS = {
 }
 
 
-def _object(object_id: str, object_type: str, content: str, placement: str, order: int, *,
+def _object(object_id: str, object_type: str, content: str, placement: str | Placement, order: int, *,
             factual: bool = False, sentence_ids: list[str] | None = None,
             claim_ids: list[str] | None = None, emphasis: str = "none") -> StoryboardObject:
     return StoryboardObject(
         object_id=object_id, object_type=object_type, content=content,
         factual=factual, sentence_ids=sentence_ids or [], claim_ids=claim_ids or [],
         deterministic_render=factual or object_type in {"text", "number"},
-        placement=PLACEMENTS[placement], appearance_order=order, emphasis=emphasis,
+        placement=PLACEMENTS[placement] if isinstance(placement, str) else placement,
+        appearance_order=order, emphasis=emphasis,
     )
 
 
-def _fact_object(object_id: str, content: str, sentence: dict[str, Any], placement: str,
+def _fact_object(object_id: str, content: str, sentence: dict[str, Any], placement: str | Placement,
                  order: int, object_type: str = "text") -> StoryboardObject:
     return _object(object_id, object_type, content, placement, order, factual=True,
                    sentence_ids=[sentence["sentence_id"]], claim_ids=sentence.get("claim_ids", []),
@@ -69,7 +70,7 @@ def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[s
         "BEA" in normalized_text and ("世界银行" in normalized_text or "World Bank" in normalized_text)
     )
     if not is_gdp_precision:
-        return _build_generic_storyboard(plan, verified[0])
+        return _build_generic_storyboard(plan, script)
 
     fact_objects = {
         "bea_label": _fact_object("bea_label", "BEA", bea_sentence, "left", 1),
@@ -133,36 +134,61 @@ def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[s
     )
 
 
-def _build_generic_storyboard(plan: VisualBeatPlan, verified_sentence: dict[str, Any]) -> Storyboard:
+def _build_generic_storyboard(plan: VisualBeatPlan, script: dict[str, Any]) -> Storyboard:
     total = sum(beat.estimated_duration_seconds for beat in plan.beats)
-    fact = _fact_object("verified_fact_primary", verified_sentence["text"], verified_sentence,
-                        "center", 1)
+    by_id = {row["sentence_id"]: row for row in script.get("sentences", [])}
     elapsed = 0.0
     active: set[str] = set()
     scenes: list[StoryboardScene] = []
-    labels = ["核心问题", "已验证事实", "解释机制", "检查方法", "核心判断"]
     for beat in plan.beats:
         start = elapsed / total
         elapsed += beat.estimated_duration_seconds
-        marker = _object(f"semantic_marker_{beat.order:03d}", "shape", labels[min(beat.order - 1, 4)],
-                         "bottom", 2, emphasis="primary")
-        objects = [marker] if beat.order == 1 else [fact, marker]
+        sentence_rows = [by_id[sid] for sid in beat.sentence_ids]
+        fact_rows = [row for row in sentence_rows
+                     if row.get("sentence_type") == "verified_fact"]
+        objects: list[StoryboardObject] = []
+        if sentence_rows:
+            gap = .025
+            height = min(.26, (.86 - gap * (len(sentence_rows) - 1)) / len(sentence_rows))
+            used = len(sentence_rows) * height + (len(sentence_rows) - 1) * gap
+            first_y = (1 - used) / 2
+            for index, row in enumerate(sentence_rows, start=1):
+                placement = Placement(x=.08, y=first_y + (index - 1) * (height + gap),
+                                      width=.84, height=height)
+                if row.get("sentence_type") == "verified_fact":
+                    objects.append(_fact_object(
+                        f"verified_fact__{row['sentence_id']}", row["text"], row,
+                        placement, index,
+                    ))
+                else:
+                    objects.append(_object(
+                        f"script_context__{row['sentence_id']}", "text", row["text"],
+                        placement, index, sentence_ids=[row["sentence_id"]],
+                    ))
+            layout = "逐条呈现脚本原句；已核验事实对象绑定其句子和 claim"
+        else:
+            raise ValueError("STORYBOARD_BEAT_HAS_NO_RENDERABLE_SENTENCE:" + beat.beat_id)
+
         ids = [obj.object_id for obj in objects]
         inherited = [oid for oid in ids if oid in active]
+        introduced = [oid for oid in ids if oid not in active]
         scenes.append(StoryboardScene(
             scene_id=f"scene_{beat.order:03d}", order=beat.order, beat_ids=[beat.beat_id],
             sentence_ids=beat.sentence_ids, narrative_role=beat.narrative_role,
             estimated_duration_seconds=beat.estimated_duration_seconds,
             relative_start=round(start, 6), relative_end=round(elapsed / total, 6),
-            layout="同一画布保留已验证事实，并逐步增加当前语义标记",
+            layout=layout,
             objects=objects, persistent_objects=inherited, inherited_objects=inherited,
-            introduced_objects=[oid for oid in ids if oid not in active],
+            introduced_objects=introduced,
             removed_objects=sorted(active - set(ids)), appearance_sequence=ids,
             transition_in="draw_or_reveal" if beat.order == 1 else "continue_canvas",
             transition_out="hold" if beat.order == len(plan.beats) else "semantic_morph",
             renderer_directives=RendererDirectives(
-                primary_route=beat.recommended_renderer, structure="single_scene",
-                animation_primitives=["hold", "reveal"], draw_order=ids,
+                primary_route=beat.recommended_renderer,
+                structure=("comparison" if len(fact_rows) > 1 and all(
+                    "六月" in row["text"] and "九月" in row["text"] for row in fact_rows
+                ) else "single_scene"),
+                animation_primitives=["reveal", "hold"], draw_order=ids,
                 deterministic_overlay_object_ids=[obj.object_id for obj in objects if obj.deterministic_render],
             ),
         ))
@@ -173,7 +199,7 @@ def _build_generic_storyboard(plan: VisualBeatPlan, verified_sentence: dict[str,
         renderer_selection={
             "primary_route": "program_animation",
             "scene_routes": {scene.scene_id: scene.renderer_directives.primary_route for scene in scenes},
-            "reason": "脚本包含需要确定性呈现的已验证文字，使用可控元素并保持同一画布连续演化。",
+            "reason": "逐条呈现脚本中的已核验句子，并将可见事实绑定到原句与允许的 claim。",
             "renderer_invoked": False,
         }, scenes=scenes,
     )

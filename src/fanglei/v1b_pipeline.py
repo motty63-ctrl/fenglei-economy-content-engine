@@ -79,6 +79,17 @@ def run_v1b_render_adaptation(run_id: str, runs_dir: Path, *, force: bool = Fals
                      "audio/mastered_narration.wav", "audio_mastering.json"):
             registry.validate(name)
         base_dir = run_dir / "renderer_project_v1a"
+        base_manifest_path = run_dir / "render_manifest_v1a.json"
+        if base_dir.is_dir() and base_manifest_path.is_file():
+            base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
+        else:
+            # The generic V0.5 Nikola project is the normal base for cases that do
+            # not use the isolated GDP V1.0a calibration renderer.
+            registry.validate("renderer_project")
+            registry.validate("render_manifest.json")
+            base_dir = run_dir / "renderer_project"
+            base_manifest_path = run_dir / "render_manifest.json"
+            base_manifest = registry.read_json("render_manifest.json")
         if not base_dir.is_dir():
             raise ValueError("V1B_BASE_PROJECT_MISSING")
         base_files: dict[str, str | bytes] = {}
@@ -87,11 +98,10 @@ def run_v1b_render_adaptation(run_id: str, runs_dir: Path, *, force: bool = Fals
                 relative = path.relative_to(base_dir).as_posix()
                 base_files[relative] = (path.read_bytes() if path.suffix == ".wav"
                                         else path.read_text(encoding="utf-8"))
-        base_manifest_path = run_dir / "render_manifest_v1a.json"
         if not base_manifest_path.is_file():
             raise ValueError("V1B_BASE_MANIFEST_MISSING")
         files, adapted = build_v1b_renderer_project(
-            base_files, json.loads(base_manifest_path.read_text(encoding="utf-8")),
+            base_files, base_manifest,
             SubtitleTrack.model_validate(registry.read_json("subtitle_track.json")),
             AudioMasteringDocument.model_validate(registry.read_json("audio_mastering.json")),
             (run_dir / "audio" / "mastered_narration.wav").read_bytes(),

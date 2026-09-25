@@ -83,3 +83,44 @@ class NativeTimestampAlignmentProvider:
         sentences = [AlignedSentence.model_validate(item) for item in timestamps]
         confidence = min((row.confidence for row in sentences), default=0.0)
         return AlignmentResult(sentences=sentences, confidence=confidence)
+
+
+class ProportionalSentenceAlignmentProvider:
+    """Allocate sentence windows by narration length without claiming measured alignment."""
+
+    name = "proportional_sentence_timing"
+    method = "proportional_by_normalized_char_count"
+
+    def align(self, request: AlignmentRequest) -> AlignmentResult:
+        rows = request.narration.sentences
+        duration_ms = int(request.audio_duration_ms or 0)
+        if not rows or duration_ms < len(rows):
+            raise ValueError("PROPORTIONAL_ALIGNMENT_DURATION_TOO_SHORT")
+        weights = [max(1, sum(not char.isspace() for char in row.narration_text))
+                   for row in rows]
+        total_weight = sum(weights)
+        elapsed = 0
+        consumed = 0
+        sentences: list[AlignedSentence] = []
+        for index, (row, weight) in enumerate(zip(rows, weights, strict=True)):
+            consumed += weight
+            end = duration_ms if index == len(rows) - 1 else round(
+                duration_ms * consumed / total_weight
+            )
+            end = max(elapsed + 1, end)
+            end = min(duration_ms - (len(rows) - index - 1), end)
+            sentences.append(AlignedSentence(
+                sentence_id=row.sentence_id, start_ms=elapsed, end_ms=end,
+                confidence=0.0, timing_source="proportional_sentence",
+                text=row.narration_text,
+                confidence_source="proportional_char_count_estimate_not_measured",
+                provider=self.name, method=self.method,
+                audio_sha256=request.audio_sha256,
+                measured=False, interpolated=True,
+            ))
+            elapsed = end
+        return AlignmentResult(
+            sentences=sentences, confidence=0.0,
+            warnings=("SENTENCE_BOUNDARIES_PROPORTIONAL_ESTIMATE_NOT_MEASURED",),
+            provider=self.name, method=self.method,
+        )

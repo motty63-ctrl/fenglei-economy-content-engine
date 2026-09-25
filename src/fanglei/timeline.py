@@ -24,11 +24,32 @@ def compile_timeline(alignment: AlignmentDocument, storyboard: dict,
                      visual_beats: dict, audio: AudioMetadata) -> TimelineDocument:
     if alignment.audio_sha256 != audio.sha256 or alignment.audio_duration_ms != audio.duration_ms:
         raise ValueError("TIMELINE_AUDIO_MISMATCH")
+    proportional_mode = (
+        alignment.provider == "proportional_sentence_timing"
+        and alignment.method == "proportional_by_normalized_char_count"
+    )
+    proportional_rows = [row for row in alignment.sentences
+                         if row.timing_source == "proportional_sentence"]
+    if proportional_mode:
+        if (alignment.confidence != 0
+                or "SENTENCE_BOUNDARIES_PROPORTIONAL_ESTIMATE_NOT_MEASURED" not in alignment.warnings
+                or len(proportional_rows) != len(alignment.sentences)
+                or any(row.provider != alignment.provider or row.method != alignment.method
+                       or row.audio_sha256 != alignment.audio_sha256
+                       or row.measured is not False or row.interpolated is not True
+                       for row in alignment.sentences)):
+            raise ValueError("TIMELINE_PROPORTIONAL_PROVENANCE_INVALID")
+    elif proportional_rows:
+        raise ValueError("TIMELINE_PROPORTIONAL_PROVENANCE_INVALID")
+    timing_source = (
+        "proportional_sentence_timing" if proportional_mode else "real_sentence_alignment"
+    )
     sentences = [TimelineSpan(
         sentence_id=row.sentence_id,
         sentence_ids=[row.sentence_id],
         start_ms=row.start_ms,
         end_ms=row.end_ms,
+        timing_source=timing_source,
     ) for row in alignment.sentences]
     by_sentence = {row.sentence_id: row for row in sentences if row.sentence_id}
     beats: list[TimelineSpan] = []
@@ -36,7 +57,7 @@ def compile_timeline(alignment: AlignmentDocument, storyboard: dict,
         start, end = _range(beat["sentence_ids"], by_sentence)
         beats.append(TimelineSpan(
             beat_id=beat["beat_id"], sentence_ids=beat["sentence_ids"],
-            start_ms=start, end_ms=end,
+            start_ms=start, end_ms=end, timing_source=timing_source,
         ))
     scenes: list[TimelineSpan] = []
     for scene in storyboard.get("scenes", []):
@@ -44,6 +65,7 @@ def compile_timeline(alignment: AlignmentDocument, storyboard: dict,
         scenes.append(TimelineSpan(
             scene_id=scene["scene_id"], beat_ids=scene["beat_ids"],
             sentence_ids=scene["sentence_ids"], start_ms=start, end_ms=end,
+            timing_source=timing_source,
         ))
     gaps = [TimelineGap(
         after_sentence_id=previous.sentence_id or "",

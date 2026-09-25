@@ -5,7 +5,7 @@ import wave
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import sha256_bytes, sha256_text
-from fanglei.audio_alignment import run_alignment_candidate
+from fanglei.audio_alignment import run_alignment_candidate, run_proportional_sentence_timing
 from fanglei.models import RunManifest
 from fanglei.narration_normalization import normalize_script
 from fanglei.providers.alignment import AlignmentResult
@@ -117,6 +117,35 @@ def test_candidate_stage_binds_approved_audio_and_never_writes_final_alignment(t
     assert manifest["stages"]["audio_alignment"]["status"] == "succeeded"
     assert manifest["artifacts"]["alignment.json"]["status"] != "valid"
     assert manifest["artifacts"]["timeline.json"]["status"] != "valid"
+
+
+def test_proportional_sentence_timing_writes_explicit_non_measured_final_alignment(tmp_path) -> None:
+    run, audio_sha = _production_ready_run(tmp_path)
+
+    output = run_proportional_sentence_timing(run.name, tmp_path)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert output.name == "alignment.json"
+    assert payload["provider"] == "proportional_sentence_timing"
+    assert payload["method"] == "proportional_by_normalized_char_count"
+    assert payload["audio_sha256"] == audio_sha
+    assert payload["audio_duration_ms"] == 1000
+    assert payload["coverage_ratio"] == 1
+    assert payload["confidence"] == 0
+    assert payload["warnings"] == ["SENTENCE_BOUNDARIES_PROPORTIONAL_ESTIMATE_NOT_MEASURED"]
+    assert [row["sentence_id"] for row in payload["sentences"]] == [
+        "sentence_001", "sentence_002",
+    ]
+    assert payload["sentences"][-1]["end_ms"] == 1000
+    assert all(
+        row["timing_source"] == "proportional_sentence"
+        and row["measured"] is False
+        and row["interpolated"] is True
+        for row in payload["sentences"]
+    )
+    assert manifest["artifacts"]["alignment.json"]["status"] == "valid"
+    assert manifest["artifacts"]["alignment_candidate.json"]["status"] == "missing"
 
 
 def test_valid_candidate_is_reused_without_provider_execution(tmp_path) -> None:

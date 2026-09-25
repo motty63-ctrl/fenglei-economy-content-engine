@@ -24,7 +24,10 @@ def lint_storyboard(storyboard: Storyboard, script: dict[str, Any], facts: dict[
 
     sentence_count = max(len(expected), 1)
     density = len(storyboard.scenes) / sentence_count
-    if len(storyboard.scenes) >= 4 and density > .5:
+    verified_fact_count = sum(row.get("sentence_type") == "verified_fact"
+                              for row in script.get("sentences", []))
+    scene_budget = max((sentence_count + 1) // 2, verified_fact_count + 2)
+    if len(storyboard.scenes) >= 4 and len(storyboard.scenes) > scene_budget:
         issues.append(_issue("PPT_SCENE_DENSITY", "too many scenes relative to narration sentences"))
 
     if storyboard.scenes:

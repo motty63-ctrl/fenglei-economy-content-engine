@@ -7,7 +7,9 @@ from fanglei.models import RunManifest
 from fanglei.providers.alignment import FakeAlignmentProvider
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
-from fanglei.v05_pipeline import run_v05_pipeline
+from fanglei.v05_pipeline import (
+    run_nikola_adaptation, run_timeline_compilation, run_v05_pipeline,
+)
 from fanglei.v05_pipeline import run_voice_generation, approve_voice_run
 from fanglei.v05_models import NarrationSynthesisConfig
 from tests.test_visual_pipeline import _visual_ready_run
@@ -59,6 +61,24 @@ def test_pipeline_reuses_valid_stages_by_default(tmp_path) -> None:
         "nikola_adaptation", "render_preflight",
     ):
         assert after["stages"][stage]["attempts"] == before["stages"][stage]["attempts"]
+
+
+def test_post_voice_owners_rebuild_timeline_and_renderer_without_touching_audio(tmp_path):
+    run = _ready(tmp_path)
+    run_v05_pipeline(
+        run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+        FakeRendererProbe(), voice_id="fake-voice",
+    )
+    audio_path = run / "audio" / "narration.wav"
+    approved_audio = audio_path.read_bytes()
+
+    timeline_path = run_timeline_compilation(run.name, tmp_path, force=True)
+    project_path = run_nikola_adaptation(run.name, tmp_path, force=True)
+
+    assert timeline_path == run / "timeline.json"
+    assert project_path == run / "renderer_project"
+    assert audio_path.read_bytes() == approved_audio
+    assert (project_path / "assets" / "narration.wav").read_bytes() == approved_audio
 
 
 def test_preflight_succeeds_when_windows_temporarily_locks_empty_probe_root(

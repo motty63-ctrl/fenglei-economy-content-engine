@@ -173,6 +173,55 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
     return run_dir
 
 
+def run_timeline_compilation(run_id: str, runs_dir: Path, *, force: bool = False) -> Path:
+    """Compile scene and subtitle timing from existing narration/alignment artifacts."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+
+    def stage() -> None:
+        for name in (
+            "alignment.json", "storyboard.json", "visual_beats.json",
+            "audio/narration.wav", "audio/metadata.json",
+        ):
+            registry.validate(name)
+        alignment = AlignmentDocument.model_validate(registry.read_json("alignment.json"))
+        audio = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
+        if alignment.run_id != run_id:
+            raise ValueError("TIMELINE_RUN_ID_MISMATCH")
+        timeline = compile_timeline(
+            alignment, registry.read_json("storyboard.json"),
+            registry.read_json("visual_beats.json"), audio,
+        )
+        registry.write_json("timeline.json", timeline.model_dump(mode="json"),
+                            "timeline_compilation", force=force)
+
+    _execute(manifest, registry, "timeline_compilation", stage, force)
+    return run_dir / "timeline.json"
+
+
+def run_nikola_adaptation(run_id: str, runs_dir: Path, *, force: bool = False) -> Path:
+    """Build the renderer project from current visuals, timeline, and existing audio."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+
+    def stage() -> None:
+        for name in ("storyboard.json", "timeline.json", "audio/narration.wav"):
+            registry.validate(name)
+        timeline = TimelineDocument.model_validate(registry.read_json("timeline.json"))
+        if timeline.run_id != run_id:
+            raise ValueError("NIKOLA_RUN_ID_MISMATCH")
+        files, render_manifest = build_nikola_project(
+            registry.read_json("storyboard.json"), timeline,
+            (run_dir / "audio" / "narration.wav").read_bytes(),
+        )
+        registry.write_directory("renderer_project", files, "nikola_adaptation", force=force)
+        registry.write_json("render_manifest.json", render_manifest, "nikola_adaptation",
+                            force=force)
+
+    _execute(manifest, registry, "nikola_adaptation", stage, force)
+    return run_dir / "renderer_project"
+
+
 def run_voice_generation(run_id: str, runs_dir: Path, provider: NarrationProvider,
                          config: NarrationSynthesisConfig, *, force: bool = False) -> Path:
     """Generate and validate a real audio bundle, then stop for human listening review."""
