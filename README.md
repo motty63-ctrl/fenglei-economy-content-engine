@@ -1,4 +1,4 @@
-# fanglei-economy-content-engine
+# fenglei-economy-content-engine
 
 AI-powered economic explainer video workflow for Fanglei.
 
