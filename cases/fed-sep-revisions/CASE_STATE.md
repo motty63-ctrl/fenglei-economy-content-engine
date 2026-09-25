@@ -2,7 +2,7 @@
 
 - **Topic:** Federal Reserve SEP revisions (case label from `cases/fed-sep-revisions/`).
 - **Fed Case 2 identity:** Resolved from the user's explicit case definition on 2026-09-24; this is a new Case 2 source set and does not identify or repair the legacy checkpoint.
-- **Fed Case 2 status:** Identity is resolved. Native source run `2026-09-24-001-fed-sep-case-2-source-inventory` exists; its source package is approved and current, native facts 2.2 and Research synthesis exist. No new Fed V2 checkpoint has been built, approved, sealed, imported, or promoted.
+- **Fed Case 2 status:** Identity is resolved. Native source run `2026-09-24-001-fed-sep-case-2-source-inventory` exists; its source package is approved and current. Native facts 2.2 and the locked `research_focus.json` / Research synthesis are registry-current. No angle, selected angle, script, video, or new Fed V2 checkpoint has been produced; nothing has been imported or promoted.
 - **Target SEP:** September 16, 2026 release; the FOMC meeting was September 15–16, 2026.
 - **Comparison SEP:** June 17, 2026 release; the FOMC meeting was June 16–17, 2026.
 - **Case question:** “从 2026 年 6 月到 9 月，美联储参与者对增长、失业率、通胀和利率路径的预测发生了什么变化？这些变化与 9 月会议公开表达的经济和通胀判断如何对应？”
@@ -20,15 +20,14 @@ The four required sources below are official Federal Reserve HTML pages. Their e
 
 No optional supporting sources are selected at this checkpoint. Do not substitute media, blogs, FRED, or news coverage for these primary Federal Reserve materials. A press conference or transcript is out of scope unless the case question is later explicitly revised to require it.
 
-## Overnight bounded run outcome (2026-09-25)
+## Fed Case 2 B2 framing and factcheck state (2026-09-25)
 
 - **Source package:** The four locked Federal Reserve sources remain unchanged. Approved `authoritative_primary_set/1.0` package SHA-256: `32661017df86af572c91465bd0a1a5a21e9d0028554b8da7bdc061b702ee70eb`. `independent_source_count=1`; legacy `selection_status=insufficient_sources`.
-- **Native facts:** `facts.json` schema `2.2`, 34 claims: 7 verified, 6 conflicted, 21 unverified. The five core 2026 SEP median comparisons are verified as `authoritative_primary_attestation`, with June/September values: real GDP `2.2 → 2.3`; unemployment `4.3 → 4.1`; PCE inflation `3.6 → 3.7`; core PCE inflation `3.3 → 3.4`; projected federal funds rate `3.8 → 4.1`. Values came from current source captures, not from case-document cues.
-- **Research:** `research.md` exists and is registry-current (SHA-256 `07bc7c55e9c14c67c692aa081c89ad0fdcc455a406d0e1a6d9cafe49aa1e3fac`). Its inherited `questions.json` framing is about source inventory and includes causal questions; it needs formal owner-stage correction and Research regeneration before content planning.
-- **Angle/script/video:** Angle generation failed closed with `AT_LEAST_THREE_DISTINCT_ANGLES_REQUIRED` using the existing GDP-specific local mock. No angle or script was produced. Video/TTS/renderer were not run.
-- **Old checkpoint:** Its `ANGLE_FORMAL_FIELDS_MISSING` blocker and staging-only historical status are unchanged.
-- **Full details:** See `docs/OVERNIGHT_REPORT_2026-09-24.md` and `docs/CURRENT_HANDOFF.md`.
-
+- **Native facts:** `facts.json` schema `2.2`, 38 claims: 9 verified, 6 conflicted, and 23 unverified. The five core 2026 SEP median comparisons are `claim_022`, `claim_024`, `claim_025`, `claim_026`, and `claim_027`; each is verified as `authoritative_primary_attestation` and allowed downstream. September FOMC statement facts for economic activity (`claim_035`) and inflation (`claim_037`) are also verified and allowed downstream.
+- **Research framing:** `research_focus.json` is current with SHA-256 `d6d1fa63fb8793657779dabdc0b7a572169c8681cb77f7a8c647b05498c31f0e`. It carries the locked Case 2 question, seven scoped subquestions, and constraints. `research.md` is registry-current with SHA-256 `3ee9a0eff9ee168d39d5c9c9bc319a877b5f492868bcb4df10d978d1a2cad89f`. The earlier source-inventory/causal framing in `questions.json` is no longer the content-planning frame; it remains a legacy acquisition artifact and is not an instruction to rerun B2.
+- **Angle/script/video:** No valid `angles.json`, selected `angle.md`, script, or video artifact exists. Phase C1 is generic offline content planning; the formal angle-generation owner must stop after writing `angles.json`. Human angle selection remains pending. No live provider, TTS, or renderer has been used for this content-planning step.
+- **Old checkpoint:** Its `ANGLE_FORMAL_FIELDS_MISSING` blocker and staging-only historical status are unchanged. It remains unrelated to the new Case 2 native source run.
+- **Exact next step:** Implement and verify the generic deterministic offline angle planner, then run only formal angle generation. If at least three meaningfully distinct eligible candidates are produced, stop at `FED_ANGLES_READY_FOR_HUMAN_SELECTION`; otherwise stop at `FED_ANGLE_PLANNER_BLOCKED`. Do not select an angle or proceed to script/video/TTS.
 ## Projection comparison verification cues
 
 The following values were supplied as expected comparison cues, not as approved facts or native-pipeline inputs. The future run must extract and verify every value from the official SEP artifacts before using it; do not copy these values into `facts.json`, a checkpoint draft, or other formal artifacts from this document.
@@ -43,8 +42,8 @@ The following values were supplied as expected comparison cues, not as approved 
 
 The SEP is evidence of participants' projections. FOMC statements provide the Committee's public assessment. Do not turn correspondence into causation or infer motives the Fed did not state.
 
-- **Implementation baseline:** Approved Checkpoint Authoring Workflow V1 and authoritative-primary runtime/materialization are implemented on the remote baseline. Overnight generic evidence and downstream-safety changes are on local branch `overnight/fed-sep-evidence-2026-09-24`; see the overnight report and current handoff for commits/Git state. These changes do not repair or unblock the original Fed checkpoint.
-- **Fed Case 2 status:** The native source-inventory run and native facts 2.2 / Research artifacts exist. No new Fed `approved-checkpoint/2.0` or `2.1` checkpoint, import promotion, or production content run has been created.
+- **Implementation baseline:** Approved Checkpoint Authoring Workflow V1 and authoritative-primary runtime/materialization are implemented on the remote baseline. Generic evidence extraction, downstream-safety, B2 Research focus, and factcheck changes are on local branch `overnight/fed-sep-evidence-2026-09-24`; see `docs/CURRENT_HANDOFF.md` for the continuation boundary. These changes do not repair or unblock the original Fed checkpoint.
+- **Fed Case 2 status:** The native source-inventory run, native facts 2.2, current Research focus, and current Research artifacts exist. No angle, selected angle, script, new Fed `approved-checkpoint/2.0` or `2.1` checkpoint, import promotion, or production content run has been created.
 - **Approved checkpoint status:** The staging canary input used `checkpoint_schema_version=approved-checkpoint/1.0`; the envelope gate reported no approval-status error. The original checkpoint body is absent from the staging package, so its approved angle values cannot be independently reconstructed from the canary artifacts.
 - **Import status:** Staging only; not promoted. `.checkpoint-staging/cp-5ec4fb8d89137a2224d9/` contains `checkpoint_fingerprint.json` and `gates.json`. No materialized artifacts belong to the legacy checkpoint; the separate Case 2 native source run is under `runs/`.
 - **Blocker:** `ANGLE_FORMAL_FIELDS_MISSING`. The missing formal `AngleCandidate` fields are `audience_relevance`, `controversy_risk`, `core_insight`, `core_question`, `eligibility`, `evidence_strength`, `explainability`, `hook`, `hook_strength`, `novelty`, `total_score`, and `visual_potential`. Provenance, fact-coverage, and script-coverage gates remain false because validation stopped before source capture and materialization.
