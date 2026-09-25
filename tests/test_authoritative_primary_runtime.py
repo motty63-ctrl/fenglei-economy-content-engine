@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -8,7 +9,14 @@ import jsonschema
 import pytest
 
 from fanglei.artifacts import sha256_bytes, sha256_text
-from fanglei.research import FetchedDocument, deduplicate_sources, verify_claims_v22
+from fanglei.research import (
+    FetchedDocument,
+    RuleBasedEvidenceExtractor,
+    deduplicate_sources,
+    evidence_claim_key,
+    extract_qualitative_primary_evidence,
+    verify_claims_v22,
+)
 from fanglei.source_contract import (
     authoritative_source_package_sha256,
     build_sources_artifact_v21,
@@ -335,6 +343,75 @@ def test_authority_document_report_is_verified_only_as_attributed_exact_quote() 
     jsonschema.validate(facts, schema)
 
 
+@pytest.mark.parametrize("scope_period,expected_status", [
+    ("2026-09-16", "verified"),
+    ("2026-09-15", "unverified"),
+])
+def test_qualitative_statement_attestation_binds_temporal_scope_to_approved_release(
+    scope_period: str, expected_status: str,
+) -> None:
+    original = _documents()
+    target = replace(
+        original[3],
+        text="Economic activity is expanding at a solid pace.\nInflation remains elevated.",
+        document_hash=sha256_text("Economic activity is expanding at a solid pace.\nInflation remains elevated."),
+    )
+    documents = [*original[:3], target]
+    policy = _policy(documents)
+    artifact, documents, index = _source_artifact(documents, source_policy=policy)
+    extracted = extract_qualitative_primary_evidence(
+        documents,
+        approved_source_ids={target.source_id},
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    evidence = gate_evidence(extracted, documents)
+    candidates = {}
+    expected_sentences = {
+        "Economic activity is expanding at a solid pace.": {
+            "subject": "Economic activity",
+            "measure": "at a solid pace",
+            "certainty": "is expanding",
+        },
+        "Inflation remains elevated.": {
+            "subject": "Inflation",
+            "measure": "remains elevated",
+            "certainty": "remains elevated",
+        },
+    }
+    for item in evidence:
+        text = item["evidence_text"]
+        attribution = "Federal Reserve September FOMC statement says"
+        candidates[evidence_claim_key(item)] = {
+            "claim_text": f'{attribution}: "{text}"',
+            "claim_type": "fact",
+            "authority_attestation": {
+                "kind": "document_report",
+                "source_ids": [target.source_id],
+                "attribution": attribution,
+                "scope": {
+                    **expected_sentences[text],
+                    "period": scope_period,
+                    "unit": None,
+                    "statistic": None,
+                },
+            },
+        }
+
+    facts = _verify_authority(evidence, artifact, documents, index, candidates)
+    assert len(facts["claims"]) == 2
+    assert all(claim["verification_status"] == expected_status for claim in facts["claims"])
+    assert all(
+        claim["verification_basis"] == ("authoritative_primary_attestation" if expected_status == "verified" else "none")
+        for claim in facts["claims"]
+    )
+    if expected_status == "verified":
+        assert {claim["claim_text"].split(': "', 1)[0] for claim in facts["claims"]} == {
+            "Federal Reserve September FOMC statement says"
+        }
+        assert {claim["evidence"][0]["paragraph_locator"] for claim in facts["claims"]} == {"line:1", "line:2"}
+
+
 def test_authority_deterministic_comparison_requires_two_distinct_captures() -> None:
     documents = _documents()
     policy = _policy(documents)
@@ -366,6 +443,99 @@ def test_authority_deterministic_comparison_requires_two_distinct_captures() -> 
     assert artifact["independent_source_count"] == 1
     schema = json.loads((ROOT / "docs/v0.2/native-facts-2.2.schema.json").read_text("utf-8"))
     jsonschema.validate(facts, schema)
+
+
+def test_table_authority_comparison_uses_reparsed_median_2026_cells() -> None:
+    baseline_text = "\n".join([
+        "Table 1. Economic projections for June 2026",
+        "Percent", "Variable", "Median1", "Range2", "2026", "2027", "2026", "2027",
+        "Real GDP growth", "2.2", "2.5", "2.0-2.4", "2.2-2.8",
+    ])
+    target_text = baseline_text.replace("June 2026", "September 2026").replace("2.2\n2.5", "2.3\n2.6", 1)
+    original = _documents()
+    documents = [
+        replace(original[0], text=baseline_text, document_hash=sha256_text(baseline_text)),
+        replace(original[1], text=target_text, document_hash=sha256_text(target_text)),
+        *original[2:],
+    ]
+    artifact, documents, index = _source_artifact(
+        documents,
+        source_policy=_policy(documents),
+    )
+    evidence = RuleBasedEvidenceExtractor().extract(documents, ["What changed?"])
+    table_items = [
+        item for item in evidence
+        if item.get("table_context", {}).get("row_label") == "Real GDP growth"
+        and item.get("table_context", {}).get("statistic") == "Median"
+        and item.get("table_context", {}).get("period") == "2026"
+    ]
+    assert {item["source_id"] for item in table_items} == {"src-1", "src-2"}
+    assert {item["table_context"]["value"] for item in table_items} == {"2.2", "2.3"}
+
+    key = evidence_claim_key(table_items[0])
+    scope = {
+        "subject": "Real GDP growth",
+        "measure": "projection",
+        "period": "2026",
+        "unit": "Percent",
+        "statistic": "Median",
+        "certainty": "projection",
+    }
+    source_ids = ["src-1", "src-2"]
+    values = {item["source_id"]: item["table_context"]["value"] for item in table_items}
+    claim_text = (
+        "Federal Reserve FOMC participants (SEP): published Median projection for Real GDP growth "
+        "(2026) changed from 2.2 Percent in fed-doc-1 (2026-06-17) to 2.3 Percent "
+        "in fed-doc-2 (2026-09-16)."
+    )
+    candidate = {
+        "claim_text": claim_text,
+        "claim_type": "fact",
+        "authority_attestation": {
+            "kind": "deterministic_document_comparison",
+            "source_ids": source_ids,
+            "attribution": "Federal Reserve FOMC participants (SEP)",
+            "scope": scope,
+        },
+        "comparison": {"values": values},
+    }
+    facts = verify_claims_v22(
+        evidence,
+        {row["source_id"]: row for row in artifact["sources"]},
+        artifact,
+        documents,
+        index,
+        run_id=RUN_ID,
+        case_id=CASE_ID,
+        authority_claims={key: candidate},
+        checked_at=CHECKED_AT,
+    )
+    result = next(row for row in facts["claims"] if row["claim_id"])
+    assert result["verification_status"] == "verified"
+    assert result["verification_basis"] == "authoritative_primary_attestation"
+    assert result["authority_attestation"]["kind"] == "deterministic_document_comparison"
+    assert result["allowed_downstream"] is True
+    assert all("table_context" not in item for item in result["evidence"])
+    assert all("; header=line:" in item["paragraph_locator"] for item in result["evidence"])
+
+    tampered = deepcopy(evidence)
+    target_item = next(item for item in tampered if item.get("source_id") == "src-2" and item.get("table_context", {}).get("period") == "2026")
+    target_item["table_context"]["value"] = "2.6"
+    rejected = verify_claims_v22(
+        tampered,
+        {row["source_id"]: row for row in artifact["sources"]},
+        artifact,
+        documents,
+        index,
+        run_id=RUN_ID,
+        case_id=CASE_ID,
+        authority_claims={key: candidate},
+        checked_at=CHECKED_AT,
+    )
+    rejected_claim = next(row for row in rejected["claims"] if row["source_ids"] == source_ids)
+    assert rejected_claim["verification_status"] == "unverified"
+    assert rejected_claim["verification_basis"] == "none"
+    assert rejected_claim["allowed_downstream"] is False
 
 
 def test_missing_attribution_outside_package_and_scope_expansion_stay_unverified() -> None:

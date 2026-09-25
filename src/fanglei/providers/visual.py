@@ -1,11 +1,17 @@
 """Provider boundary for renderer-agnostic visual planning."""
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from fanglei.visual_models import VisualBeat, VisualBeatPlan
+
+
+_NUMERIC_VALUE = re.compile(r"\d+(?:[.,]\d+)?%?")
+_COMPARISON_MARKER = re.compile(r"(?:变化|从|到|由|至|→|->|\bfrom\b|\bto\b|\bchanged\b)", re.I)
+_PERIOD_MARKER = re.compile(r"(?:20\d{2}|\d{1,2}月|\bQ[1-4]\b|\b(?:year|quarter|period)\b|年)", re.I)
 
 
 class VisualPlanningRequest(BaseModel):
@@ -41,23 +47,44 @@ class DeterministicVisualPlanningProvider:
 
         script_text = "".join(sentence["text"] for sentence in sentences)
         normalized_script_text = self._normalize_percentages(script_text)
+        def section_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+            result: list[list[dict[str, Any]]] = []
+            current: list[dict[str, Any]] = []
+            current_key = ""
+            for sentence in rows:
+                section = sentence["section"]
+                text = sentence["text"]
+                if section == "mechanism" and (text.startswith("下次") or current_key == "checklist"):
+                    key = "checklist"
+                else:
+                    key = section
+                if current and key != current_key:
+                    result.append(current)
+                    current = []
+                current.append(sentence)
+                current_key = key
+            if current:
+                result.append(current)
+            return result
+
+        comparison_indexes = [index for index, sentence in enumerate(sentences)
+                              if sentence.get("sentence_type") == "verified_fact"
+                              and len(_NUMERIC_VALUE.findall(sentence["text"])) >= 2
+                              and _COMPARISON_MARKER.search(sentence["text"])
+                              and _PERIOD_MARKER.search(sentence["text"])]
         groups: list[list[dict[str, Any]]] = []
-        current: list[dict[str, Any]] = []
-        current_key = ""
-        for sentence in sentences:
-            section = sentence["section"]
-            text = sentence["text"]
-            if section == "mechanism" and (text.startswith("下次") or current_key == "checklist"):
-                key = "checklist"
-            else:
-                key = section
-            if current and key != current_key:
-                groups.append(current)
-                current = []
-            current.append(sentence)
-            current_key = key
-        if current:
-            groups.append(current)
+        if comparison_indexes:
+            cursor = 0
+            for index in comparison_indexes:
+                groups.extend(section_groups(sentences[cursor:index]))
+                groups.append([sentences[index]])
+                cursor = index + 1
+            if cursor < len(sentences):
+                # Keep the closing interpretation and its supporting document report
+                # together after the numeric comparison sequence.
+                groups.append(sentences[cursor:])
+        else:
+            groups = section_groups(sentences)
 
         total_duration = float(request.script.get("estimated_duration_seconds") or 75.0)
         weights = [max(1, sum(len(row["text"]) for row in group)) for group in groups]
@@ -68,6 +95,8 @@ class DeterministicVisualPlanningProvider:
         beats: list[VisualBeat] = []
         for index, (group, duration) in enumerate(zip(groups, durations), start=1):
             key = "checklist" if group[0]["section"] == "mechanism" and group[0]["text"].startswith("下次") else group[0]["section"]
+            if group[-1]["section"] == "core_judgment":
+                key = "core_judgment"
             relationship, objects, emphasis, renderer = self._visual_semantics(key, normalized_script_text)
             role = "judgment" if key == "core_judgment" else key
             if role == "checklist":
@@ -88,11 +117,11 @@ class DeterministicVisualPlanningProvider:
     @staticmethod
     def _purpose(key: str) -> str:
         return {
-            "hook": "用两个数字建立可核验的反差",
-            "phenomenon": "呈现来源相同主题下的显示差异",
-            "mechanism": "演示精度与四舍五入机制",
-            "checklist": "给出来源、指标、年份、精度的检查顺序",
-            "core_judgment": "把小数点隐藏转化为可记忆的视觉结论",
+            "hook": "提出脚本中的核心问题",
+            "phenomenon": "并列呈现脚本中的已核验信息",
+            "mechanism": "按脚本顺序展开事实与说明",
+            "checklist": "按脚本明确给出的检查步骤逐项呈现",
+            "core_judgment": "用脚本中的结论完成视觉收束",
         }[key]
 
     @staticmethod

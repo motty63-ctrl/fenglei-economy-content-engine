@@ -59,6 +59,7 @@ def _beat_one_dry_run_html(scene: dict, *, audio_path: str = "assets/narration.w
         '<meta name="viewport" content="width=1080,height=1920">'
         '<style>'
         "@font-face{font-family:'Microsoft YaHei';src:local('Microsoft YaHei')}"
+        "@font-face{font-family:'FangleiSans';src:local('Microsoft YaHei')}"
         '*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;'
         "background:#faf8f0;font-family:'Microsoft YaHei',sans-serif}"
         '#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#faf8f0}'
@@ -185,6 +186,7 @@ def _full_composition_html(project_scenes: list[dict], duration_ms: int, fps: in
         '<meta name="viewport" content="width=1080,height=1920">'
         '<style>'
         "@font-face{font-family:'Microsoft YaHei';src:local('Microsoft YaHei')}"
+        "@font-face{font-family:'FangleiSans';src:local('Microsoft YaHei')}"
         '*{box-sizing:border-box}html,body{margin:0;width:1080px;height:1920px;overflow:hidden;'
         "background:#faf8f0;font-family:'Microsoft YaHei',sans-serif}"
         '#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#faf8f0}'
@@ -223,7 +225,7 @@ def _full_composition_html(project_scenes: list[dict], duration_ms: int, fps: in
         '{visibility:"hidden",opacity:0,transform:"translateY(0)",offset:1}],'
         '{duration:' + str(duration_ms) + ',fill:"both",easing:"linear"});}}'
         'document.getElementById("root").dataset.animationStatus='
-        'sceneSchedule.length===5?"ready":"invalid";'
+        'sceneSchedule.length===' + str(len(scene_schedule)) + '?"ready":"invalid";'
         '</script></body></html>\n'
     )
 

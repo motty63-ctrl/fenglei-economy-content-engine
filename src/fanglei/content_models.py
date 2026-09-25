@@ -10,6 +10,10 @@ class ScriptReadyClaim(BaseModel):
     claim_text: str
     source_ids: list[str] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    verification_basis: Literal[
+        "independent_corroboration", "authoritative_primary_attestation", "none"
+    ] = "independent_corroboration"
+    authority_attestation: dict[str, Any] | None = None
 
 
 class AngleProposal(BaseModel):
@@ -47,6 +51,7 @@ class AngleDiversityResult(BaseModel):
     passed: bool
     candidate_count: int
     distinct_core_questions: int
+    distinct_hooks: int
     distinct_hook_mechanisms: int
     distinct_audience_takeaways: int
     distinct_framings: int

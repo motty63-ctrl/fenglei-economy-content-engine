@@ -1,10 +1,24 @@
 # Current Handoff
 
-- **Verified implementation baseline:** `main @ 75436e1994ffe037f15f6eda706f98408fd3179e`. At the start of this documentation closeout, local `main`, `origin/main`, and GitHub `main` matched and the working tree was clean. The hash is the implementation baseline, not a self-updating HEAD condition.
-- **Current workflow:** Approved Checkpoint Authoring Workflow V1 is complete: formal artifacts → deterministic V2 draft → pure validation → explicit hash-bound human approval → write-once seal → V2 importer → schema/provenance/fact/script gates → promotion.
-- **Contract compatibility:** New authoring/import uses `approved-checkpoint/2.0`. Legacy `1.0` and `approved-checkpoint/1.0` retain their original fingerprint and materialization semantics.
-- **Completed acceptance:** Local end-to-end authoring, approval, seal, import, and promotion acceptance passed. This was not a Fed Case 2 run and did not create a Fed V2 checkpoint, promotion, or production run.
-- **Original Fed checkpoint:** Still blocked and staging-only; it has not been promoted or repaired. Its blocker remains `ANGLE_FORMAL_FIELDS_MISSING`. The 12 unrecovered formal fields are `audience_relevance`, `controversy_risk`, `core_insight`, `core_question`, `eligibility`, `evidence_strength`, `explainability`, `hook`, `hook_strength`, `novelty`, `total_score`, and `visual_potential`.
-- **Forensic recovery:** Read-only recovery covered current readable files, locally reachable Git history, local refs/branches/tags, reflog, dangling/unreachable objects, and readable ignored/untracked project files. No complete values tied by sufficient provenance to the current Fed approved checkpoint were found. GDP artifacts and test fixtures are not valid Fed recovery sources. GitHub live refs enumeration failed with `Schannel SEC_E_NO_CREDENTIALS`; remote-only refs were not verified. `.pytest_cache/` was inaccessible due to local filesystem permissions; see [CASE_STATE.md](../cases/fed-sep-revisions/CASE_STATE.md).
-- **Do not do:** Do not repair, backfill, infer, default, copy, or upgrade the old checkpoint to V2. Do not claim Fed Case 2 has run or produced a new checkpoint, promotion, or production run. Keep unrelated code, schemas, tests, and TTS/provider settings outside this documentation closeout.
-- **Exact next step:** **Begin Fed Case 2 native source ingest from the four locked Federal Reserve sources in [CASE_STATE.md](../cases/fed-sep-revisions/CASE_STATE.md).** Extract and validate projection values from official source artifacts; do not seed formal facts from the case-definition comparison cues. No native formal run or V2 checkpoint exists yet.
+## Current Git/work state
+
+- Engineering branch: `overnight/fed-sep-evidence-2026-09-24`.
+- Remote comparison baseline: `origin/main @ 4ec89bc6b59a128d24a75ca4fdcc776e3fe25f91`.
+- The video closeout started at `3925c043695e7a08d448bad2c807c85a19fad62e`; closeout commits are local and have not been pushed.
+- Read actual Git state for current HEAD, ahead/behind, and worktree status. Commit hashes in this handoff are snapshots, not self-updating HEAD requirements.
+
+## Fed Case 2 status
+
+Run: `2026-09-24-001-fed-sep-case-2-source-inventory` under `runs/2026-09-24-001-fed-sep-case-2-source-inventory/`.
+
+The new Fed Case 2 native pipeline now has the approved four-document Federal Reserve source package, reviewed publication dates, native Facts 2.2, the locked `research_focus.json` and current Research, five eligible angles, human-selected `angle_001`, an evidence-grounded script, human-approved Volcengine narration, sentence-level proportional timing, an eight-scene visual plan, and a verified MVP MP4. See `docs/FED_CASE_2_DEMO.md` for source provenance, artifact details, media properties, verification, and limitations.
+
+The final video is `runs/2026-09-24-001-fed-sep-case-2-source-inventory/final.mp4`. Its measured duration is approximately 74.633 seconds, with 74.626 seconds of narration. Sentence timing is proportional to normalized text length; it is not WhisperX word-level forced alignment.
+
+The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`; it was not repaired, upgraded, reused, imported, or promoted. No new Fed approved checkpoint or production content run was created. The source package's independent source count remains `1`, and its legacy `selection_status` remains `insufficient_sources`; authority-package approval does not imply independent corroboration or automatically verify claims.
+
+## Closeout boundary
+
+The authorized work was a final audit and closeout of the selected-angle → script → narration/timing/render path, with documentation and local atomic commits. No product work beyond that path is authorized by this handoff. No push was authorized or performed. After reviewing the local commits and final Git state, stop for human direction.
+
+The old checkpoint recovery remains closed. Do not repair, backfill, infer, default, copy, or upgrade the old blocked checkpoint. GDP artifacts and test fixtures are not valid Fed recovery sources.

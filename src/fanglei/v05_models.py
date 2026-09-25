@@ -139,7 +139,10 @@ class AlignedSentence(StrictModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(gt=0)
     confidence: float = Field(ge=0, le=1)
-    timing_source: Literal["native_timestamp", "forced_alignment", "sentence_asr", "deterministic_fake"]
+    timing_source: Literal[
+        "native_timestamp", "forced_alignment", "sentence_asr", "deterministic_fake",
+        "proportional_sentence",
+    ]
     text: str | None = None
     confidence_source: str | None = None
     provider: str | None = None
@@ -266,7 +269,7 @@ class TimelineSpan(StrictModel):
     beat_ids: list[str] = Field(default_factory=list)
     start_ms: int = Field(ge=0)
     end_ms: int = Field(gt=0)
-    timing_source: Literal["real_sentence_alignment"] = "real_sentence_alignment"
+    timing_source: Literal["real_sentence_alignment", "proportional_sentence_timing"] = "real_sentence_alignment"
 
     @model_validator(mode="after")
     def timing_advances(self) -> "TimelineSpan":

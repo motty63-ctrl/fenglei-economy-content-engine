@@ -1,5 +1,6 @@
 import json
 import math
+import copy
 
 import pytest
 
@@ -163,6 +164,31 @@ def test_full_composition_duration_and_frame_count_come_from_real_audio() -> Non
     assert manifest["renderer"]["frame_count"] == expected_frames
     assert f'data-duration="{duration_ms / 1000:g}"' in html
     assert 'data-fps="30"' in html
+
+
+def test_full_composition_declares_local_alias_for_subtitle_font():
+    _, files, _, _ = _full_composition_fixture()
+    assert "@font-face{font-family:'FangleiSans';src:local('Microsoft YaHei')}" in files["index.html"]
+
+
+def test_full_composition_accepts_eight_scenes_instead_of_fixed_five() -> None:
+    timeline, files, manifest, project = _full_composition_fixture()
+    storyboard = json.loads(files["data/storyboard.json"])
+    last = storyboard["scenes"][-1]
+    last_timing = timeline.scenes[-1]
+    for index in range(6, 9):
+        scene = copy.deepcopy(last)
+        scene["scene_id"] = f"scene_{index:03d}"
+        storyboard["scenes"].append(scene)
+        timeline.scenes.append(last_timing.model_copy(update={
+            "scene_id": scene["scene_id"],
+        }))
+
+    audio_bytes = b"eight-scene-audio"
+    timeline.audio["sha256"] = sha256_bytes(audio_bytes)
+    eight_scene_files, _ = build_nikola_project(storyboard, timeline, audio_bytes)
+
+    assert 'sceneSchedule.length===8?"ready":"invalid"' in eight_scene_files["index.html"]
 
 
 def test_full_composition_preserves_scene_order_and_exact_timeline_ranges() -> None:

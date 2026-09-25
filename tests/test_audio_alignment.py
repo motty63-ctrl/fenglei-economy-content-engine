@@ -2,7 +2,9 @@ import pytest
 
 from fanglei.audio_alignment import align_audio, validate_alignment, validate_real_alignment
 from fanglei.narration_normalization import normalize_script
-from fanglei.providers.alignment import AlignmentResult, FakeAlignmentProvider
+from fanglei.providers.alignment import (
+    AlignmentRequest, AlignmentResult, FakeAlignmentProvider, ProportionalSentenceAlignmentProvider,
+)
 from fanglei.v05_models import AlignedSentence, AlignmentCandidateDocument, AudioMetadata
 
 
@@ -29,6 +31,28 @@ def test_alignment_requires_complete_monotonic_audio_bounded_timing() -> None:
     assert result.sentences[0].start_ms == 0
     assert result.sentences[-1].end_ms == 3000
     assert validate_alignment(result, ["sentence_001", "sentence_002"]).passed
+
+
+def test_proportional_sentence_provider_uses_real_duration_and_labels_estimate() -> None:
+    document = _document()
+    audio = _metadata(duration=74626)
+    result = ProportionalSentenceAlignmentProvider().align(AlignmentRequest(
+        narration=document, audio=audio, audio_duration_ms=audio.duration_ms,
+    ))
+
+    assert result.method == "proportional_by_normalized_char_count"
+    assert result.confidence == 0
+    assert "SENTENCE_BOUNDARIES_PROPORTIONAL_ESTIMATE_NOT_MEASURED" in result.warnings
+    assert [row.sentence_id for row in result.sentences] == [
+        row.sentence_id for row in document.sentences
+    ]
+    assert result.sentences[0].start_ms == 0
+    assert result.sentences[-1].end_ms == audio.duration_ms
+    assert all(row.timing_source == "proportional_sentence" for row in result.sentences)
+    assert all(row.measured is False and row.interpolated is True for row in result.sentences)
+    assert all(left.end_ms == right.start_ms for left, right in zip(
+        result.sentences, result.sentences[1:]
+    ))
 
 
 @pytest.mark.parametrize("sentences,code", [

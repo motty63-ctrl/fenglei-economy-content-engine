@@ -8,13 +8,21 @@ from fanglei.content_policy import build_fact_palette
 
 def test_v03_artifacts_have_separate_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["angles.json"] == (
-        "angle_generation", ("facts.json", "research.md", "questions.json", "source.md")
+        "angle_generation", ("facts.json", "research.md", "questions.json", "source.md", "sources.json")
     )
     assert ARTIFACT_GRAPH["angle.md"] == ("angle_selection", ("angles.json", "facts.json"))
     assert ARTIFACT_GRAPH["script.json"] == (
         "script_generation", ("angle.md", "facts.json", "research.md", "source.md")
     )
     assert ARTIFACT_GRAPH["script.md"] == ("script_render", ("script.json",))
+
+
+def test_focus_profile_tracks_focus_and_approved_source_identity_for_angles() -> None:
+    from fanglei.artifact_registry import RESEARCH_FOCUS_ARTIFACT_GRAPH
+
+    assert RESEARCH_FOCUS_ARTIFACT_GRAPH["angles.json"] == (
+        "angle_generation", ("facts.json", "research.md", "research_focus.json", "source.md", "sources.json")
+    )
 
 
 def test_verified_fact_requires_claim_and_other_types_may_bind_for_semantic_gate() -> None:
@@ -53,3 +61,36 @@ def test_fact_palette_requires_evidence_source_to_match_claim_sources() -> None:
         "source_ids": ["src_1"], "evidence": [{"source_id": "src_other",
         "original_url": "https://example.test/data", "evidence_text": "增长2.8%", "evidence_eligible": True}]}]}
     assert build_fact_palette(facts) == ()
+
+
+def test_fact_palette_preserves_authority_basis_and_attestation() -> None:
+    attestation = {
+        "kind": "deterministic_document_comparison",
+        "source_ids": ["src_june", "src_september"],
+        "attribution": "Federal Reserve FOMC participants (SEP)",
+        "scope": {
+            "subject": "Federal funds rate",
+            "measure": "projection",
+            "period": "2026",
+            "unit": "Percent",
+            "statistic": "Median",
+            "certainty": "projection",
+        },
+    }
+    facts = {"claims": [{
+        "claim_id": "claim_authority",
+        "claim_text": "Federal Reserve FOMC participants' median projection changed.",
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "authority_attestation": attestation,
+        "allowed_downstream": True,
+        "source_ids": ["src_june", "src_september"],
+        "evidence": [{"source_id": "src_june", "original_url": "https://example.test/june",
+                      "evidence_text": "Federal funds rate\\n3.8", "evidence_eligible": True}],
+    }]}
+
+    claim = build_fact_palette(facts)[0]
+
+    assert claim.verification_basis == "authoritative_primary_attestation"
+    assert claim.authority_attestation == attestation

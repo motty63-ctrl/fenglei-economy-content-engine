@@ -10,8 +10,10 @@ from fanglei.alignment_matching import compare_alignment_text
 from fanglei.artifacts import sha256_bytes
 from fanglei.models import StageError, StageState
 from fanglei.paths import resolve_run_dir
-from fanglei.pipeline import _load
-from fanglei.providers.alignment import AlignmentProvider, AlignmentRequest
+from fanglei.pipeline import _execute, _load
+from fanglei.providers.alignment import (
+    AlignmentProvider, AlignmentRequest, ProportionalSentenceAlignmentProvider,
+)
 from fanglei.v05_models import (
     AlignmentCandidateDocument, AlignmentDocument, AudioMetadata, AudioQualityDocument,
     NarrationDocument,
@@ -231,6 +233,89 @@ def run_alignment_candidate(run_id: str, runs_dir: Path,
     )
     registry.save_manifest()
     return output
+
+
+def run_proportional_sentence_timing(run_id: str, runs_dir: Path) -> Path:
+    """Write explicit estimated sentence windows for approved production narration.
+
+    This is a timing estimate, not acoustic alignment. It is a bounded local fast path
+    for downstream scene/caption pacing when no measured alignment subsystem is used.
+    """
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+    existing = manifest.artifacts["alignment.json"]
+    if existing.status == "valid":
+        registry.validate("alignment.json")
+        current = AlignmentDocument.model_validate(registry.read_json("alignment.json"))
+        if (current.provider, current.method) == (
+            ProportionalSentenceAlignmentProvider.name,
+            ProportionalSentenceAlignmentProvider.method,
+        ):
+            return run_dir / "alignment.json"
+        raise ValueError("ALIGNMENT_ALREADY_EXISTS_WITH_DIFFERENT_METHOD")
+
+    def stage() -> None:
+        for name in (
+            "narration.json", "audio/narration.wav", "audio/metadata.json",
+            "audio/quality.json", "audio/review.json",
+        ):
+            registry.validate(name)
+        narration = NarrationDocument.model_validate(registry.read_json("narration.json"))
+        audio = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
+        quality = AudioQualityDocument.model_validate(registry.read_json("audio/quality.json"))
+        review = VoiceReviewDocument.model_validate(registry.read_json("audio/review.json"))
+        audio_path = run_dir / audio.path
+        actual_sha = sha256_bytes(audio_path.read_bytes())
+        if actual_sha != audio.sha256:
+            raise ValueError("AUDIO_METADATA_HASH_MISMATCH")
+        if quality.audio_sha256 != actual_sha or not quality.production_eligible:
+            raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
+        if audio.provider_type != "real":
+            raise ValueError("PRODUCTION_AUDIO_REQUIRED")
+        validate_voice_approval(review, actual_sha)
+        actual_duration_ms = _wav_duration_ms(audio_path)
+        if actual_duration_ms != audio.duration_ms or quality.duration_ms != actual_duration_ms:
+            raise ValueError("AUDIO_DURATION_MISMATCH")
+        if narration.run_id != run_id or not narration.semantic_validation.passed:
+            raise ValueError("NARRATION_IDENTITY_OR_SEMANTIC_VALIDATION_FAILED")
+
+        provider = ProportionalSentenceAlignmentProvider()
+        result = provider.align(AlignmentRequest(
+            narration=narration, audio=audio, audio_path=audio_path,
+            audio_sha256=actual_sha, audio_duration_ms=actual_duration_ms,
+            approved_review=review,
+        ))
+        expected_ids = [row.sentence_id for row in narration.sentences]
+        if [row.sentence_id for row in result.sentences] != expected_ids:
+            raise ValueError("PROPORTIONAL_ALIGNMENT_COVERAGE_INVALID")
+        if not result.sentences or result.sentences[0].start_ms != 0:
+            raise ValueError("PROPORTIONAL_ALIGNMENT_START_INVALID")
+        for index, row in enumerate(result.sentences):
+            expected = narration.sentences[index]
+            if (
+                row.text != expected.narration_text
+                or row.audio_sha256 != actual_sha
+                or row.provider != provider.name
+                or row.method != provider.method
+                or row.measured is not False
+                or row.interpolated is not True
+                or (index > 0 and row.start_ms != result.sentences[index - 1].end_ms)
+            ):
+                raise ValueError("PROPORTIONAL_ALIGNMENT_PROVENANCE_INVALID")
+        if result.sentences[-1].end_ms != actual_duration_ms:
+            raise ValueError("PROPORTIONAL_ALIGNMENT_AUDIO_END_MISMATCH")
+        document = AlignmentDocument(
+            run_id=run_id, audio_sha256=actual_sha, audio_duration_ms=actual_duration_ms,
+            provider=provider.name, method=provider.method, sentences=result.sentences,
+            coverage_ratio=1.0, confidence=0.0, fallback_used=False,
+            warnings=list(result.warnings),
+            voice_review_hash=manifest.artifacts["audio/review.json"].content_hash or "",
+        )
+        registry.write_json("alignment.json", document.model_dump(mode="json"),
+                            "audio_alignment")
+
+    _execute(manifest, registry, "audio_alignment", stage)
+    return run_dir / "alignment.json"
 
 
 def _run(document: NarrationDocument, audio: AudioMetadata,

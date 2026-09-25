@@ -54,6 +54,30 @@ def test_deepseek_angles_use_json_mode_and_only_verified_palette() -> None:
     assert "claim_007" in serialized
 
 
+def test_content_fact_payload_preserves_authority_basis_and_attestation() -> None:
+    claim = _claim().model_copy(update={
+        "verification_basis": "authoritative_primary_attestation",
+        "authority_attestation": {
+            "kind": "deterministic_document_comparison",
+            "source_ids": ["src_june", "src_september"],
+            "attribution": "Federal Reserve FOMC participants (SEP)",
+            "scope": {
+                "subject": "Federal funds rate",
+                "measure": "projection",
+                "period": "2026",
+                "unit": "Percent",
+                "statistic": "Median",
+                "certainty": "projection",
+            },
+        },
+    })
+
+    payload = DeepSeekContentPlanningProvider._fact_payload((claim,))[0]
+
+    assert payload["verification_basis"] == "authoritative_primary_attestation"
+    assert payload["authority_attestation"] == claim.authority_attestation
+
+
 def test_deepseek_normalizes_explicit_ten_point_scores_at_provider_boundary() -> None:
     proposal = _proposal("angle_001", "纠正误解").model_dump()
     for field in ("audience_relevance", "novelty", "hook_strength", "visual_potential", "explainability"):

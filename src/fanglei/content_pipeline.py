@@ -9,6 +9,8 @@ from fanglei.content_policy import build_fact_palette
 from fanglei.content_render import render_angle_markdown, render_script_json, render_script_markdown
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
+from fanglei.research_focus import ResearchFocusV1
+from fanglei.errors import ArtifactConflictError
 from fanglei.providers.content import (
     AngleGenerationInput,
     ContentPlanningProvider,
@@ -71,23 +73,65 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     if not palette: raise ValueError("NO_SCRIPT_READY_FACTS")
     source_text = (run_dir / "source.md").read_text(encoding="utf-8")
     research = (run_dir / "research.md").read_text(encoding="utf-8")
-    questions = registry.read_json("questions.json")
+    sources = registry.read_json("sources.json")
+    focus = None
+    if "research_focus.json" in registry.graph:
+        focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+        if focus.run_id != run_id:
+            raise ArtifactConflictError("research_focus.json run_id does not match the active run")
+        core_topic = focus.primary_question
+        research_questions = focus.subquestions
+    else:
+        questions = registry.read_json("questions.json")
+        core_topic = questions.get("core_topic", "")
+        research_questions = [q.get("question", "") for q in questions.get("research_questions", [])]
+
+    source_independence_keys = {
+        row["source_id"]: row["independence_key"]
+        for row in sources.get("sources", [])
+        if row.get("counts_as_independent") is True
+        and isinstance(row.get("source_id"), str)
+        and isinstance(row.get("independence_key"), str)
+        and row["independence_key"].strip()
+    }
+    authority_metadata = {
+        "source_policy": sources.get("source_policy"),
+        "package_admissibility": sources.get("package_admissibility"),
+        "independent_source_count": sources.get("independent_source_count"),
+        "selection_status": sources.get("selection_status"),
+        "sources_sha256": manifest.artifacts["sources.json"].content_hash,
+    }
 
     def generate_angles() -> None:
         proposed = provider.generate_angles(AngleGenerationInput(run_id=run_id,
-            core_topic=questions.get("core_topic", ""),
-            research_questions=[q.get("question", "") for q in questions.get("research_questions", [])],
-            research_md=research, fact_palette=palette))
-        diversity = validate_angle_diversity(proposed.candidates)
-        if not diversity.passed:
-            raise ValueError("ANGLE_DIVERSITY_FAILED:" + ",".join(diversity.issue_codes))
-        candidates = score_angles(proposed.candidates, palette, source_text)
+            core_topic=core_topic,
+            research_questions=research_questions,
+            research_focus=focus.model_dump(mode="json") if focus else None,
+            research_md=research, fact_palette=palette,
+            authority_metadata=authority_metadata))
+        if not 3 <= len(proposed.candidates) <= 5:
+            raise ValueError("ANGLE_DIVERSITY_FAILED:ANGLE_COUNT_OUT_OF_RANGE")
+        candidates = score_angles(
+            proposed.candidates, palette, source_text,
+            source_independence_keys=source_independence_keys,
+        )
         if len([c for c in candidates if c.eligibility == "eligible"]) < 3:
             raise ValueError("AT_LEAST_THREE_DISTINCT_ANGLES_REQUIRED")
+        eligible_ids = {candidate.angle_id for candidate in candidates if candidate.eligibility == "eligible"}
+        eligible_proposals = [proposal for proposal in proposed.candidates if proposal.angle_id in eligible_ids]
+        diversity = validate_angle_diversity(eligible_proposals)
+        if not diversity.passed:
+            raise ValueError("ANGLE_DIVERSITY_FAILED:" + ",".join(diversity.issue_codes))
         recommended = select_angle(candidates)
         registry.write_json("angles.json", {"schema_version": "3.0", "run_id": run_id,
             "provider": {"name": provider.name, "model": provider.model, "prompt_version": provider.angle_prompt_version},
+            "planning_context": {
+                "framing_source": "research_focus" if focus else "questions",
+                "research_focus_sha256": manifest.artifacts["research_focus.json"].content_hash if focus else None,
+                "authority_metadata": authority_metadata,
+            },
             "recommended_angle_id": recommended.angle_id,
+            "recommendation_status": "system_recommendation_human_selection_pending",
             "diversity_gate": diversity.model_dump(mode="json"),
             "candidates": [c.model_dump(mode="json") for c in candidates]},
             "angle_generation", force=force_stage == "angle_generation")
@@ -121,7 +165,9 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
                     manifest.artifacts[artifact_name].status = "stale"
             registry.save_manifest()
         draft = provider.generate_script(ScriptGenerationInput(run_id=run_id, selected_angle=selected,
-            research_md=research, fact_palette=palette))
+            research_md=research, fact_palette=palette,
+            research_focus=focus.model_dump(mode="json") if focus else None,
+            authority_metadata=authority_metadata))
         initial_draft = draft.model_dump(mode="json")
         lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
         initial_issues = _repair_issues(lint, draft)

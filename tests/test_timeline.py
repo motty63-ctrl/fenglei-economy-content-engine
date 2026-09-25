@@ -53,6 +53,29 @@ def test_storyboard_estimate_never_changes_real_timeline_allocation() -> None:
     assert second.validation.estimated_duration_reference_ms == 5000
 
 
+def test_timeline_preserves_proportional_sentence_timing_provenance() -> None:
+    alignment, board, beats, audio = _inputs()
+    alignment.provider = "proportional_sentence_timing"
+    alignment.method = "proportional_by_normalized_char_count"
+    alignment.confidence = 0
+    alignment.warnings = ["SENTENCE_BOUNDARIES_PROPORTIONAL_ESTIMATE_NOT_MEASURED"]
+    for sentence in alignment.sentences:
+        sentence.timing_source = "proportional_sentence"
+        sentence.measured = False
+        sentence.interpolated = True
+        sentence.provider = alignment.provider
+        sentence.method = alignment.method
+        sentence.audio_sha256 = alignment.audio_sha256
+
+    timeline = compile_timeline(alignment, board, beats, audio)
+
+    assert all(
+        row.timing_source == "proportional_sentence_timing"
+        for row in timeline.sentences + timeline.beats + timeline.scenes
+    )
+    assert timeline.sentences[-1].end_ms == audio.duration_ms
+
+
 def test_timeline_records_real_alignment_gaps_as_canvas_holds() -> None:
     alignment, board, beats, audio = _inputs()
     alignment.sentences[1].start_ms += 120

@@ -15,8 +15,12 @@ from fanglei.providers.mastering import EngineMasteringResult
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
 from fanglei.v05_models import AudioMetadata, VoiceReviewDocument
-from fanglei.v05_pipeline import run_v05_pipeline
-from fanglei.v1b_pipeline import run_audio_mastering, run_subtitle_generation
+from fanglei.v05_pipeline import (
+    run_nikola_adaptation, run_timeline_compilation, run_v05_pipeline,
+)
+from fanglei.v1b_pipeline import (
+    run_audio_mastering, run_subtitle_generation, run_v1b_render_adaptation,
+)
 from tests.test_v05_pipeline import _ready
 
 
@@ -111,6 +115,35 @@ def test_audio_mastering_stage_writes_pair_without_touching_subtitles(tmp_path: 
     assert manifest["artifacts"]["subtitle_track.json"]["status"] == "valid"
     assert manifest["artifacts"]["audio/mastered_narration.wav"]["status"] == "valid"
     assert manifest["artifacts"]["audio_mastering.json"]["status"] == "valid"
+
+
+def test_v1b_adaptation_layers_subtitles_on_generic_nikola_project(tmp_path: Path):
+    run = _v05_run(tmp_path)
+    _replace_with_approved_real_audio(run)
+    manifest, registry = _load(run)
+    alignment = json.loads((run / "alignment.json").read_text(encoding="utf-8"))
+    audio = registry.read_json("audio/metadata.json")
+    rows = alignment["sentences"]
+    for index, row in enumerate(rows):
+        row["start_ms"] = round(index * audio["duration_ms"] / len(rows))
+        row["end_ms"] = (round((index + 1) * audio["duration_ms"] / len(rows)))
+        row["timing_source"] = "native_timestamp"
+    alignment["audio_sha256"] = audio["sha256"]
+    alignment["audio_duration_ms"] = audio["duration_ms"]
+    registry.write_json("alignment.json", alignment, "audio_alignment", force=True)
+    registry.save_manifest()
+    run_timeline_compilation(run.name, tmp_path, force=True)
+    run_nikola_adaptation(run.name, tmp_path, force=True)
+    run_subtitle_generation(run.name, tmp_path, force=True)
+    run_audio_mastering(run.name, tmp_path, SameAudioEngine(), force=True)
+
+    run_v1b_render_adaptation(run.name, tmp_path, force=True)
+
+    adapted_html = run / "renderer_project_v1b" / "index.html"
+    assert adapted_html.is_file()
+    assert "installFangleiSubtitles" in adapted_html.read_text(encoding="utf-8")
+    assert (run / "renderer_project_v1b" / "assets" / "mastered_narration.wav").is_file()
+    assert not (run / "renderer_project_v1a").exists()
 
 
 def test_alignment_change_stales_subtitle_and_v1b_renderer_only(tmp_path: Path):

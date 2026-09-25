@@ -1,5 +1,6 @@
 from fanglei.providers.visual import DeterministicVisualPlanningProvider, VisualPlanningRequest
 from fanglei.storyboard import build_storyboard
+from fanglei.storyboard_quality import lint_storyboard
 from tests.test_visual_planning import _script
 
 
@@ -139,3 +140,72 @@ def test_scene_structure_follows_semantic_role_not_fixed_beat_number() -> None:
     assert board.scenes[-1].narrative_role == "judgment"
     assert board.scenes[-1].renderer_directives.structure == "numeric_animation"
     assert "closing_metaphor" in board.scenes[-1].introduced_objects
+
+
+def test_generic_authority_storyboard_shows_each_allowed_fact_with_exact_provenance() -> None:
+    comparisons = [
+        ("GDP", "2.2%", "2.3%", "claim_gdp"),
+        ("失业率", "4.3%", "4.1%", "claim_unemployment"),
+        ("PCE通胀", "3.6%", "3.7%", "claim_pce"),
+        ("核心PCE通胀", "3.3%", "3.4%", "claim_core_pce"),
+        ("联邦基金利率", "3.8%", "4.1%", "claim_funds"),
+    ]
+    sentences = [{
+        "sentence_id": "sentence_000", "section": "hook", "sentence_type": "interpretation",
+        "text": "这些记录能回答哪些问题？", "claim_ids": [],
+    }, {
+        "sentence_id": "sentence_001", "section": "phenomenon", "sentence_type": "explanation",
+        "text": "先区分投影和会议声明。", "claim_ids": [],
+    }]
+    for index, (metric, june, september, claim_id) in enumerate(comparisons, start=1):
+        section = "phenomenon" if index <= 2 else "mechanism"
+        sentences.append({
+            "sentence_id": f"sentence_{index + 1:03d}",
+            "section": section,
+            "sentence_type": "verified_fact",
+            "text": f"美联储FOMC参与者SEP：2026年{metric}中位数预测变化，六月{june}到九月{september}。",
+            "claim_ids": [claim_id],
+        })
+    sentences.append({
+        "sentence_id": "sentence_007", "section": "mechanism", "sentence_type": "verified_fact",
+        "text": "美联储九月FOMC声明：‘Inflation remains elevated.’", "claim_ids": ["claim_statement"],
+    })
+    sentences.append({
+        "sentence_id": "sentence_008", "section": "core_judgment", "sentence_type": "interpretation",
+        "text": "并列呈现记录，不推断因果。", "claim_ids": [],
+    })
+    script = {"script_id": "script_authority", "estimated_duration_seconds": 60,
+              "sentences": sentences}
+    claim_ids = {row["claim_ids"][0] for row in sentences if row["claim_ids"]}
+    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+        run_id="fed", script=script, allowed_claim_ids=claim_ids
+    ))
+    facts = {"claims": [{"claim_id": claim_id, "verification_status": "verified",
+                          "allowed_downstream": True} for claim_id in claim_ids]}
+
+    board = build_storyboard(plan, script, facts)
+    gate = lint_storyboard(board, script, facts)
+    visible_facts = [obj for scene in board.scenes for obj in scene.objects if obj.factual]
+
+    assert gate.passed, gate.issues
+    assert len(board.scenes) == 8
+    assert [scene.sentence_ids for scene in board.scenes[2:7]] == [
+        ["sentence_002"], ["sentence_003"], ["sentence_004"],
+        ["sentence_005"], ["sentence_006"],
+    ]
+    assert board.scenes[7].sentence_ids == ["sentence_007", "sentence_008"]
+    assert board.scenes[-1].narrative_role == "judgment"
+    expected_fact_sentences = {row["sentence_id"] for row in sentences
+                               if row["sentence_type"] == "verified_fact"}
+    assert {obj.sentence_ids[0] for obj in visible_facts} == expected_fact_sentences
+    assert {obj.claim_ids[0] for obj in visible_facts} == claim_ids
+    assert {obj.content for obj in visible_facts} == {row["text"] for row in sentences
+                                                      if row["sentence_type"] == "verified_fact"}
+    visible_text = {obj.content for scene in board.scenes for obj in scene.objects}
+    assert visible_text == {row["text"] for row in sentences}
+    closing_text = {obj.content for obj in board.scenes[-1].objects}
+    assert {sentences[index]["text"] for index in (7, 8)} <= closing_text
+    assert all("四舍五入" not in beat.cognitive_purpose for beat in plan.beats)
+    serialized = board.model_dump_json()
+    for forbidden in ("四舍五入", "2.7932%", "BEA", "World Bank"):
+        assert forbidden not in serialized
