@@ -354,6 +354,77 @@ class RuleBasedEvidenceExtractor:
         return evidence
 
 
+_QUALITATIVE_PRIMARY_MARKERS = re.compile(
+    r"\b(?:economic\s+activity|inflation|unemployment|employment|labor\s+market|labour\s+market)\b|"
+    r"经济活动|通胀|就业|劳动力市场",
+    re.IGNORECASE,
+)
+
+
+def extract_qualitative_primary_evidence(
+    documents: list[FetchedDocument],
+    *,
+    approved_source_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Extract exact qualitative sentences from an explicitly approved set.
+
+    This opt-in extractor supplements the numeric/claim-marker path for
+    document-attested prose. It does not verify claims: callers still pass the
+    returned records through ``gate_evidence`` and the authority verifier.
+    Evidence is restricted to explicitly supplied source IDs and carries a
+    physical line locator into the normalized capture.
+    """
+    if not isinstance(approved_source_ids, set) or any(
+        not isinstance(source_id, str) or not source_id.strip()
+        for source_id in approved_source_ids
+    ):
+        raise ValueError("approved_source_ids must be an explicit set of nonblank source IDs")
+    output: list[dict[str, Any]] = []
+    sentence_pattern = re.compile(r"\S.*?(?:[.!?。！？]+(?=\s|$)|$)")
+    for document in documents:
+        if document.source_id not in approved_source_ids or document.document_format not in {"html", "pdf"}:
+            continue
+        for line_number, line in enumerate(document.text.splitlines(), start=1):
+            for match in sentence_pattern.finditer(line):
+                sentence = match.group(0).strip()
+                if (
+                    not sentence
+                    or re.search(r"\d", sentence)
+                    or not _QUALITATIVE_PRIMARY_MARKERS.search(sentence)
+                    or "�" in sentence
+                ):
+                    continue
+                item: dict[str, Any] = {
+                    "source_id": document.source_id,
+                    "evidence_text": sentence,
+                    "source_section": None,
+                    "paragraph_locator": f"line:{line_number}",
+                    "published_at": document.published_at,
+                    "retrieved_at": document.retrieved_at,
+                    "original_url": document.original_url or document.url,
+                    "relation": "supports",
+                    "claim_type": "fact",
+                    "claim_key": None,
+                    "claim_values": None,
+                    "document_hash": document.document_hash,
+                    "document_format": document.document_format,
+                    "evidence_origin": "original_document",
+                }
+                if document.document_format == "pdf":
+                    page = next(
+                        (candidate for candidate in document.pages if sentence in str(candidate.get("text", ""))),
+                        None,
+                    )
+                    if page is None:
+                        continue
+                    item.update({
+                        "page_number": page.get("page_number"),
+                        "page_content_hash": page.get("content_hash"),
+                    })
+                output.append(item)
+    return output
+
+
 def _claim_identity(text: str) -> tuple[str, tuple[str, ...]]:
     lowered = text.lower()
     years = re.findall(r"(?:19|20)\d{2}", lowered)
@@ -459,13 +530,6 @@ def evidence_claim_key(item: dict[str, Any]) -> str:
     )
 
 
-def _scope_terms_appear(scope: Any, text: str) -> bool:
-    folded = " ".join(text.casefold().split())
-    required = [scope.subject, scope.measure, scope.period, scope.certainty]
-    required.extend(value for value in (scope.unit, scope.statistic) if value is not None)
-    return all(" ".join(value.casefold().split()) in folded for value in required)
-
-
 def _value_appears(value: str, text: str) -> bool:
     return re.search(rf"(?<![\w.]){re.escape(value)}(?![\w.])", text, re.IGNORECASE) is not None
 
@@ -503,10 +567,26 @@ def _authority_evidence_matches(
     return has_locator
 
 
-def _authority_scope_matches(scope: Any, item: dict[str, Any]) -> bool:
+def _authority_scope_matches(scope: Any, item: dict[str, Any], approved: Any) -> bool:
     context = item.get("table_context")
     if context is None:
-        return _scope_terms_appear(scope, item["evidence_text"])
+        folded = " ".join(item["evidence_text"].casefold().split())
+        required = [scope.subject, scope.measure, scope.certainty]
+        required.extend(value for value in (scope.unit, scope.statistic) if value is not None)
+        if not all(" ".join(value.casefold().split()) in folded for value in required):
+            return False
+        period = " ".join(scope.period.casefold().split())
+        if period in folded:
+            return True
+        # A document-report can name the explicit publication/release date as
+        # its temporal scope. Bind that date to both the approved package and
+        # the indexed capture metadata; an unbound date remains ineligible.
+        published_at = item.get("published_at")
+        return (
+            scope.period == approved.release_date
+            and isinstance(published_at, str)
+            and published_at[:10] == approved.release_date
+        )
     if (
         scope.subject.casefold().strip() != context["row_label"].casefold().strip()
         or scope.period.casefold().strip() != context["period"].casefold().strip()
@@ -563,7 +643,7 @@ def _verify_authority_candidate(
     if any(
         source_id not in documents
         or not _authority_evidence_matches(item, documents[source_id], approved_by_id[source_id])
-        or not _authority_scope_matches(attestation.scope, item)
+        or not _authority_scope_matches(attestation.scope, item, approved_by_id[source_id])
         or _AUTHORITY_SCOPE_EXPANSION.search(item["evidence_text"])
         for item, source_id in zip(items, item_ids)
     ):

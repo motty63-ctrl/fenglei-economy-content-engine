@@ -76,6 +76,19 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
+# The focus profile is opt-in and only replaces Research's framing dependency.
+# Ordinary runs continue using ARTIFACT_GRAPH unchanged. Keeping questions.json
+# as a Research dependency preserves its established invalidation path while
+# research_focus.json becomes the preferred synthesis frame.
+RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
+    **ARTIFACT_GRAPH,
+    "research_focus.json": ("research_focus", ("sources.json", "facts.json")),
+    "research.md": (
+        "research_synthesis",
+        ("questions.json", "sources.json", "facts.json", "research_focus.json"),
+    ),
+}
+
 # Checkpoint imports enter the graph after research and script approval. Keep the
 # ordinary graph above byte-for-byte unchanged; the importer opts into this
 # separate profile through the checkpoint_import manifest stage.
@@ -113,15 +126,29 @@ def _now() -> str:
 
 
 class ArtifactRegistry:
-    def __init__(self, run_dir: Path, manifest: RunManifest):
+    def __init__(
+        self,
+        run_dir: Path,
+        manifest: RunManifest,
+        *,
+        research_focus_mode: bool | None = None,
+    ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
         checkpoint_stage = manifest.stages.get("checkpoint_import")
-        self.graph = (
-            IMPORTED_ARTIFACT_GRAPH
-            if checkpoint_stage is not None and checkpoint_stage.status == "succeeded"
-            else ARTIFACT_GRAPH
+        self.imported_checkpoint_mode = bool(
+            checkpoint_stage is not None and checkpoint_stage.status == "succeeded"
         )
+        if self.imported_checkpoint_mode:
+            self.graph = IMPORTED_ARTIFACT_GRAPH
+        else:
+            focus_state = manifest.artifacts.get("research_focus.json")
+            focus_enabled = research_focus_mode
+            if focus_enabled is None:
+                focus_enabled = (self.run_dir / "research_focus.json").is_file() or (
+                    focus_state is not None and focus_state.status != "missing"
+                )
+            self.graph = RESEARCH_FOCUS_ARTIFACT_GRAPH if focus_enabled else ARTIFACT_GRAPH
         for name, (owner, dependencies) in self.graph.items():
             self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
@@ -180,7 +207,7 @@ class ArtifactRegistry:
         state.created_at = state.created_at or timestamp
         state.updated_at = timestamp
         state.dependencies = deps
-        if old_hash and old_hash != state.content_hash:
+        if old_hash != state.content_hash and (old_hash or name == "research_focus.json"):
             self._invalidate_descendants(name)
         return path
 

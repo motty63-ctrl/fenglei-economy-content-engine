@@ -14,6 +14,7 @@ from fanglei.research import (
     RuleBasedEvidenceExtractor,
     deduplicate_sources,
     evidence_claim_key,
+    extract_qualitative_primary_evidence,
     verify_claims_v22,
 )
 from fanglei.source_contract import (
@@ -340,6 +341,75 @@ def test_authority_document_report_is_verified_only_as_attributed_exact_quote() 
     assert artifact["independent_source_count"] == 1
     schema = json.loads((ROOT / "docs/v0.2/native-facts-2.2.schema.json").read_text("utf-8"))
     jsonschema.validate(facts, schema)
+
+
+@pytest.mark.parametrize("scope_period,expected_status", [
+    ("2026-09-16", "verified"),
+    ("2026-09-15", "unverified"),
+])
+def test_qualitative_statement_attestation_binds_temporal_scope_to_approved_release(
+    scope_period: str, expected_status: str,
+) -> None:
+    original = _documents()
+    target = replace(
+        original[3],
+        text="Economic activity is expanding at a solid pace.\nInflation remains elevated.",
+        document_hash=sha256_text("Economic activity is expanding at a solid pace.\nInflation remains elevated."),
+    )
+    documents = [*original[:3], target]
+    policy = _policy(documents)
+    artifact, documents, index = _source_artifact(documents, source_policy=policy)
+    extracted = extract_qualitative_primary_evidence(
+        documents,
+        approved_source_ids={target.source_id},
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    evidence = gate_evidence(extracted, documents)
+    candidates = {}
+    expected_sentences = {
+        "Economic activity is expanding at a solid pace.": {
+            "subject": "Economic activity",
+            "measure": "at a solid pace",
+            "certainty": "is expanding",
+        },
+        "Inflation remains elevated.": {
+            "subject": "Inflation",
+            "measure": "remains elevated",
+            "certainty": "remains elevated",
+        },
+    }
+    for item in evidence:
+        text = item["evidence_text"]
+        attribution = "Federal Reserve September FOMC statement says"
+        candidates[evidence_claim_key(item)] = {
+            "claim_text": f'{attribution}: "{text}"',
+            "claim_type": "fact",
+            "authority_attestation": {
+                "kind": "document_report",
+                "source_ids": [target.source_id],
+                "attribution": attribution,
+                "scope": {
+                    **expected_sentences[text],
+                    "period": scope_period,
+                    "unit": None,
+                    "statistic": None,
+                },
+            },
+        }
+
+    facts = _verify_authority(evidence, artifact, documents, index, candidates)
+    assert len(facts["claims"]) == 2
+    assert all(claim["verification_status"] == expected_status for claim in facts["claims"])
+    assert all(
+        claim["verification_basis"] == ("authoritative_primary_attestation" if expected_status == "verified" else "none")
+        for claim in facts["claims"]
+    )
+    if expected_status == "verified":
+        assert {claim["claim_text"].split(': "', 1)[0] for claim in facts["claims"]} == {
+            "Federal Reserve September FOMC statement says"
+        }
+        assert {claim["evidence"][0]["paragraph_locator"] for claim in facts["claims"]} == {"line:1", "line:2"}
 
 
 def test_authority_deterministic_comparison_requires_two_distinct_captures() -> None:

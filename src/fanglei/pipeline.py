@@ -16,8 +16,20 @@ from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
 from fanglei.providers.document import FetchContext
-from fanglei.research import FetchedDocument, RuleBasedEvidenceExtractor, deduplicate_sources, verify_claims, verify_claims_v22
-from fanglei.source_contract import build_sources_artifact_v21, parse_sources_artifact
+from fanglei.research import (
+    FetchedDocument,
+    RuleBasedEvidenceExtractor,
+    deduplicate_sources,
+    extract_qualitative_primary_evidence,
+    verify_claims,
+    verify_claims_v22,
+)
+from fanglei.source_contract import (
+    AuthoritativePrimarySetPolicyV1,
+    build_sources_artifact_v21,
+    parse_sources_artifact,
+)
+from fanglei.research_focus import ResearchFocusV1
 from fanglei.publication_metadata import (
     PublicationDateReviewV1,
     apply_publication_date_reviews_to_index,
@@ -49,6 +61,26 @@ def _load(run_dir: Path) -> tuple[RunManifest, ArtifactRegistry]:
             state.owner = owner
             if name == "questions.json":
                 state.dependencies = {"source.md": manifest.artifacts["source.md"].content_hash or ""}
+    if "research_focus.json" in registry.graph:
+        try:
+            focus_path = run_dir / "research_focus.json"
+            if not focus_path.is_file():
+                raise ArtifactConflictError("registered research_focus.json is missing")
+            focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+            if focus.run_id != manifest.run_id:
+                raise ValueError("research focus run_id does not match the run manifest")
+            source_artifact = registry.read_json("sources.json")
+            parsed_sources = parse_sources_artifact(source_artifact)
+            source_policy = getattr(parsed_sources, "source_policy", None)
+            if isinstance(source_policy, AuthoritativePrimarySetPolicyV1) and (
+                source_policy.run_id != focus.run_id
+                or source_policy.case_id != focus.case_id
+                or parsed_sources.package_admissibility != "admissible"
+            ):
+                raise ValueError("research focus identity does not match its approved authority source package")
+        except Exception as error:
+            registry.save_manifest()
+            raise ArtifactConflictError(f"invalid registered research_focus.json: {error}") from error
     registry.save_manifest()
     return manifest, registry
 
@@ -353,6 +385,131 @@ def _render_research(run_id: str, questions: list[str], sources: list[dict[str, 
     return "\n".join(lines)
 
 
+def _focus_evidence_layer(
+    claim: dict[str, Any], approved_documents: dict[str, dict[str, str]]
+) -> str | None:
+    attestation = claim.get("authority_attestation")
+    if not isinstance(attestation, dict):
+        return None
+    source_ids = attestation.get("source_ids", [])
+    metadata = [approved_documents[source_id] for source_id in source_ids if source_id in approved_documents]
+    if len(metadata) != len(source_ids) or not metadata:
+        return None
+    descriptors = [
+        f"{row.get('document_identity', '')} {row.get('evidence_role', '')}".casefold()
+        for row in metadata
+    ]
+    if attestation.get("kind") == "deterministic_document_comparison" and all(
+        "sep" in value or "projection" in value for value in descriptors
+    ):
+        return "sep"
+    if attestation.get("kind") == "document_report" and any(
+        ("statement" in value or ("meeting" in value and "context" in value))
+        and "target" in value
+        for value in descriptors
+    ):
+        return "statement"
+    return None
+
+
+def _render_research_focus(
+    run_id: str,
+    focus: ResearchFocusV1,
+    source_artifact: dict[str, Any],
+    facts: dict[str, Any],
+) -> str:
+    """Render a focused, deterministic brief from allowed facts only."""
+    sources = source_artifact.get("sources", [])
+    policy = source_artifact.get("source_policy", {})
+    approved_documents = {
+        row["source_id"]: row
+        for row in policy.get("approved_documents", [])
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    } if isinstance(policy, dict) else {}
+    allowed_claims = [
+        claim for claim in facts.get("claims", [])
+        if isinstance(claim, dict)
+        and claim.get("verification_status") == "verified"
+        and claim.get("allowed_downstream") is True
+    ]
+    sep_claims = [claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "sep"]
+    statement_claims = [
+        claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "statement"
+    ]
+
+    def render_claim(claim: dict[str, Any]) -> list[str]:
+        source_ids = list(dict.fromkeys(claim.get("source_ids", [])))
+        lines = [f"- {claim['claim_text']} `[{claim['claim_id']}; {', '.join(source_ids)}]`"]
+        for evidence in claim.get("evidence", []):
+            if evidence.get("relation") != "supports" or not evidence.get("evidence_eligible", True):
+                continue
+            locator = evidence.get("paragraph_locator") or evidence.get("source_section") or "source excerpt"
+            lines.append(f"  - Evidence ({evidence.get('source_id')}, {locator}): “{evidence.get('evidence_text', '')}”")
+        return lines
+
+    lines = [
+        "# Research Brief",
+        "",
+        f"Run: `{run_id}`",
+        "",
+        "## Locked research question",
+        "",
+        focus.primary_question,
+        "",
+        "## Research subquestions",
+        "",
+    ]
+    lines.extend(f"{index}. {question}" for index, question in enumerate(focus.subquestions, start=1))
+    lines.extend(["", "## A. June-to-September SEP revisions", ""])
+    lines.extend(line for claim in sep_claims for line in render_claim(claim))
+    if not sep_claims:
+        lines.append("- No verified, downstream-allowed SEP comparison facts are available.")
+    lines.extend(["", "## B. September FOMC statement context", ""])
+    lines.extend(line for claim in statement_claims for line in render_claim(claim))
+    if not statement_claims:
+        lines.append("- No verified, downstream-allowed target-meeting statement facts are available.")
+    lines.extend([
+        "",
+        "## Evidence boundary",
+        "",
+        "The SEP records FOMC participants’ projections and assessments; it is not a unified Federal Reserve commitment. "
+        "The FOMC statement records the Committee’s public meeting statement. "
+        "These evidence layers are presented side by side as documented context; this report does not infer a causal relationship.",
+        "",
+        "## Framing constraints",
+        "",
+    ])
+    lines.extend(f"- {constraint}" for constraint in focus.constraints)
+    excluded = [
+        claim for claim in facts.get("claims", [])
+        if not (
+            isinstance(claim, dict)
+            and claim.get("verification_status") == "verified"
+            and claim.get("allowed_downstream") is True
+            and _focus_evidence_layer(claim, approved_documents) in {"sep", "statement"}
+        )
+    ]
+    lines.extend(["", "## Excluded fact records", ""])
+    lines.append(
+        f"{len(excluded)} records were not used as substantive assertions because they are unverified, "
+        "not allowed downstream, or outside the two focused evidence layers."
+    )
+    lines.extend(["", "## Source index", ""])
+    for source in sources:
+        lines.append(
+            f"- `{source['source_id']}` [{source['title']}]({source['url']})，可信度 {source.get('credibility_tier', 'not recorded')}"
+        )
+    lines.extend([
+        "",
+        "## Traceability",
+        "",
+        "Substantive statements are limited to facts with `verification_status=verified` and `allowed_downstream=true`; "
+        "trace each through `claim_id → evidence → source_id → original URL`.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def run_v02_pipeline(
     run_id: str,
     runs_dir: Path,
@@ -518,6 +675,32 @@ def run_v02_pipeline(
         if source_artifact.get("schema_version") == "2.1" and source_artifact.get("package_admissibility") != "admissible":
             raise ValueError("SOURCE_PACKAGE_INADMISSIBLE: source package does not permit claim extraction")
         evidence = RuleBasedEvidenceExtractor().extract(documents, _question_texts(registry.read_json("questions.json")))
+        if (
+            authority_claims
+            and parsed_source_artifact is not None
+            and isinstance(parsed_source_artifact.source_policy, AuthoritativePrimarySetPolicyV1)
+        ):
+            approved_statement_ids = {
+                document.source_id
+                for document in parsed_source_artifact.source_policy.approved_documents
+                if (
+                    "statement" in f"{document.document_identity} {document.evidence_role}".casefold()
+                    or (
+                        "meeting" in document.evidence_role.casefold()
+                        and "context" in document.evidence_role.casefold()
+                    )
+                )
+            }
+            existing_evidence = {
+                (item.get("source_id"), item.get("evidence_text")) for item in evidence
+            }
+            evidence.extend(
+                item for item in extract_qualitative_primary_evidence(
+                    documents,
+                    approved_source_ids=approved_statement_ids,
+                )
+                if (item.get("source_id"), item.get("evidence_text")) not in existing_evidence
+            )
         evidence = gate_evidence(evidence, documents)
         if source_artifact.get("schema_version") == "2.0":
             # Preserve the complete historical path for already materialized V2.0 runs.
@@ -547,10 +730,20 @@ def run_v02_pipeline(
     if stop_after == "factcheck": return run_dir
 
     def synthesize() -> None:
-        questions = _question_texts(registry.read_json("questions.json"))
-        sources = registry.read_json("sources.json")["sources"]
+        source_artifact = registry.read_json("sources.json")
         facts = registry.read_json("facts.json")
-        registry.write_text("research.md", _render_research(run_id, questions, sources, facts), "research_synthesis", force=(run_dir / "research.md").exists() or force_stage == "research_synthesis")
+        if "research_focus.json" in registry.graph:
+            focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+            research = _render_research_focus(run_id, focus, source_artifact, facts)
+        else:
+            questions = _question_texts(registry.read_json("questions.json"))
+            research = _render_research(run_id, questions, source_artifact["sources"], facts)
+        registry.write_text(
+            "research.md",
+            research,
+            "research_synthesis",
+            force=(run_dir / "research.md").exists() or force_stage == "research_synthesis",
+        )
     _execute(manifest, registry, "research_synthesis", synthesize, force_stage == "research_synthesis")
     manifest.status = "analyzed"
     registry.save_manifest()
