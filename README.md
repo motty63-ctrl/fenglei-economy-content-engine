@@ -9,11 +9,11 @@
 
 > **核心原则：**AI 可以参与研究、表达和创意，但不能自己决定未经验证的事实是否可以进入最终内容。
 
-这不是让 LLM 直接读网页然后写财经稿。来源身份、证据范围、claim 验证和下游资格都经过可追溯的检查。
+这不是让 LLM 直接读网页然后写财经稿。Fed Case 2 展示了如何把来源身份、证据范围、claim 验证和下游资格记录为可追溯的检查。
 
 ## Demo：从官方来源到短视频
 
-项目把内容生产组织成可审查的本地 run：保留来源与 capture provenance，人工审核 authoritative source package，只让通过资格检查的事实进入研究与内容流程，再由人选择 angle，生成脚本、旁白、时间线、分镜和视频。
+项目把内容生产组织成可审查的本地 run：保留来源与 capture provenance，人工审核 authoritative source package，只让通过资格检查的事实进入研究与内容流程。在 Fed Case 2 中，angle 候选由离线 planner 生成，再由用户人工选择；这描述的是本案例的流程，不代表所有 API 或执行路径都强制等待人工选题。
 
 Fed Case 2 对比 2026 年 6 月与 9 月的 SEP，并将预测变化与 9 月 FOMC statement 并列呈现。最终视频为 **1080×1920、30 FPS、H.264/AAC、8 个场景、12 个句级字幕片段**。字幕采用 sentence-level proportional timing，不是 WhisperX word-level forced alignment。
 
@@ -31,7 +31,7 @@ flowchart TD
     D --> E[Research Focus]
     E --> F[Research 综合]
     F --> G[Angle Planning]
-    G --> H[人工选择 Angle]
+    G --> H[Fed Case 2：人工选择 Angle]
     H --> I[Evidence-Grounded Script]
     I --> J[TTS 配音]
     J --> K[Timeline 与 Storyboard]
@@ -63,9 +63,9 @@ SEP 表示 **FOMC participants 的 projections / assessments**，不是委员会
 
 ## 为什么采用 Evidence-Grounded 设计
 
-每条事实都应能回到具体文档、capture、证据片段和适用范围。人工批准的 authoritative source package 确定本案例可使用哪些官方材料；claim-level verification 再判断证据是否直接支持具体命题。`verification_basis` 区分独立来源互证与官方 primary document attestation；`allowed_downstream` 则由完整资格规则决定。
+在 Fed Case 2 中，每条已核验事实都能回到具体文档、capture、证据片段和适用范围。人工批准的 authoritative source package 确定本案例可使用哪些官方材料；claim-level verification 再判断证据是否直接支持具体命题。`verification_basis` 区分独立来源互证与官方 primary document attestation；`allowed_downstream` 则由完整资格规则决定。
 
-`research_focus` 将案例问题、子问题和表达边界独立记录。Research 只使用允许进入下游的事实。Angle planning 可离线、确定性运行，但候选 angle 仍由人选择。脚本保留 attribution 与 authority scope，避免把参与者预测改写成委员会承诺，或把文件记载扩展成未经支持的因果判断。
+`research_focus` 将案例问题、子问题和表达边界独立记录。在 Fed Case 2 的 research-focus 路径中，Research synthesis 使用 `allowed_downstream=true` 的事实；这不是对 legacy renderer 或所有执行路径的统一描述。Angle planning 可离线、确定性运行；Fed Case 2 的候选 angle 由用户人工选择。脚本检查明确的 attribution 与 authority-scope 风险，帮助避免把参与者预测改写成委员会承诺，或把文件记载扩展成未经支持的因果判断；它不是对任意语义扩写的完整自动证明。
 
 ## Fail-Closed 示例
 
@@ -82,7 +82,15 @@ SEP 表示 **FOMC participants 的 projections / assessments**，不是委员会
 - **配音：**Volcengine TTS
 - **字幕计时：**sentence-level proportional timing；尚未使用 WhisperX word-level forced alignment
 
-MP4 是本地 run 产物，尚无已验证的公开下载链接。案例细节、验证记录及文件信息见[完整案例记录](docs/FED_CASE_2_DEMO.md)。
+最终 MP4 可从上方 GitHub Release 查看或下载。案例细节、验证记录及文件信息见[完整案例记录](docs/FED_CASE_2_DEMO.md)。
+
+## 我的职责与贡献
+
+- 定义项目要解决的问题、目标和 Evidence-Grounded 工作流。
+- 设计来源审批、事实验证、人工审核节点和验收边界。
+- 负责 Fed Case 2 的来源选择与审核、选题决策，以及最终视频的事实和成品验收。
+- 使用 ChatGPT / Codex 辅助代码实现、测试、调试和文档整理；不将项目描述为独立手写全部代码。
+- 对产品决策、事实边界和最终交付结果负责。
 
 ## 工程设计亮点
 
@@ -141,7 +149,7 @@ macOS/Linux 可将解释器路径替换为 `.venv/bin/python`。网络检索、�
 - 当前 Demo 字幕使用句级比例计时，尚未采用 WhisperX 词级强制对齐。
 - 视觉部分满足 MVP 的数据卡片与对比表达，仍有进一步打磨空间。
 - 本案例 angle planning 离线、确定性完成；live LLM planning 不是演示链路的必要组成部分。
-- 视频目前保留在本地 run；公开播放或下载前，需要发布并验证真实的 Release asset。
+- 视频通过 GitHub Release `v0.1.0` 公开提供；Release asset 的可用性和文件校验信息记录在案例文档中。
 - 网络检索、provider、TTS、字幕对齐和渲染各有配置与批准边界；项目目前没有社交平台自动发布功能。
 
 ## Case Study

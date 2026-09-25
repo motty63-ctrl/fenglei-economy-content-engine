@@ -1,3 +1,3 @@
-"""Fanglei economy content engine."""
+"""Fenglei Economy Content Engine."""
 
 __version__ = "0.1.0"

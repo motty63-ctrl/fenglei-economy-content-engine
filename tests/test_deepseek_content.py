@@ -118,7 +118,7 @@ def test_deepseek_script_parses_structured_sentences() -> None:
     ))
     assert result.sentences[1].claim_ids == ["claim_007"]
     system = captured["messages"][0]["content"]
-    assert "Fanglei Economy Style Guide" in system
+    assert "Fenglei Economy Content Engine 内容风格指南" in system
     assert "最多1个主要比喻" in system
     assert "根据数据显示" in system
     assert "API observation 后不要擅自添加百分号" in system
@@ -249,7 +249,7 @@ def test_deepseek_repair_sends_only_allowlisted_context_and_issue_codes() -> Non
         "HOOK_INVALID", "CLAIM_BINDING_MISSING", "CORE_JUDGMENT_MISSING", "REPEATED_SENTENCE"
     }
     assert captured["temperature"] == 0.0
-    assert "Fanglei Economy Style Guide" in captured["messages"][0]["content"]
+    assert "Fenglei Economy Content Engine 内容风格指南" in captured["messages"][0]["content"]
     assert "按缺口一次提交足够数量" in captured["messages"][0]["content"]
     assert "还可以把疑问写成清单" not in captured["messages"][0]["content"]
     assert SENTINEL not in serialized

@@ -2,7 +2,9 @@
 
 ## Verified implementation baseline
 
-Approved Checkpoint Authoring Workflow V1 is implemented at commit `75436e1994ffe037f15f6eda706f98408fd3179e` on `main`. At the start of this documentation closeout, local `main`, `origin/main`, and GitHub `main` pointed to that commit and the working tree was clean. This hash records the implementation baseline; it is not a self-updating requirement for later documentation commits.
+Approved Checkpoint Authoring Workflow V1 was implemented at commit `75436e1994ffe037f15f6eda706f98408fd3179e` on `main`. This is a historical implementation baseline, not the current HEAD or a self-updating requirement for later documentation commits.
+
+The Fed Case 2 Video MVP is complete on `main` and publicly released as V0.1.0. The GitHub Release includes the verified `final.mp4` asset (SHA-256 `8796c73d62bed1090a9bbf6af268f5b91406b36913954d944953955d157c564d`). The implementation and release are already pushed; any new documentation-only closeout commit remains local until separately authorized for push. The implementation baseline hash above is historical, not the current HEAD.
 
 ## Runtime and run storage
 
@@ -30,7 +32,7 @@ The separate Python API path uses `CheckpointImporter` to stage a checkpoint and
 
 Import IDs retain external IDs in `id_mapping.json`; the import manifest records checkpoint and importer fingerprints, pinned source hashes, and semantic artifact hashes. Provenance capture is restricted to official HTTPS URLs listed in the checkpoint. A previously pinned URL/content hash is reused; a content change is surfaced as `SOURCE_CONTENT_CHANGED`.
 
-The local end-to-end authoring → approval → seal → import → promotion acceptance path is covered by tests. It does not mean that the Fed SEP case has a new V2 checkpoint or production run.
+The local end-to-end authoring → approval → seal → import → promotion acceptance path is covered by tests. Fed Case 2 separately has a completed native run and public video MVP, but no new Fed V2 checkpoint or checkpoint-import promotion.
 
 ## Fed SEP revisions case
 
@@ -44,7 +46,7 @@ The final MP4 is `runs/2026-09-24-001-fed-sep-case-2-source-inventory/final.mp4`
 
 The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. The missing 12 formal `AngleCandidate` fields were not recovered from approved source material. Do not repair, backfill, infer, default, copy, or upgrade that checkpoint. GDP artifacts and test fixtures are prohibited recovery sources.
 
-The closeout commits are local on branch `overnight/fed-sep-evidence-2026-09-24` and have not been pushed. Read actual Git state for current HEAD and ahead/behind; hashes in documentation record snapshots and are not self-updating HEAD requirements. See `docs/CURRENT_HANDOFF.md` for the continuation boundary.
+V0.1.0 implementation and video release are public on `main`. Only the current documentation-only closeout commit is local and awaits separate push authorization. Read actual Git state for current HEAD and ahead/behind; hashes in documentation record snapshots and are not self-updating HEAD requirements. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
 ## Voice, alignment, and renderer boundaries
 
 Production narration is a separate audio-only operation. `generate-voice` supports Azure and Volcengine provider adapters, validates canonical WAV audio and signal quality, writes narration audio/metadata/quality artifacts, and stops at `voice_review_pending`. Human approval is bound to the current audio hash. The CLI's `prepare-renderer` path accepts only fake narration, alignment, and probe providers; its outputs are engineering fixtures, not production speech or measured timings.

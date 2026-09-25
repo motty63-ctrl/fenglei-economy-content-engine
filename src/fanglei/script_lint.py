@@ -233,7 +233,7 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
     analogies = [sentence for sentence in draft.sentences if sentence.sentence_type == "analogy"]
     for sentence in analogies[1:]:
         issues.append(LintIssue(code="ANALOGY_OVERUSE",
-                                message="Fanglei style permits at most one main analogy",
+                                message="Fenglei style permits at most one main analogy",
                                 sentence_id=sentence.sentence_id))
     template_phrases = ("我的判断是", "你不妨想想")
     template_sentences = [sentence for sentence in draft.sentences

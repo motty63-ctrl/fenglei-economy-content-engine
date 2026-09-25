@@ -30,11 +30,11 @@ The importer performs structural conversion and deterministic metadata derivatio
 
 Recover missing semantic values only from original approved material whose checkpoint identity, case context, and approval provenance bind it to the import being recovered. A complete artifact from another case or a test fixture is not a substitute. Do not infer, regenerate, default, or copy missing values; if the original approved material cannot be located with sufficient provenance, keep the import blocked.
 
-## Fed Case 2 uses a new V2 checkpoint
+## Historical decision: Fed Case 2 uses a new V2 checkpoint
 
 The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. Its 12 missing `AngleCandidate` values have not been recovered from original approved material; do not repair, backfill, infer, default, copy, or upgrade that checkpoint to V2. GDP artifacts and test fixtures are not recovery sources.
 
-The next Fed Case 2 path is to create a separate, complete `approved-checkpoint/2.0` checkpoint. Begin with a read-only inventory for an existing complete formal source run; if none exists, decide which native pipeline stage to resume. Until then, no new Fed V2 checkpoint, promotion, or production run exists.
+At the time of this decision, the next Fed Case 2 path was to create a separate, complete `approved-checkpoint/2.0` checkpoint from a complete formal source run, rather than revive the legacy blocked checkpoint. Subsequent work completed a native Case 2 run and public video MVP. No new Fed V2 checkpoint or checkpoint-import promotion was created; the original checkpoint remains blocked. See `cases/fed-sep-revisions/CASE_STATE.md` for current case status.
 
 ## Provenance is limited to the checkpoint's source allowlist
 
