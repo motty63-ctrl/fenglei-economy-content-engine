@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fanglei.angle_policy import score_angles, select_angle, validate_angle_diversity
 from fanglei.content_models import AngleProposal, ScriptReadyClaim
 
@@ -91,9 +93,9 @@ def test_authority_angle_preserves_attribution_scope_and_rejects_expansion() -> 
 
 def test_diversity_requires_distinct_question_hook_takeaway_and_framing() -> None:
     diverse = [
-        _proposal("angle_001", "纠正数字冲突误解", framing="misconception_correction"),
-        _proposal("angle_002", "解释统计精度", framing="economic_data_literacy"),
-        _proposal("angle_003", "教读者阅读媒体数字", framing="media_literacy"),
+        _proposal("angle_001", "纠正数字冲突误解", hook="先核对同一指标吗？", framing="overview"),
+        _proposal("angle_002", "解释统计精度", hook="统计口径在哪里？", framing="focused_comparison"),
+        _proposal("angle_003", "教读者阅读媒体数字", hook="来源说明了什么？", framing="scope_boundary"),
     ]
     result = validate_angle_diversity(diverse)
     assert result.passed is True
@@ -101,6 +103,7 @@ def test_diversity_requires_distinct_question_hook_takeaway_and_framing() -> Non
 
     clones = [item.model_copy(update={
         "core_question": "为什么两个GDP数字不同",
+        "hook": "同一条问题",
         "hook_mechanism": "same_hook",
         "audience_takeaway": "同一个收获",
         "narrative_framing": "misconception_correction",
@@ -108,4 +111,100 @@ def test_diversity_requires_distinct_question_hook_takeaway_and_framing() -> Non
     rejected = validate_angle_diversity(clones)
     assert rejected.passed is False
     assert {"CORE_QUESTION_NOT_DIVERSE", "HOOK_MECHANISM_NOT_DIVERSE",
-            "AUDIENCE_TAKEAWAY_NOT_DIVERSE", "NARRATIVE_FRAMING_NOT_DIVERSE"}.issubset(rejected.issue_codes)
+            "HOOK_NOT_DIVERSE", "AUDIENCE_TAKEAWAY_NOT_DIVERSE",
+            "NARRATIVE_FRAMING_NOT_DIVERSE"}.issubset(rejected.issue_codes)
+
+
+def test_generic_distinct_frames_do_not_require_legacy_gdp_frame_set() -> None:
+    proposals = [
+        _proposal("angle_001", "overview", hook="哪些记录可以放在一起阅读？", framing="overview"),
+        _proposal("angle_002", "comparison", hook="单项记录具体呈现什么？", framing="focused_comparison"),
+        _proposal("angle_003", "scope", hook="证据范围到哪里为止？", framing="scope_boundary"),
+    ]
+    result = validate_angle_diversity(proposals)
+    assert result.passed is True
+    assert "REQUIRED_GDP_FRAMINGS_MISSING" not in result.issue_codes
+
+
+def test_evidence_strength_counts_distinct_independence_keys_not_source_ids() -> None:
+    same_institution = _authority_claim().model_copy(update={
+        "source_ids": ["src_june", "src_september"],
+    })
+    proposal = _proposal(
+        "angle_001",
+        same_institution.claim_text,
+        hook="Federal Reserve FOMC participants SEP median projection changed from 3.8 Percent to 4.1 Percent in 2026?",
+    ).model_copy(update={
+        "supporting_claim_ids": ["claim_authority"],
+    })
+    scored = score_angles(
+        [proposal], (same_institution,), "unrelated source text",
+        source_independence_keys={"src_june": "federal-reserve", "src_september": "federal-reserve"},
+    )[0]
+    assert scored.evidence_strength == 2
+    assert scored.eligibility == "eligible"
+
+
+def test_distinct_independence_keys_can_raise_evidence_strength() -> None:
+    claim = _claim().model_copy(update={"source_ids": ["source_a", "source_b"]})
+    proposal = _proposal("angle_001", "supported scope").model_copy(update={
+        "supporting_claim_ids": ["claim_007"],
+    })
+    scored = score_angles(
+        [proposal], (claim,), "unrelated source text",
+        source_independence_keys={"source_a": "institution-a", "source_b": "institution-b"},
+    )[0]
+    assert scored.evidence_strength == 3
+
+
+def test_originality_gate_does_not_reject_reused_allowed_claim_text() -> None:
+    claim = _authority_claim()
+    proposal = _proposal(
+        "angle_001",
+        claim.claim_text,
+        hook="What did the two published assessments record for 2026?",
+    ).model_copy(update={"supporting_claim_ids": [claim.claim_id]})
+    source = f"User input includes the approved fact: {claim.claim_text}"
+    scored = score_angles([proposal], (claim,), source)[0]
+    assert scored.eligibility == "eligible"
+    assert "SOURCE_REUSE" not in scored.rejection_codes
+
+
+def test_originality_gate_still_rejects_copied_creative_framing() -> None:
+    claim = _authority_claim()
+    copied_title = "Fed SEP Case 2 source inventory"
+    proposal = _proposal(
+        "angle_001",
+        claim.claim_text,
+        hook="What did the two published assessments record for 2026?",
+    ).model_copy(update={
+        "title": copied_title,
+        "supporting_claim_ids": [claim.claim_id],
+    })
+    scored = score_angles([proposal], (claim,), copied_title)[0]
+    assert scored.eligibility == "rejected"
+    assert "SOURCE_REUSE" in scored.rejection_codes
+
+
+def test_high_subjective_scores_cannot_override_factual_rejection() -> None:
+    unsafe = _proposal(
+        "angle_001", "Inflation caused the rate change", "Why did inflation force the decision?"
+    ).model_copy(update={
+        "supporting_claim_ids": ["claim_999"],
+        "audience_relevance": 5,
+        "novelty": 5,
+        "hook_strength": 5,
+        "visual_potential": 5,
+        "explainability": 5,
+    })
+    scored = score_angles([unsafe], (_claim(),), "unrelated source text")[0]
+    assert scored.eligibility == "rejected"
+    assert "UNKNOWN_CLAIM" in scored.rejection_codes
+
+
+def test_scoring_policy_documents_runtime_gates_without_fixed_gdp_framings() -> None:
+    policy = (Path(__file__).parents[1] / "docs/v0.3/angle-scoring-policy.md").read_text("utf-8")
+    assert "`evidence_strength >= 2`, `explainability >= 3`" in policy
+    assert "does not impose separate eligibility thresholds on `audience_relevance`, `hook_strength`, or `controversy_risk`" in policy
+    assert "no fixed GDP-oriented set is mandatory" in policy
+    assert "does not increase the run's `independent_source_count`" in policy

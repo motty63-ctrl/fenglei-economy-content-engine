@@ -3,7 +3,7 @@ import json
 import re
 import urllib.request
 from typing import Any, Callable, Protocol
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
 from fanglei.content_style import FANGLEI_ECONOMY_STYLE_GUIDE
 from fanglei.errors import ProviderError
@@ -17,6 +17,8 @@ class AngleGenerationInput(BaseModel):
     research_questions: list[str]
     research_md: str
     fact_palette: tuple[ScriptReadyClaim, ...]
+    research_focus: dict[str, Any] | None = None
+    authority_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScriptGenerationInput(BaseModel):
@@ -168,8 +170,8 @@ class DeepSeekContentPlanningProvider:
         facts = self._fact_payload(request.fact_palette)
         system = (
             "你是风雷经济的内容策划。只允许使用输入 JSON 中的 verified claims，不得创造数字、日期、机构结论或政策事实。"
-            "生成 JSON，不要输出 Markdown。候选角度必须真正不同，并覆盖 misconception_correction、"
-            "economic_data_literacy、media_literacy 三种 narrative_framing。Hook 不得制造假冲突。"
+            "生成 JSON，不要输出 Markdown。候选角度必须真正不同；叙事框架应由输入证据自然决定，不要求固定主题集合。"
+            "Hook 不得制造假冲突。"
             "所有评分字段必须使用0到5的整数，5为最高，不得使用10分制。"
             "如claim的verification_basis为authoritative_primary_attestation，必须在角度文案中保留机构/文件归因和attestation中的"
             "指标、期间、统计口径、单位与预测属性；不得把projection写成承诺，也不得添加未被原文直接支持的因果、动机或市场影响。"
@@ -178,6 +180,8 @@ class DeepSeekContentPlanningProvider:
             "task": "生成3到5个中文经济短视频候选角度 JSON",
             "topic": request.core_topic,
             "research_questions": request.research_questions,
+            "research_focus": request.research_focus,
+            "authority_metadata": request.authority_metadata,
             "verified_claims_only": facts,
             "output_schema": {
                 "candidates": [{
@@ -434,7 +438,7 @@ class DeepSeekContentPlanningProvider:
 class MockContentPlanningProvider:
     name = "mock-content"
     model = None
-    angle_prompt_version = "angles-v1"
+    angle_prompt_version = "offline-generic-angles-v1"
     script_prompt_version = "script-v1"
 
     @staticmethod
@@ -450,18 +454,9 @@ class MockContentPlanningProvider:
         return claim_text
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
-        claim_id = request.fact_palette[0].claim_id
-        rows = [
-            ("angle_001", "小数点后，藏着一个假问题", "两个权威数字差一点，问题可能不在经济本身。", "显示精度不同，不等于结论冲突", "number_gap_suspense", "看懂数字不同未必代表结论冲突", "misconception_correction"),
-            ("angle_002", "数字越长，就一定越准吗", "更多小数位带来的是信息，还是错觉？", "公开传播和研究计算需要不同精度", "precision_question", "理解统计值的原始精度和展示精度", "economic_data_literacy"),
-            ("angle_003", "看GDP，先别急着比小数", "读经济数据，第一步为什么不是比较大小？", "先核对指标、时期和精度，再解释经济含义", "reader_checklist", "学会核对媒体中的指标口径和来源", "media_literacy"),
-        ]
-        return AngleProposalResult(candidates=[AngleProposal(
-            angle_id=i, title=t, hook=h, core_question=h, core_insight=insight,
-            hook_mechanism=mechanism, audience_takeaway=takeaway, narrative_framing=framing,
-            supporting_claim_ids=[claim_id], audience_relevance=5, novelty=4,
-            hook_strength=4, visual_potential=3, explainability=5,
-        ) for i, t, h, insight, mechanism, takeaway, framing in rows])
+        from fanglei.offline_angle_planner import plan_offline_angles
+
+        return plan_offline_angles(request)
 
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
         claim = request.fact_palette[0]

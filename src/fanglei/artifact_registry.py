@@ -30,7 +30,9 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     "sources.json": ("source_selection", ("search_results.json", "source_documents/index.json")),
     "facts.json": ("factcheck", ("questions.json", "sources.json", "source_documents/index.json")),
     "research.md": ("research_synthesis", ("questions.json", "sources.json", "facts.json")),
-    "angles.json": ("angle_generation", ("facts.json", "research.md", "questions.json", "source.md")),
+    "angles.json": (
+        "angle_generation", ("facts.json", "research.md", "questions.json", "source.md", "sources.json")
+    ),
     "angle.md": ("angle_selection", ("angles.json", "facts.json")),
     "script.json": ("script_generation", ("angle.md", "facts.json", "research.md", "source.md")),
     "script.md": ("script_render", ("script.json",)),
@@ -76,16 +78,17 @@ ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
-# The focus profile is opt-in and only replaces Research's framing dependency.
-# Ordinary runs continue using ARTIFACT_GRAPH unchanged. Keeping questions.json
-# as a Research dependency preserves its established invalidation path while
-# research_focus.json becomes the preferred synthesis frame.
+# The focus profile is opt-in. Research and content planning both track the
+# explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     **ARTIFACT_GRAPH,
     "research_focus.json": ("research_focus", ("sources.json", "facts.json")),
     "research.md": (
         "research_synthesis",
         ("questions.json", "sources.json", "facts.json", "research_focus.json"),
+    ),
+    "angles.json": (
+        "angle_generation", ("facts.json", "research.md", "research_focus.json", "source.md", "sources.json")
     ),
 }
 

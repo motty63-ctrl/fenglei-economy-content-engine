@@ -24,13 +24,19 @@ def _prepared_run(tmp_path: Path) -> Path:
     _write_json(registry, "questions.json", {"core_topic": "美国GDP精度差异", "research_questions": [{"question": "为何显示不同？"}]}, "analyze")
     _write_json(registry, "search_results.json", {"results": []}, "search")
     _write_json(registry, "source_documents/index.json", {"documents": []}, "source_fetch")
-    _write_json(registry, "sources.json", {"sources": []}, "source_selection")
+    _write_json(registry, "sources.json", {
+        "schema_version": "2.0", "selection_status": "insufficient_sources", "sources": []
+    }, "source_selection")
     _write_json(registry, "facts.json", {"claims": [{
         "claim_id": "claim_007", "claim_text": "United States real GDP grew 2.8% in 2024.", "claim_type": "fact",
         "verification_status": "verified", "allowed_downstream": True,
         "source_ids": ["bea", "worldbank", "oecd"],
         "evidence": [{"source_id": "worldbank", "original_url": "https://api.worldbank.test/data",
                       "evidence_eligible": True, "observation": 2.7938}],
+    }, {
+        "claim_id": "claim_999", "claim_text": "Unverified fixture claim.", "claim_type": "fact",
+        "verification_status": "unverified", "allowed_downstream": False,
+        "source_ids": [], "evidence": [],
     }]}, "factcheck")
     registry.write_text("research.md", "# 研究\n两个值来自相同年度指标，显示精度不同。", "research_synthesis")
     registry.save_manifest()
@@ -42,8 +48,8 @@ def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: 
     provider = MockContentPlanningProvider()
     run_content_pipeline(run.name, tmp_path, provider, angle_id="angle_003", speaking_rate=4.0)
     angles = json.loads((run / "angles.json").read_text(encoding="utf-8"))
-    assert len(angles["candidates"]) == 3
-    assert angles["recommended_angle_id"] == "angle_001"
+    assert 3 <= len(angles["candidates"]) <= 5
+    assert angles["recommended_angle_id"] in {item["angle_id"] for item in angles["candidates"]}
     assert "selected_angle_id: `angle_003`" in (run / "angle.md").read_text(encoding="utf-8")
     script = json.loads((run / "script.json").read_text(encoding="utf-8"))
     assert script["speaking_rate_chars_per_second"] == 4.0
@@ -57,6 +63,59 @@ def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: 
 
 def manifest_status(run: Path, artifact: str) -> str:
     return json.loads((run / "run.json").read_text(encoding="utf-8"))["artifacts"][artifact]["status"]
+
+
+class _CapturingOfflineProvider(MockContentPlanningProvider):
+    def generate_angles(self, request):
+        self.angle_request = request
+        self.angle_result = super().generate_angles(request)
+        return self.angle_result
+
+
+def test_angle_generation_prefers_current_research_focus_and_stops_before_selection(tmp_path: Path) -> None:
+    run = _prepared_run(tmp_path)
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text("utf-8")))
+    registry = ArtifactRegistry(run, manifest, research_focus_mode=True)
+    focus = {
+        "schema_version": "research-focus/1.0",
+        "run_id": run.name,
+        "case_id": "case-from-focus",
+        "primary_question": "FOCUS: what did the verified documents record?",
+        "subquestions": ["FOCUS subquestion A", "FOCUS subquestion B", "FOCUS subquestion C"],
+        "constraints": ["FOCUS constraint: do not infer causality."],
+        "created_at": "2026-09-25T00:00:00+00:00",
+        "created_by": "test",
+    }
+    registry.write_json("research_focus.json", focus, "research_focus")
+    research = (run / "research.md").read_text(encoding="utf-8")
+    registry.write_text("research.md", research, "research_synthesis", force=True)
+    registry.save_manifest()
+
+    provider = _CapturingOfflineProvider()
+    run_content_pipeline(run.name, tmp_path, provider, stop_after="angle_generation", force_stage="angle_generation")
+
+    request = provider.angle_request
+    assert all(
+        set(candidate.supporting_claim_ids) <= {claim.claim_id for claim in request.fact_palette}
+        for candidate in provider.angle_result.candidates
+    )
+    assert "claim_999" not in {claim.claim_id for claim in request.fact_palette}
+    assert request.research_focus["primary_question"] == focus["primary_question"]
+    assert request.research_questions == focus["subquestions"]
+    assert request.core_topic == focus["primary_question"]
+    assert request.research_focus["constraints"] == focus["constraints"]
+    assert request.research_md == research
+    assert "angle.md" not in {path.name for path in run.iterdir()}
+    assert manifest_status(run, "angle.md") == "missing"
+
+
+def test_angle_generation_uses_legacy_questions_when_focus_is_absent(tmp_path: Path) -> None:
+    run = _prepared_run(tmp_path)
+    provider = _CapturingOfflineProvider()
+    run_content_pipeline(run.name, tmp_path, provider, stop_after="angle_generation", force_stage="angle_generation")
+    assert provider.angle_request.research_focus is None
+    assert provider.angle_request.core_topic == "美国GDP精度差异"
+    assert provider.angle_request.research_questions == ["为何显示不同？"]
 
 
 def test_rate_change_rebuilds_script_and_stales_are_resolved(tmp_path: Path) -> None:

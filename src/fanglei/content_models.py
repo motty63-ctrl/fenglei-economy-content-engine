@@ -51,6 +51,7 @@ class AngleDiversityResult(BaseModel):
     passed: bool
     candidate_count: int
     distinct_core_questions: int
+    distinct_hooks: int
     distinct_hook_mechanisms: int
     distinct_audience_takeaways: int
     distinct_framings: int

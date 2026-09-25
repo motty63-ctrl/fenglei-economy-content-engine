@@ -8,13 +8,21 @@ from fanglei.content_policy import build_fact_palette
 
 def test_v03_artifacts_have_separate_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["angles.json"] == (
-        "angle_generation", ("facts.json", "research.md", "questions.json", "source.md")
+        "angle_generation", ("facts.json", "research.md", "questions.json", "source.md", "sources.json")
     )
     assert ARTIFACT_GRAPH["angle.md"] == ("angle_selection", ("angles.json", "facts.json"))
     assert ARTIFACT_GRAPH["script.json"] == (
         "script_generation", ("angle.md", "facts.json", "research.md", "source.md")
     )
     assert ARTIFACT_GRAPH["script.md"] == ("script_render", ("script.json",))
+
+
+def test_focus_profile_tracks_focus_and_approved_source_identity_for_angles() -> None:
+    from fanglei.artifact_registry import RESEARCH_FOCUS_ARTIFACT_GRAPH
+
+    assert RESEARCH_FOCUS_ARTIFACT_GRAPH["angles.json"] == (
+        "angle_generation", ("facts.json", "research.md", "research_focus.json", "source.md", "sources.json")
+    )
 
 
 def test_verified_fact_requires_claim_and_other_types_may_bind_for_semantic_gate() -> None:
