@@ -1,10 +1,17 @@
 # Current Handoff
 
+## V0.2 development status
+
+- V0.1.0 is frozen; do not regenerate the Fed video or change the public `v0.1.0` Release as part of V0.2 planning.
+- Active branch: `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
+- Current phase: Phase 0 — establish the development baseline and document the generalization debt map. Production code, tests, and Fed run artifacts are unchanged in this phase.
+- Review [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not begin Phase 1 until it is separately reviewed and authorized.
+
 ## Current public release
 
 - The V0.1.0 Fed Case 2 Video MVP is implemented on `main` and has been pushed to the public repository: <https://github.com/motty63-ctrl/fenglei-economy-content-engine>.
 - GitHub Release `v0.1.0` is published at <https://github.com/motty63-ctrl/fenglei-economy-content-engine/releases/tag/v0.1.0>; its `final.mp4` asset is public. The verified file SHA-256 is `8796c73d62bed1090a9bbf6af268f5b91406b36913954d944953955d157c564d`.
-- The implementation and release are public project state. Any new documentation-only closeout commit remains local until separately authorized for push; read actual Git state for current HEAD and ahead/behind.
+- The V0.1.0 implementation and release are public project state. The active V0.2 branch is a development branch based on the public `main` snapshot above; read actual Git state for its current HEAD and ahead/behind.
 
 ## Fed Case 2 status
 
@@ -22,4 +29,4 @@ The old checkpoint recovery remains closed. Do not repair, backfill, infer, defa
 
 ## Handoff boundary
 
-V0.1.0 is already public. The current documentation-only closeout is local and awaits separate push authorization. After that closeout, stop for human direction; do not start another product phase without a new request.
+V0.1.0 remains frozen and public. Phase 0 only documents findings and the proposed V0.2 sequence. Stop after this phase and wait for human review before production-code changes.

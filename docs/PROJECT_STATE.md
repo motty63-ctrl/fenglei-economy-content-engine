@@ -1,5 +1,12 @@
 # Project State
 
+## V0.2 development status
+
+- V0.1.0 is frozen and remains publicly available; its Release and Fed Case 2 video are not being regenerated or changed.
+- V0.2 development has started on `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
+- Current phase: Phase 0 — baseline and generalization-gap inventory. This phase changes documentation only; production code, tests, and Fed run artifacts remain untouched.
+- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Phase 1 requires a separate review/authorization.
+
 ## Verified implementation baseline
 
 Approved Checkpoint Authoring Workflow V1 was implemented at commit `75436e1994ffe037f15f6eda706f98408fd3179e` on `main`. This is a historical implementation baseline, not the current HEAD or a self-updating requirement for later documentation commits.
@@ -46,7 +53,8 @@ The final MP4 is `runs/2026-09-24-001-fed-sep-case-2-source-inventory/final.mp4`
 
 The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. The missing 12 formal `AngleCandidate` fields were not recovered from approved source material. Do not repair, backfill, infer, default, copy, or upgrade that checkpoint. GDP artifacts and test fixtures are prohibited recovery sources.
 
-V0.1.0 implementation and video release are public on `main`. Only the current documentation-only closeout commit is local and awaits separate push authorization. Read actual Git state for current HEAD and ahead/behind; hashes in documentation record snapshots and are not self-updating HEAD requirements. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
+V0.1.0 implementation and video release are public on `main`. V0.2 work is isolated on `v0.2/generalize-video-workflow` from the `148d2ebdaee1437c038ead4631a5953d42b9a392` main baseline. This is a branch-start snapshot, not a requirement for the branch's current HEAD; always read Git for the current state. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
+
 ## Voice, alignment, and renderer boundaries
 
 Production narration is a separate audio-only operation. `generate-voice` supports Azure and Volcengine provider adapters, validates canonical WAV audio and signal quality, writes narration audio/metadata/quality artifacts, and stops at `voice_review_pending`. Human approval is bound to the current audio hash. The CLI's `prepare-renderer` path accepts only fake narration, alignment, and probe providers; its outputs are engineering fixtures, not production speech or measured timings.
