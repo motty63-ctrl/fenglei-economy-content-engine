@@ -4,9 +4,9 @@
 
 - V0.1.0 is frozen and remains publicly available; its Release and Fed Case 2 video are not being regenerated or changed.
 - V0.2 development has started on `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 1A complete — Search and Research Focus generalization. Focused tests: 55 passed; safe non-integration regression: 676 passed. Fed run artifacts and the V0.1.0 release remain unchanged.
-- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Phase 1B requires a separate review/authorization.
-- Next: Phase 1B — generalize content provider prompts; it has not started.
+- Current phase: Phase 1A and Phase 1B complete. Phase 1B generalizes DeepSeek script generation/repair and the deterministic mock script path; focused provider/pipeline regression: 87 passed; safe non-integration regression: 678 passed.
+- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md).
+- Next: Phase 1C — define a shared fact-eligibility contract for the new Research/Angle/Script path and make human angle selection explicit. Do not begin it until separately reviewed/authorized.
 
 ## Verified implementation baseline
 

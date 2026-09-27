@@ -95,40 +95,132 @@ def test_deepseek_normalizes_explicit_ten_point_scores_at_provider_boundary() ->
     ))
 
 
-def test_deepseek_script_parses_structured_sentences() -> None:
+def test_deepseek_script_prompt_uses_selected_angle_research_and_eligible_facts() -> None:
     captured = {}
-    draft = {"angle_id": "angle_001", "title": "数字为何不同", "sentences": [
+    draft = {"angle_id": "angle_retail_001", "title": "月度零售变化", "sentences": [
         {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
-         "text": "为什么两个数字看着不同？", "claim_ids": []},
+         "text": "月度零售指数有什么变化？", "claim_ids": []},
         {"sentence_id": "sentence_002", "section": "phenomenon", "sentence_type": "verified_fact",
-         "text": "美国2024年实际GDP增长2.8%。", "claim_ids": ["claim_007"]},
+         "text": "合成统计局表示，零售指数从100升至103。", "claim_ids": ["claim_007"]},
         {"sentence_id": "sentence_003", "section": "mechanism", "sentence_type": "analogy",
          "text": "打个比方，这像两把刻度不同的尺子。", "claim_ids": []},
         {"sentence_id": "sentence_004", "section": "core_judgment", "sentence_type": "interpretation",
-         "text": "我的判断是，先核对定义再比较数字。", "claim_ids": []},
+         "text": "结论是只呈现输入记录支持的范围。", "claim_ids": []},
     ]}
     def transport(payload):
         captured.update(payload)
         return _response(draft)
 
     provider = DeepSeekContentPlanningProvider(SENTINEL, transport=transport)
+    candidate = _candidate().model_copy(update={
+        "angle_id": "angle_retail_001", "title": "月度零售变化",
+        "hook": "月度零售指数有什么变化？",
+        "core_question": "合成案例中零售指数如何变化？",
+        "core_insight": "比较两个报告期的记录。",
+    })
+    selected_claim = _claim().model_copy(update={
+        "claim_text": "合成统计局表示，零售指数从100升至103。",
+        "source_ids": ["src_retail"],
+        "evidence": [{
+            "source_id": "src_retail", "evidence_text": "合成统计局表示，零售指数从100升至103。",
+            "original_url": "https://synthetic.example/retail", "evidence_eligible": True,
+        }],
+        "verification_basis": "independent_corroboration",
+        "authority_attestation": None,
+    })
+    unselected_claim = _claim().model_copy(update={
+        "claim_id": "claim_unselected", "claim_text": "GDP calibration text must not be sent.",
+    })
     result = provider.generate_script(ScriptGenerationInput(
-        run_id="run", selected_angle=_candidate(),
-        research_md="UNVERIFIED", fact_palette=(_claim(),),
+        run_id="synthetic-retail-run", selected_angle=candidate,
+        research_md="Research summary: compare the two synthetic release periods.",
+        research_focus={
+            "primary_question": "How did the synthetic retail index change?",
+            "subquestions": ["What did each release report?"],
+            "constraints": ["Do not infer a cause."],
+        },
+        authority_metadata={"source_policy": {"name": "independent_sources/1.0"}},
+        fact_palette=(selected_claim, unselected_claim),
     ))
     assert result.sentences[1].claim_ids == ["claim_007"]
     system = captured["messages"][0]["content"]
     assert "Fenglei Economy Content Engine 内容风格指南" in system
     assert "最多1个主要比喻" in system
     assert "根据数据显示" in system
-    assert "API observation 后不要擅自添加百分号" in system
-    assert "四舍五入机制句也必须绑定" in system
+    assert "对 angle_001" not in system
+    assert "2.79318715363841" not in system
     user = json.loads(captured["messages"][1]["content"])
-    assert user["minimum_sentence_count"] == 12
-    assert user["minimum_spoken_character_count"] == 240
-    assert len(user["required_narrative_beats"]) >= 12
-    assert "同一个美国GDP，怎么会有两种答案" in user["required_narrative_beats"][0]
-    assert "2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%" in user["required_narrative_beats"][3]
+    assert user["output_contract"]["minimum_sentence_count"] == 12
+    assert user["output_contract"]["minimum_spoken_character_count"] == 240
+    assert user["selected_angle"]["angle_id"] == "angle_retail_001"
+    assert user["research_summary"] == "Research summary: compare the two synthetic release periods."
+    assert user["research_focus"]["constraints"] == ["Do not infer a cause."]
+    assert user["selected_supporting_claim_ids"] == ["claim_007"]
+    assert [claim["claim_id"] for claim in user["verified_claims_only"]] == ["claim_007"]
+    assert user["output_contract"]["schema_version"] == "3.0"
+    serialized_prompts = system + captured["messages"][1]["content"]
+    for case_term in ("Federal Reserve", "FOMC", "SEP", "GDP", "June", "September", "2.8%"):
+        assert case_term.casefold() not in serialized_prompts.casefold()
+    assert "GDP calibration text must not be sent" not in serialized_prompts
+    assert "causality" in system and "motive" in system and "market effect" in system
+    assert "selected_angle.supporting_claim_ids" in system
+
+
+def test_deepseek_repair_prompt_is_topic_neutral_and_limits_claims_to_selected_angle() -> None:
+    captured = {}
+    candidate = _candidate().model_copy(update={
+        "angle_id": "angle_retail_001",
+        "title": "月度零售变化",
+        "hook": "零售指数有什么变化？",
+        "supporting_claim_ids": ["claim_007"],
+    })
+    selected_claim = _claim().model_copy(update={
+        "claim_text": "合成统计局报告，零售指数从100升至103。",
+        "source_ids": ["src_retail"],
+        "evidence": [{
+            "source_id": "src_retail", "evidence_text": "合成统计局报告，零售指数从100升至103。",
+            "original_url": "https://synthetic.example/retail", "evidence_eligible": True,
+        }],
+        "verification_basis": "independent_corroboration",
+        "authority_attestation": None,
+    })
+    unrelated_claim = _claim().model_copy(update={
+        "claim_id": "claim_unselected",
+        "claim_text": "GDP calibration content is unrelated to this angle.",
+    })
+    script = ScriptDraft.model_validate({
+        "angle_id": candidate.angle_id, "title": candidate.title, "sentences": [
+            {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
+             "text": "这个开头不符合要求。", "claim_ids": []},
+            {"sentence_id": "sentence_002", "section": "phenomenon", "sentence_type": "verified_fact",
+             "text": selected_claim.claim_text, "claim_ids": [selected_claim.claim_id]},
+        ],
+    })
+
+    def transport(payload):
+        captured.update(payload)
+        return _response({"patches": [{
+            "sentence_id": "sentence_001", "operation": "replace", "new_text": "零售记录有什么变化？",
+        }]})
+
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=transport)
+    provider.repair_script(ScriptRepairInput(
+        run_id="synthetic-retail-run", repair_attempt=1, selected_angle=candidate,
+        current_script=script, editable_sentence_ids=["sentence_001"],
+        protected_sentence_ids=["sentence_002"], allow_additions=False,
+        fact_palette=(selected_claim, unrelated_claim),
+        issues=[RepairIssue(code="HOOK_INVALID", sentence_id="sentence_001")],
+    ))
+
+    system = captured["messages"][0]["content"]
+    user = json.loads(captured["messages"][1]["content"])
+    serialized = system + captured["messages"][1]["content"]
+    for case_term in ("Federal Reserve", "FOMC", "SEP", "GDP", "四舍五入", "末尾几位"):
+        assert case_term.casefold() not in serialized.casefold()
+    assert "selected_angle" in user
+    assert [claim["claim_id"] for claim in user["verified_claims_only"]] == ["claim_007"]
+    assert user["verified_claims_only"][0]["claim_text"] == selected_claim.claim_text
+    assert "claim_unselected" not in serialized
 
 
 def test_deepseek_normalizes_core_insight_section_alias() -> None:

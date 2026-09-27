@@ -31,6 +31,20 @@ class ScriptGenerationInput(BaseModel):
     authority_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def _supporting_claims(
+    selected_angle: AngleCandidate,
+    fact_palette: tuple[ScriptReadyClaim, ...],
+) -> tuple[ScriptReadyClaim, ...]:
+    claim_by_id = {claim.claim_id: claim for claim in fact_palette}
+    claim_ids = list(dict.fromkeys(selected_angle.supporting_claim_ids))
+    if not claim_ids:
+        raise ValueError("SCRIPT_ANGLE_HAS_NO_SUPPORTING_CLAIMS")
+    missing = [claim_id for claim_id in claim_ids if claim_id not in claim_by_id]
+    if missing:
+        raise ValueError("SCRIPT_ANGLE_SUPPORTING_CLAIMS_UNAVAILABLE")
+    return tuple(claim_by_id[claim_id] for claim_id in claim_ids)
+
+
 class RepairIssue(BaseModel):
     code: str
     sentence_id: str | None = None
@@ -69,7 +83,7 @@ class DeepSeekContentPlanningProvider:
     name = "deepseek"
     endpoint = "https://api.deepseek.com/chat/completions"
     angle_prompt_version = "angles-deepseek-v1"
-    script_prompt_version = "script-deepseek-v1"
+    script_prompt_version = "script-deepseek-v2"
 
     def __init__(self, api_key: str, *, model: str = "deepseek-v4-pro",
                  transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -215,50 +229,52 @@ class DeepSeekContentPlanningProvider:
         return AngleProposalResult.model_validate(raw)
 
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
-        facts = self._fact_payload(request.fact_palette)
+        supporting_claims = _supporting_claims(request.selected_angle, request.fact_palette)
+        facts = self._fact_payload(supporting_claims)
         system = (
-            "你是风雷经济的中文短视频编剧。只消费输入 JSON 中的 verified claims。不得创造数字、日期、机构行为、"
-            "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定支持它的 claim_ids，即使 sentence_type 写成"
-            " explanation 或 interpretation。没有 claim 支持时，只能写成明确的个人判断或比喻。输出纯 JSON，不要 Markdown。"
-            "脚本目标60到90秒，总口播字符严格控制在260到310个，必须先自行核对字数；第一句 hook 最多20个口播字符。"
-            "按现象、机制、核心判断推进，语言口语化。不要把 selected_angle 中未经 verified claims 支持的内容当作事实。"
-            "绑定 claim_ids 的句子只能陈述该 claim 及 evidence 明确包含的数字、机构和指标；不要给纯观点或比喻绑定 claim。"
-            "对authoritative_primary_attestation，必须保留claim的机构/文件归因、attestation scope和certainty；projection不能改写成承诺或政策决定。"
-            "不得添加原文未直接支持的因果、动机或市场影响；document_report必须保留来源归因并逐字保留被引用的attested evidence。"
-            "请输出12到15句，每句推动当前问题向答案前进。事实句可有多句，但每句都必须忠实复述对应 claim 或 evidence，"
-            "并绑定支持它的 claim_ids。API observation 后不要擅自添加百分号，必须按 evidence 中的原始值表达。"
-            "若 hook 包含已验证数字或机构名，hook 本身也必须标为 verified_fact 并绑定 claim。"
-            "对 angle_001，叙事只围绕同一 GDP 数值的两种精度写法：先呈现 BEA 的2.8%与 World Bank API 的"
-            "2.79318715363841（不加百分号），再写‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%’，"
-            "最后教观众先核对来源、指标、"
-            "年份和精度。四舍五入机制句也必须绑定支持它的 claim_id，并标为 verified_fact。"
-            "不要引入政策沟通需求、媒体行为、统计误差或任何 claims 未支持的原因。"
+            "你是风雷经济的中文短视频编剧。把 selected_angle 作为叙事切入点，并使用 Research / Research Focus"
+            "组织表达。事实 whitelist 是 selected_angle.supporting_claim_ids 对应的 verified_claims_only；"
+            "Research 只能用于理解问题与结构，不能作为新增事实来源。不得创造输入没有提供的数字、日期、机构行为、"
+            "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定直接支持它的 claim_ids；"
+            "没有 claim 支持时，只能写非事实性的表达或建议。输出符合 output_contract 的 JSON，不要 Markdown。"
+            "每条绑定 claim_ids 的句子只能忠实表达该 claim 与对应 evidence；数字、对象、时间、单位、统计口径、"
+            "certainty、attribution 和 authority scope 均不得扩大或省略。对权威文件 attestation 必须保留文件归因；"
+            "projection 不得改写为承诺、政策决定或现实结果。不得添加输入未支持的 causality、motive 或 market effect。"
+            "只在输入 claim 直接支持时解释机制；否则呈现证据边界，不要编造机制。不要把同时发生的变化写成因果关系。"
+            "脚本目标60到90秒，总口播字符控制在240到360个；第一句 hook 最多20个口播字符。"
+            "输出12到15句，每句推动当前问题向答案前进；事实句必须绑定支持它的 claim_ids，纯观点或比喻不得绑定 claim。"
+            "凡 hook 含有可核验的数字、日期、机构行为或具体事实，也必须绑定相应 claim 并标为 verified_fact。"
             "section 只能使用 hook、phenomenon、mechanism、core_judgment，最后一句必须是 core_judgment。"
             "sentence_type 只能使用 verified_fact、explanation、interpretation、analogy。"
             "凡是包含“打个比方、好比、就像、仿佛、这像”的句子，sentence_type 必须是 analogy。"
             + FANGLEI_ECONOMY_STYLE_GUIDE
+            + "机制与因果说明必须有 supporting claim 直接支持；风格要求不能覆盖此事实边界。"
         )
         user = json.dumps({
-            "task": "生成约300个中文口播字符的结构化脚本 JSON",
+            "task": "根据本次 run 的 Research、选定角度和 supporting facts 生成中文短视频脚本",
+            "run_id": request.run_id,
+            "research_summary": request.research_md,
+            "research_focus": request.research_focus,
+            "authority_metadata": request.authority_metadata,
             "selected_angle": request.selected_angle.model_dump(mode="json"),
+            "selected_supporting_claim_ids": request.selected_angle.supporting_claim_ids,
             "verified_claims_only": facts,
-            "minimum_sentence_count": 12,
-            "minimum_spoken_character_count": 240,
-            "required_narrative_beats": [
-                "hook：原样使用‘同一个美国GDP，怎么会有两种答案？’，不含数字与机构名",
-                "phenomenon：BEA的2024年美国实际GDP增长率2.8%，绑定claim",
-                "phenomenon：World Bank API原始观察值2.79318715363841，不加百分号，绑定claim",
-                "mechanism：原样使用‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%。’，绑定claim",
-                "explanation：直接点明算完这一步，表面反差已经消失",
-                "interpretation：不要把小数位差别直接理解成机构争论",
-                "explanation：把本题答案收束为同一数值的不同精度展示",
-                "advice：以后比较经济数据，第一步先看来源",
-                "advice：第二步确认指标名称是否相同",
-                "advice：第三步确认年份是否相同",
-                "advice：第四步检查数值精度",
-                "interpretation：完成核对后再判断差异是否真实",
-                "core_judgment：用来源、指标、年份、精度这一可复用方法收尾",
+            "narrative_guidance": [
+                "从 hook 引出 selected_angle 的问题",
+                "呈现 supporting claims 直接支持的事实",
+                "只解释证据支持的背景；否则清楚保留 scope boundary",
+                "以不超出 evidence 的结论收尾",
             ],
+            "output_contract": {
+                "schema_version": "3.0",
+                "target_duration_seconds": 75,
+                "minimum_sentence_count": 12,
+                "maximum_sentence_count": 15,
+                "minimum_spoken_character_count": 240,
+                "maximum_spoken_character_count": 360,
+                "allowed_sections": ["hook", "phenomenon", "mechanism", "core_judgment"],
+                "allowed_sentence_types": ["verified_fact", "explanation", "interpretation", "analogy"],
+            },
             "output_schema": {
                 "angle_id": request.selected_angle.angle_id,
                 "title": request.selected_angle.title,
@@ -288,6 +304,8 @@ class DeepSeekContentPlanningProvider:
             "你只生成风雷经济脚本的 sentence-level patches，不得返回、重写或覆盖整篇 script。"
             "本地 lint 和 patch applier 是最终裁判。只能修改 editable_sentence_ids；protected_sentence_ids 禁止修改。"
             "不得修改 claim 状态、claim_ids、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
+            "verified_claims_only 仅包含 selected_angle.supporting_claim_ids 对应的事实；不得使用其他记忆或补充事实。"
+            "保持选定角度的主题、对象、范围和来源归因，不引入当前输入未提供的案例、机构或指标。"
             "不得新增数字、日期、机构结论、数据口径、历史事件或因果事实。只修 structured_issues 指向的问题，"
             "保持其他内容不变，不重新设计 selected_angle。输出纯 JSON，顶层只能是 patches。"
             "遇到 DURATION_TOO_SHORT 时，必须按缺口一次提交足够数量、文本互不重复的 add_after patches，"
@@ -320,12 +338,12 @@ class DeepSeekContentPlanningProvider:
             ),
             "SENTENCE_TYPE_MISMATCH": "含明确比喻标记的句子必须标为analogy；不得靠改类型掩盖事实断言。",
             "CORE_JUDGMENT_MISSING": (
-                "最后一句section必须是core_judgment，并用不含新事实的明确主观判断收束。"
-                "可直接使用：‘所以，理解数据的精度，比记住一个数字更重要。’"
+                "最后一句section必须是core_judgment，并用不含新事实的清晰陈述句收束；"
+                "回到选定角度的问题，并保留输入证据所限定的结论范围。"
             ),
             "CORE_JUDGMENT_WEAK": (
-                "最后一句必须是明确陈述句，不能是问句。请把该句精确替换为："
-                "‘所以，理解数据的精度，比记住一个数字更重要。’"
+                "最后一句必须是清晰陈述句，不能是问句；请回到选定角度的问题收束，"
+                "不要补入输入没有支持的新事实或结论。"
             ),
             "FORMULAIC_REPETITION": "同一种话语开头最多使用两次；改写成自然口语，避免连续使用‘你可以/你不妨/我的判断是’。",
             "REPORT_STYLE_LANGUAGE": "删掉报告式套话，直接进入问题或答案；不得新增事实。",
@@ -342,22 +360,23 @@ class DeepSeekContentPlanningProvider:
         }
         current_rules = []
         safe_methodology_replacements = (
-            "读到两种写法，先别急着判断谁对谁错。",
-            "比较之前，先把指标名称和年份放在一起。",
-            "真正要问的，是两种写法传达的方向是否一致。",
-            "看经济新闻时，多追问一句来源在哪里。",
-            "先确认讨论的是不是同一个指标，再理解差别。",
+            "先把问题说清楚，再比较对应材料。",
+            "比较之前，先确认讨论对象和范围。",
+            "先看材料直接记录了什么，再谈理解。",
+            "遇到不同说法时，可以先回到各自出处。",
+            "先区分原文记录与自己的理解。",
             "先把看到的写法和自己的理解分开。",
-            "不妨先列出疑问，再一项一项核对。",
+            "把问题拆开，再一项一项核对。",
             "可以把这次比较当成一次阅读检查。",
             "别急着解释差别，先确认双方说的是同一件事。",
-            "先看结论方向，再决定细节是否值得深究。",
-            "遇到相近写法时，先问它们能不能直接比较。",
+            "先看记录本身，再说明它能回答什么。",
+            "阅读相关材料时，给自己留一个核对步骤。",
+            "先判断问题出在内容，还是表达方式。",
             "把比较步骤放慢一点，再说出自己的理解。",
-            "先追到出处，再回头理解新闻里的简短说法。",
-            "阅读这类数字时，给自己留一个核对步骤。",
-            "先判断问题出在内容，还是出在表达方式。",
-            "不要只看末尾差别，也要看它回答了什么问题。",
+            "先追到出处，再回头理解简短说法。",
+            "不要只看结论，也要看它回答了什么问题。",
+            "先把现象和解释分开，再决定如何表述。",
+            "先确认输入信息是否足以支持这个说法。",
         )
         for issue in request.issues:
             code = issue.code
@@ -390,7 +409,7 @@ class DeepSeekContentPlanningProvider:
                 elif signal == "causal_fact" and locator:
                     suffix += (
                         " 必须删除无claim支持的因果判断。可直接改为不含外部事实的建议："
-                        "‘你不妨把注意力放在趋势上，不必只盯着末尾几位。’"
+                        "‘你可以把观察到的内容与可能的解释分开。’"
                     )
                 current_rules.append(issue_rules["SEMANTIC_FACTUALITY_UNSUPPORTED"] + suffix)
         current_spoken_character_count = len(re.findall(
@@ -416,7 +435,8 @@ class DeepSeekContentPlanningProvider:
             "editable_sentences": editable_sentences,
             "protected_sentence_ids": request.protected_sentence_ids,
             "allow_additions": request.allow_additions,
-            "verified_claims_only": self._fact_payload(request.fact_palette),
+            "verified_claims_only": self._fact_payload(_supporting_claims(
+                request.selected_angle, request.fact_palette)),
             "patch_contract": {
                 "operations": ["replace", "add_after"],
                 "replace_fields": ["sentence_id", "operation", "new_text", "new_sentence_type(optional)"],
@@ -442,19 +462,7 @@ class MockContentPlanningProvider:
     name = "mock-content"
     model = None
     angle_prompt_version = "offline-generic-angles-v1"
-    script_prompt_version = "offline-evidence-script-v2"
-
-    @staticmethod
-    def _spoken_fact(claim_text: str) -> str:
-        match = re.search(
-            r"United States real GDP grew\s+(\d+(?:\.\d+)?)%\s+in\s+((?:19|20)\d{2})",
-            claim_text,
-            re.I,
-        )
-        if match:
-            value, year = match.groups()
-            return f"美国{year}年实际GDP增长{value}%。"
-        return claim_text
+    script_prompt_version = "offline-evidence-script-v3"
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
         from fanglei.offline_angle_planner import plan_offline_angles
@@ -466,18 +474,6 @@ class MockContentPlanningProvider:
         return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
 
     @staticmethod
-    def _authority_subject(scope: dict[str, Any]) -> str:
-        subject = str(scope.get("subject", "")).strip()
-        labels = {
-            "change in real gdp": "实际GDP增速",
-            "unemployment rate": "失业率",
-            "pce inflation": "PCE通胀",
-            "core pce inflation": "核心PCE通胀",
-            "federal funds rate": "联邦基金利率",
-        }
-        return labels.get(subject.casefold(), subject)
-
-    @staticmethod
     def _authority_scope_term(value: str) -> str:
         labels = {
             "projection": "预测",
@@ -486,6 +482,18 @@ class MockContentPlanningProvider:
             "report": "记录",
         }
         return labels.get(value.casefold(), value)
+
+    @staticmethod
+    def _legacy_fed_v01_subject_label(subject: str) -> str:
+        """Retain compact labels for historical Fed V0.1 fixture comparisons only."""
+        labels = {
+            "change in real gdp": "实际GDP增速",
+            "unemployment rate": "失业率",
+            "pce inflation": "PCE通胀",
+            "core pce inflation": "核心PCE通胀",
+            "federal funds rate": "联邦基金利率",
+        }
+        return labels.get(subject.casefold(), subject)
 
     @staticmethod
     def _approved_source_ids(request: ScriptGenerationInput) -> set[str]:
@@ -544,7 +552,7 @@ class MockContentPlanningProvider:
             period = period + "年"
         statistic = "中位数" if scope["statistic"].casefold() == "median" else scope["statistic"]
         unit = "%" if scope["unit"].casefold() in {"percent", "%"} else scope["unit"]
-        subject = cls._authority_subject(scope)
+        subject = cls._legacy_fed_v01_subject_label(str(scope.get("subject", "")).strip())
         scope_terms = list(dict.fromkeys(
             cls._authority_scope_term(scope[key]) for key in ("measure", "certainty")
         ))
@@ -641,27 +649,44 @@ class MockContentPlanningProvider:
                            title=request.selected_angle.title, sentences=sentences)
 
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
+        supporting_claims = _supporting_claims(request.selected_angle, request.fact_palette)
         authority_draft = self._generate_authority_script(request)
         if authority_draft is not None:
             return authority_draft
-        claim = request.fact_palette[0]
-        texts = [
-            ("hook", "interpretation", "同一个增长率，为什么会出现两种写法？"),
-            ("phenomenon", "verified_fact", self._spoken_fact(claim.claim_text)),
-            ("mechanism", "explanation", "先别急着判断谁对谁错，第一步是把指标、年份和计算范围对齐。"),
-            ("mechanism", "interpretation", "在这个例子里，可以把差别理解成显示精度不同。"),
-            ("mechanism", "analogy", "这就像同一段距离，一个人说大约三公里，另一个人写到具体米数。"),
-            ("mechanism", "explanation", "接着把两种写法放在一起，看看它们回答的是不是同一个问题。"),
-            ("mechanism", "interpretation", "真正值得追问的不是小数点后多了几位，而是口径有没有变化。"),
-            ("mechanism", "explanation", "还要看数据是否来自同一年度，是否经过修订，以及增长率是不是实际口径。"),
-            ("mechanism", "interpretation", "末尾写得更细，并不会自动改变前面共同表达的方向。"),
-            ("mechanism", "interpretation", "普通人看到两个数字时，最容易把显示差异误读成机构分歧。"),
-            ("mechanism", "explanation", "避免误读的方法很简单，先对口径，再看精度，最后才比较结论。"),
-            ("core_judgment", "interpretation", "所以核心判断是，小数位不同未必是矛盾，口径不同才需要真正警惕。"),
+        def claim_text(claim: ScriptReadyClaim) -> str:
+            text = claim.claim_text.strip()
+            attestation = claim.authority_attestation or {}
+            attribution = attestation.get("attribution")
+            if (claim.verification_basis == "authoritative_primary_attestation"
+                    and isinstance(attribution, str) and attribution.strip()
+                    and attribution.casefold() not in text.casefold()):
+                text = f"{compact_authority_attribution(attribution)}：{text}"
+            return text
+
+        rows: list[tuple[str, str, str, list[str]]] = [
+            ("hook", "interpretation", request.selected_angle.hook.strip(), []),
         ]
-        sentences = [ScriptSentence(sentence_id=f"sentence_{n:03d}", section=section,
-            sentence_type=kind, text=text, claim_ids=[claim.claim_id] if kind == "verified_fact" else [])
-            for n, (section, kind, text) in enumerate(texts, 1)]
+        rows.extend(("phenomenon", "verified_fact", claim_text(claim), [claim.claim_id])
+                    for claim in supporting_claims)
+        framing = [
+            ("phenomenon", "explanation", "本条围绕已选角度提出的问题展开，表达范围也由这一问题限定。"),
+            ("phenomenon", "explanation", "事实部分只使用随请求提供的已核验内容，不从其他内容补充数字。"),
+            ("mechanism", "explanation", "每个事实句都对应随请求传入的 claim 编号。"),
+            ("mechanism", "explanation", "引用事实时保留 claim 已记录的来源归因和适用范围。"),
+            ("mechanism", "explanation", "没有证据支持的数字不会补入脚本。"),
+            ("mechanism", "interpretation", "材料没有直接说明的原因，不改写为因果结论。"),
+            ("mechanism", "interpretation", "同时出现的记录可以并列展示，但不据此推断彼此原因。"),
+            ("mechanism", "explanation", "未列入所选角度的事实，不作为本条事实句。"),
+            ("mechanism", "explanation", "观众可以根据对应 claim 编号回查证据与来源。"),
+            ("mechanism", "interpretation", "表达内容不超出事实及来源直接支持的范围。"),
+        ]
+        needed = max(0, 12 - len(rows) - 1)
+        rows.extend((section, kind, text, []) for section, kind, text in framing[:needed])
+        rows.append(("core_judgment", "interpretation",
+                     "结论：本条表达范围不超过已核验事实所能支持的内容。", []))
+        sentences = [ScriptSentence(sentence_id=f"sentence_{index:03d}", section=section,
+                                    sentence_type=kind, text=text, claim_ids=claim_ids)
+                     for index, (section, kind, text, claim_ids) in enumerate(rows, start=1)]
         return ScriptDraft(angle_id=request.selected_angle.angle_id, title=request.selected_angle.title, sentences=sentences)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:

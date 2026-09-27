@@ -56,7 +56,7 @@ def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: 
     assert script["speaking_rate_chars_per_second"] == 4.0
     assert 60 <= script["estimated_duration_seconds"] <= 90
     assert script["sentences"][1]["claim_ids"] == ["claim_007"]
-    assert script["sentences"][1]["text"] == "美国2024年实际GDP增长2.8%。"
+    assert script["sentences"][1]["text"] == "United States real GDP grew 2.8% in 2024."
     spoken = (run / "script.md").read_text(encoding="utf-8")
     assert "claim_" not in spoken and "sentence_" not in spoken
     assert manifest_status(run, "script.md") == "valid"
@@ -166,6 +166,7 @@ def test_mock_script_uses_selected_authority_facts_and_research_statement_contex
     assert draft.angle_id == angle.angle_id
     assert "World Bank" not in "".join(sentence.text for sentence in draft.sentences)
     assert "round" not in "".join(sentence.text for sentence in draft.sentences).lower()
+    assert "实际GDP增速" in "".join(sentence.text for sentence in draft.sentences)
     assert lint.passed, [issue.model_dump() for issue in lint.issues]
 
 
@@ -184,6 +185,57 @@ def test_authority_script_uses_generic_evidence_framing_and_claim_attribution() 
     assert "FOMC" not in spoken
     assert "SEP" not in spoken
     assert "先按各自文件记录的时间和口径逐项比较。" in spoken
+
+
+def test_mock_script_uses_only_synthetic_angle_facts_and_preserves_attribution() -> None:
+    claim_text = "合成统计局表示，零售指数从100升至103。"
+    claim = ScriptReadyClaim(
+        claim_id="claim_retail_001", claim_text=claim_text, source_ids=["src_retail"],
+        evidence=[{
+            "source_id": "src_retail", "original_url": "https://synthetic.example/release",
+            "evidence_text": claim_text, "evidence_eligible": True,
+        }], verification_basis="independent_corroboration",
+    )
+    angle = AngleCandidate(
+        angle_id="angle_retail_001", title="月度零售变化", hook="月度零售指数有什么变化？",
+        core_question="合成案例中零售指数如何变化？", core_insight="比较两个报告期的记录。",
+        supporting_claim_ids=[claim.claim_id], audience_relevance=3, novelty=3, hook_strength=3,
+        visual_potential=3, explainability=4, evidence_strength=4, controversy_risk=0,
+        total_score=75, eligibility="eligible",
+    )
+    unrelated = ScriptReadyClaim(
+        claim_id="claim_unselected", claim_text="GDP calibration text must not appear.",
+    )
+    request = ScriptGenerationInput(
+        run_id="synthetic-retail-run", selected_angle=angle,
+        research_md="A synthetic research summary about the selected periods.",
+        research_focus={
+            "primary_question": "How did the synthetic retail index change?",
+            "constraints": ["Do not infer a cause."],
+        }, fact_palette=(claim, unrelated),
+    )
+    raw_facts = {"claims": [{
+        "claim_id": claim.claim_id, "claim_text": claim.claim_text, "claim_type": "fact",
+        "verification_status": "verified", "allowed_downstream": True,
+        "verification_basis": "independent_corroboration", "source_ids": claim.source_ids,
+        "evidence": claim.evidence,
+    }]}
+
+    draft = MockContentPlanningProvider().generate_script(request)
+    lint = lint_script(draft, angle, raw_facts, "Synthetic capture contains unrelated supporting text.", speaking_rate=4.0)
+    spoken = "".join(sentence.text for sentence in draft.sentences)
+    factual = [sentence for sentence in draft.sentences if sentence.sentence_type == "verified_fact"]
+
+    assert draft.angle_id == angle.angle_id
+    assert len(factual) == 1
+    assert factual[0].text == claim_text
+    assert factual[0].claim_ids == [claim.claim_id]
+    assert draft.sentences[0].text == angle.hook
+    assert all(value in spoken for value in ("100", "103", "合成统计局"))
+    assert not any(term in spoken.casefold() for term in (
+        "fed", "fomc", "sep", "gdp", "因为", "导致", "增长率", "小数位", "显示精度", "四舍五入",
+    ))
+    assert lint.passed, [issue.model_dump() for issue in lint.issues]
 
 
 class _CapturingScriptProvider(MockContentPlanningProvider):
