@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 
 class ScriptReadyClaim(BaseModel):
     claim_id: str
     claim_text: str
+    verification_status: Literal["verified", "conflicted", "unverified"]
+    allowed_downstream: StrictBool
     source_ids: list[str] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     verification_basis: Literal[

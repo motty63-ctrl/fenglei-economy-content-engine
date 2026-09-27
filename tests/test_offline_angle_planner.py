@@ -8,6 +8,8 @@ def _claim(claim_id: str, claim_text: str, source_id: str) -> ScriptReadyClaim:
     return ScriptReadyClaim(
         claim_id=claim_id,
         claim_text=claim_text,
+        verification_status="verified",
+        allowed_downstream=True,
         source_ids=[source_id],
         evidence=[{
             "source_id": source_id,

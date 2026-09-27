@@ -4,6 +4,7 @@ from decimal import Decimal
 import re
 from fanglei.authority_safety import authority_text_issues
 from fanglei.content_models import AngleCandidate, LintIssue, ScriptDraft, ScriptLintResult
+from fanglei.evidence_policy import is_claim_eligible_for_content
 from fanglei.originality import check_fact_originality, check_originality
 
 
@@ -164,7 +165,7 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
             valid = True
             for claim_id in sentence.claim_ids:
                 claim = claims.get(claim_id)
-                if not claim or claim.get("verification_status") != "verified" or claim.get("allowed_downstream") is not True:
+                if not claim or not is_claim_eligible_for_content(claim):
                     valid = False
                     continue
                 source_ids = set(claim.get("source_ids", []))

@@ -6,6 +6,7 @@ from fanglei.content_models import AngleProposal, ScriptReadyClaim
 
 def _claim() -> ScriptReadyClaim:
     return ScriptReadyClaim(claim_id="claim_007", claim_text="美国2024年实际GDP增长2.8%",
+                            verification_status="verified", allowed_downstream=True,
                             source_ids=["bea", "worldbank", "oecd"],
                             evidence=[{"source_id": "bea", "evidence_eligible": True}])
 
@@ -14,6 +15,8 @@ def _authority_claim() -> ScriptReadyClaim:
     return ScriptReadyClaim(
         claim_id="claim_authority",
         claim_text="Federal Reserve FOMC participants (SEP): published Median projection for Federal funds rate (2026) changed from 3.8 Percent in June SEP to 4.1 Percent in September SEP.",
+        verification_status="verified",
+        allowed_downstream=True,
         source_ids=["src_june", "src_september"],
         evidence=[
             {"source_id": "src_june", "evidence_eligible": True,

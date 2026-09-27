@@ -4,9 +4,9 @@
 
 - V0.1.0 is frozen and remains publicly available; its Release and Fed Case 2 video are not being regenerated or changed.
 - V0.2 development has started on `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 1A, Phase 1B, and Phase 1C complete on the V0.2 development branch. Phase 1C generalizes the ordinary visual planner/storyboard path and isolates GDP calibration behavior in named compatibility adapters; its focused visual/rendering regression passed (78 tests) and the safe non-integration regression passed (682 tests).
+- Current phase: Phase 1A, Phase 1B, Phase 1C, and Phase 2A are complete on the V0.2 development branch. Phase 2A routes the V0.2 Research Focus, Angle, Script-generation/repair, and script-lint paths through one fail-closed claim eligibility contract (`verified` plus `allowed_downstream is True`). The legacy Research renderer keeps its historical verified-only behavior. Phase 2A focused regression passed (126 tests); safe non-integration regression passed (695 tests).
 - Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md).
-- Next: Phase 2 — define shared claim eligibility and an explicit recorded human angle-selection prerequisite for the V0.2 production-script path. A second real economic case has not yet validated end-to-end generality.
+- Next: Phase 2B — define and enforce the recorded human angle-selection prerequisite for the V0.2 production-script path. Phase 2 and V0.2 are not complete; a second real economic case has not yet validated end-to-end generality.
 
 Phase 1C keeps the generic default free of Fed/SEP/GDP values and source identities. Numeric-comparison grouping is presentation-only: typed labels and values are emitted only from supported deterministic parses of the script sentence, remain bound to that sentence and its claims, and the exact source sentence remains visible. Unsupported formats fall back to an exact-sentence fact scene. Historical GDP calibration remains available only through `LegacyGDPCalibrationVisualPlanningProvider`, `build_legacy_gdp_calibration_storyboard`, and `lint_legacy_gdp_calibration_storyboard`; `run_visual_pipeline()` uses the generic path. Phase 1C did not change the Fed run, renderer, audio, alignment, or V0.1.0 release.
 

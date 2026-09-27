@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from fanglei.authority_safety import compact_authority_attribution
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
 from fanglei.content_style import FANGLEI_ECONOMY_STYLE_GUIDE
+from fanglei.evidence_policy import is_claim_eligible_for_content
 from fanglei.errors import ProviderError
 from fanglei.security import REDACTED, safe_error_message
 from fanglei.script_patch import ScriptPatchResult
@@ -42,7 +43,10 @@ def _supporting_claims(
     missing = [claim_id for claim_id in claim_ids if claim_id not in claim_by_id]
     if missing:
         raise ValueError("SCRIPT_ANGLE_SUPPORTING_CLAIMS_UNAVAILABLE")
-    return tuple(claim_by_id[claim_id] for claim_id in claim_ids)
+    selected = tuple(claim_by_id[claim_id] for claim_id in claim_ids)
+    if any(not is_claim_eligible_for_content(claim) for claim in selected):
+        raise ValueError("SCRIPT_ANGLE_SUPPORTING_CLAIM_INELIGIBLE")
+    return selected
 
 
 class RepairIssue(BaseModel):
@@ -184,7 +188,13 @@ class DeepSeekContentPlanningProvider:
         return result
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
-        facts = self._fact_payload(request.fact_palette)
+        eligible_claims = tuple(
+            claim for claim in request.fact_palette
+            if is_claim_eligible_for_content(claim)
+        )
+        if not eligible_claims:
+            raise ValueError("NO_ALLOWED_CLAIMS_FOR_ANGLE_PLANNING")
+        facts = self._fact_payload(eligible_claims)
         system = (
             "你是风雷经济的内容策划。只允许使用输入 JSON 中的 verified claims，不得创造数字、日期、机构结论或政策事实。"
             "生成 JSON，不要输出 Markdown。候选角度必须真正不同；叙事框架应由输入证据自然决定，不要求固定主题集合。"

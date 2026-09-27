@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 from fanglei.content_models import AngleProposal, AngleProposalResult, ScriptReadyClaim
+from fanglei.evidence_policy import is_claim_eligible_for_content
 
 if TYPE_CHECKING:
     from fanglei.providers.content import AngleGenerationInput
@@ -27,7 +28,10 @@ def _focus_questions(request: AngleGenerationInput) -> tuple[str, list[str]]:
 
 def _research_bounded_claims(request: AngleGenerationInput) -> list[ScriptReadyClaim]:
     cited_ids = set(_CLAIM_ID.findall(request.research_md))
-    palette = sorted(request.fact_palette, key=lambda item: item.claim_id)
+    palette = sorted(
+        (claim for claim in request.fact_palette if is_claim_eligible_for_content(claim)),
+        key=lambda item: item.claim_id,
+    )
     if not cited_ids:
         return palette
     selected = [claim for claim in palette if claim.claim_id in cited_ids]

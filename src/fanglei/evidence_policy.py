@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from fanglei.artifacts import sha256_bytes, sha256_text
@@ -78,8 +79,46 @@ def gate_evidence(evidence: list[dict[str, Any]], documents: list["FetchedDocume
     return gated
 
 
+def claim_eligibility_reason(claim: object) -> str:
+    """Return the shared fail-closed content-eligibility reason for a claim.
+
+    The contract intentionally checks recorded verification status and the
+    explicit downstream permission independently. Authority attribution/scope
+    checks remain with the existing stage-specific safety validators.
+    """
+    if isinstance(claim, Mapping):
+        record = claim
+    else:
+        dump = getattr(claim, "model_dump", None)
+        if not callable(dump):
+            return "invalid_claim"
+        try:
+            record = dump(mode="python")
+        except Exception:
+            return "invalid_claim"
+        if not isinstance(record, Mapping):
+            return "invalid_claim"
+
+    status = record.get("verification_status")
+    if status == "unverified":
+        return "unverified"
+    if status == "conflicted":
+        return "conflicted"
+    if status != "verified":
+        return "invalid_status"
+    if record.get("allowed_downstream") is not True:
+        return "downstream_not_allowed"
+    return "eligible"
+
+
+def is_claim_eligible_for_content(claim: object) -> bool:
+    """Whether a claim may enter the V0.2 content path."""
+    return claim_eligibility_reason(claim) == "eligible"
+
+
 def is_script_ready(claim: dict[str, Any]) -> bool:
-    return claim.get("verification_status") == "verified" and claim.get("allowed_downstream") is True
+    """Compatibility alias for the shared content eligibility predicate."""
+    return is_claim_eligible_for_content(claim)
 
 
 def script_usage(status: str) -> dict[str, str]:

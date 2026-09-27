@@ -95,6 +95,7 @@ def _authority_script_inputs():
         }
         palette.append(ScriptReadyClaim(
             claim_id=claim_id, claim_text=claim_text, source_ids=["src_002", "src_001"],
+            verification_status="verified", allowed_downstream=True,
             evidence=evidence, verification_basis="authoritative_primary_attestation",
             authority_attestation=attestation,
         ))
@@ -118,6 +119,7 @@ def _authority_script_inputs():
     statement_text = f'Federal Reserve September FOMC statement says: "{excerpt}"'
     palette.append(ScriptReadyClaim(
         claim_id="claim_037", claim_text=statement_text, source_ids=["src_003"],
+        verification_status="verified", allowed_downstream=True,
         evidence=statement_evidence, verification_basis="authoritative_primary_attestation",
         authority_attestation=statement_attestation,
     ))
@@ -191,6 +193,7 @@ def test_mock_script_uses_only_synthetic_angle_facts_and_preserves_attribution()
     claim_text = "合成统计局表示，零售指数从100升至103。"
     claim = ScriptReadyClaim(
         claim_id="claim_retail_001", claim_text=claim_text, source_ids=["src_retail"],
+        verification_status="verified", allowed_downstream=True,
         evidence=[{
             "source_id": "src_retail", "original_url": "https://synthetic.example/release",
             "evidence_text": claim_text, "evidence_eligible": True,
@@ -205,6 +208,7 @@ def test_mock_script_uses_only_synthetic_angle_facts_and_preserves_attribution()
     )
     unrelated = ScriptReadyClaim(
         claim_id="claim_unselected", claim_text="GDP calibration text must not appear.",
+        verification_status="unverified", allowed_downstream=False,
     )
     request = ScriptGenerationInput(
         run_id="synthetic-retail-run", selected_angle=angle,

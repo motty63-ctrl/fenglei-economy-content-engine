@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_bytes, sha256_text
 from fanglei.errors import ArtifactConflictError
+from fanglei.evidence_policy import is_claim_eligible_for_content
 from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
@@ -389,6 +390,7 @@ def _fetch_failure_code(error: BaseException) -> str:
 
 
 def _render_research(run_id: str, questions: list[str], sources: list[dict[str, Any]], facts: dict[str, Any]) -> str:
+    """Render legacy Research output with its historical verified-only rule."""
     source_by_id = {s["source_id"]: s for s in sources}
     lines = ["# 多源研究报告", "", f"Run: `{run_id}`", "", "## 研究问题", ""]
     lines.extend(f"- {q}" for q in questions)
@@ -435,12 +437,8 @@ def _render_research_focus(
             source_id = row["source_id"]
             document_order[source_id] = index
             document_metadata.setdefault(source_id, {}).update(row)
-    allowed_claims = [
-        claim for claim in facts.get("claims", [])
-        if isinstance(claim, dict)
-        and claim.get("verification_status") == "verified"
-        and claim.get("allowed_downstream") is True
-    ]
+    claim_records = facts.get("claims", [])
+    allowed_claims = [claim for claim in claim_records if is_claim_eligible_for_content(claim)]
 
     def role_group(claim: dict[str, Any]) -> tuple[str, ...]:
         attestation = claim.get("authority_attestation")
@@ -518,14 +516,7 @@ def _render_research_focus(
         "",
     ])
     lines.extend(f"- {constraint}" for constraint in focus.constraints)
-    excluded = [
-        claim for claim in facts.get("claims", [])
-        if not (
-            isinstance(claim, dict)
-            and claim.get("verification_status") == "verified"
-            and claim.get("allowed_downstream") is True
-        )
-    ]
+    excluded = [claim for claim in claim_records if not is_claim_eligible_for_content(claim)]
     lines.extend(["", "## Excluded fact records", ""])
     lines.append(
         f"{len(excluded)} records were not used as substantive assertions because they are unverified "
