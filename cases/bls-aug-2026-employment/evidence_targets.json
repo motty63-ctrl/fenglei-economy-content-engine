@@ -1,0 +1,177 @@
+{
+  "schema_version": "evidence-targets/1.0",
+  "run_id": "2026-09-27-001-bls-august-2026-employment-situation",
+  "case_id": "bls-aug-2026-employment",
+  "targets": [
+    {
+      "target_id": "august-nonfarm-payroll-change",
+      "concept": "August nonfarm payroll employment change",
+      "aliases": ["Total nonfarm payroll employment increased by"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "evidence_kinds": ["narrative_sentence"],
+      "authority_scope": {
+        "subject": "total nonfarm payroll employment",
+        "measure": "payroll employment",
+        "period": "August",
+        "unit": null,
+        "statistic": null,
+        "certainty": "increased"
+      }
+    },
+    {
+      "target_id": "august-unemployment-rate",
+      "concept": "August unemployment rate",
+      "aliases": ["The unemployment rate was unchanged at 4.1 percent in August, and the number of unemployed people"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": "percent",
+      "required_source_section": "Household Survey Data",
+      "evidence_kinds": ["narrative_sentence"],
+      "authority_scope": {
+        "subject": "unemployment rate",
+        "measure": "unemployment rate",
+        "period": "August",
+        "unit": "percent",
+        "statistic": null,
+        "certainty": "unchanged"
+      }
+    },
+    {
+      "target_id": "august-average-hourly-earnings",
+      "concept": "August average hourly earnings",
+      "aliases": ["average hourly earnings for all employees on private nonfarm payrolls"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": "currency",
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["narrative_sentence", "table_cell"],
+      "authority_scope": {
+        "subject": "average hourly earnings",
+        "measure": "hourly earnings",
+        "period": "August",
+        "unit": "$",
+        "statistic": null,
+        "certainty": "rose"
+      }
+    },
+    {
+      "target_id": "august-average-workweek",
+      "concept": "August average workweek",
+      "aliases": ["average workweek for all employees on private nonfarm payrolls"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": "hours",
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["narrative_sentence", "table_cell"],
+      "authority_scope": {
+        "subject": "average workweek",
+        "measure": "workweek",
+        "period": "August",
+        "unit": "hours",
+        "statistic": null,
+        "certainty": "edged up"
+      }
+    },
+    {
+      "target_id": "june-payroll-revision",
+      "concept": "June nonfarm payroll estimate revision in the August release",
+      "aliases": ["nonfarm payroll employment for June"],
+      "periods": ["June"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["revision"],
+      "authority_scope": {
+        "subject": "June",
+        "measure": "change",
+        "period": "June",
+        "unit": null,
+        "statistic": null,
+        "certainty": "revised up"
+      }
+    },
+    {
+      "target_id": "july-payroll-revision",
+      "concept": "July nonfarm payroll estimate revision in the August release",
+      "aliases": ["change for July"],
+      "periods": ["July"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["revision"],
+      "authority_scope": {
+        "subject": "July",
+        "measure": "change",
+        "period": "July",
+        "unit": null,
+        "statistic": null,
+        "certainty": "revised up"
+      }
+    },
+    {
+      "target_id": "august-food-services-employment",
+      "concept": "August employment change in food services and drinking places",
+      "aliases": ["Employment in food services and drinking places increased by"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["narrative_sentence", "table_cell"],
+      "authority_scope": {
+        "subject": "food services and drinking places",
+        "measure": "employment",
+        "period": "August",
+        "unit": null,
+        "statistic": null,
+        "certainty": "increased"
+      }
+    },
+    {
+      "target_id": "august-local-government-education-employment",
+      "concept": "August employment change in local government education",
+      "aliases": ["Local government education added"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["narrative_sentence", "table_cell"],
+      "authority_scope": {
+        "subject": "local government education",
+        "measure": "jobs",
+        "period": "August",
+        "unit": null,
+        "statistic": null,
+        "certainty": "added"
+      }
+    },
+    {
+      "target_id": "august-information-industry-employment",
+      "concept": "August employment change in the information industry",
+      "aliases": ["information employment"],
+      "periods": ["August"],
+      "source_roles": ["target-current-employment-estimates-and-industry-changes-2026-08"],
+      "statistic": null,
+      "expected_unit_family": null,
+      "required_source_section": "Establishment Survey Data",
+      "evidence_kinds": ["narrative_sentence", "table_cell"],
+      "authority_scope": {
+        "subject": "information employment",
+        "measure": "employment",
+        "period": "August",
+        "unit": null,
+        "statistic": null,
+        "certainty": "declined"
+      }
+    }
+  ]
+}

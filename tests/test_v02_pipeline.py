@@ -76,6 +76,74 @@ def test_explicit_sources_21_policy_produces_native_facts_22(tmp_path: Path) -> 
     assert all(claim["verification_basis"] in {"independent_corroboration", "none"} for claim in facts["claims"])
 
 
+def test_evidence_targets_are_run_bound_registered_fact_inputs_and_never_refetch(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+
+    class CountingFetcher(FakeFetcher):
+        calls = 0
+
+        def fetch(self, source_id: str, url: str, title: str) -> FetchedDocument:
+            self.calls += 1
+            return super().fetch(source_id, url, title)
+
+    fetcher = CountingFetcher()
+    targets = {
+        "schema_version": "evidence-targets/1.0",
+        "run_id": run.name,
+        "case_id": "synthetic-economy-case",
+        "targets": [{
+            "target_id": "retail-change",
+            "concept": "monthly retail sales change",
+            "aliases": ["retail sales"],
+            "periods": ["August 2026"],
+            "source_roles": ["official"],
+            "statistic": "month-over-month change",
+            "expected_unit_family": "percent",
+            "evidence_kinds": ["narrative_sentence", "table_cell", "revision"],
+            "authority_scope": {
+                "subject": "retail sales",
+                "measure": "monthly change",
+                "period": "August 2026",
+                "unit": "percent",
+                "statistic": "month-over-month change",
+                "certainty": "increased",
+            },
+        }],
+    }
+    source_policy = {"name": "independent_sources", "version": "1.0"}
+    run_v02_pipeline(
+        run.name, tmp_path, FakeSearch(), fetcher,
+        source_policy=source_policy, evidence_targets=targets,
+    )
+    assert fetcher.calls == 3
+    first_target_bytes = (run / "evidence_targets.json").read_bytes()
+    first_sources_bytes = (run / "sources.json").read_bytes()
+    manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["evidence_targets.json"]["status"] == "valid"
+    assert "evidence_targets.json" in manifest["artifacts"]["facts.json"]["dependencies"]
+
+    changed = json.loads(first_target_bytes.decode("utf-8"))
+    changed["targets"][0]["concept"] = "updated retrieval concept"
+    run_v02_pipeline(
+        run.name, tmp_path, FakeSearch(), fetcher,
+        force_stage="factcheck", evidence_targets=changed,
+    )
+    assert fetcher.calls == 3
+    assert (run / "sources.json").read_bytes() == first_sources_bytes
+    assert (run / "evidence_targets.json").read_bytes() != first_target_bytes
+    manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["facts.json"]["status"] == "valid"
+    assert manifest["artifacts"]["facts.json"]["dependencies"]["evidence_targets.json"] == manifest["artifacts"]["evidence_targets.json"]["content_hash"]
+
+    wrong_run = json.loads((run / "evidence_targets.json").read_text(encoding="utf-8"))
+    wrong_run["run_id"] = "different-run"
+    with pytest.raises(ValueError, match="run_id"):
+        run_v02_pipeline(
+            run.name, tmp_path, FakeSearch(), fetcher,
+            evidence_targets=wrong_run,
+        )
+
+
 def test_explicit_sources_21_policy_rebuilds_legacy_source_stage_only_when_requested(tmp_path: Path) -> None:
     run = _analyzed_run(tmp_path)
     search = FakeSearch()

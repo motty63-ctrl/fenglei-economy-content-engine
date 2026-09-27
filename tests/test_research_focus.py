@@ -140,6 +140,28 @@ def test_focus_write_invalidates_research_and_content_only(tmp_path: Path) -> No
     assert invalidated["artifacts"]["facts.json"]["status"] == "valid"
 
 
+def test_force_rebinds_unchanged_focus_after_facts_are_rebuilt(tmp_path: Path) -> None:
+    run, _, _ = _run(tmp_path)
+    focus = _focus(run_id=run.name)
+    write_research_focus(run.name, tmp_path, focus)
+
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text("utf-8")))
+    registry = ArtifactRegistry(run, manifest, research_focus_mode=True)
+    facts = registry.read_json("facts.json")
+    facts["checked_at"] = "2026-09-26T12:00:00+00:00"
+    registry.write_json("facts.json", facts, "factcheck", force=True)
+    registry.save_manifest()
+    stale = json.loads((run / "run.json").read_text("utf-8"))
+    assert stale["artifacts"]["research_focus.json"]["status"] == "stale"
+
+    write_research_focus(run.name, tmp_path, focus, force=True)
+    rebound = json.loads((run / "run.json").read_text("utf-8"))
+    assert rebound["artifacts"]["research_focus.json"]["status"] == "valid"
+    assert rebound["artifacts"]["research_focus.json"]["dependencies"]["facts.json"] == rebound[
+        "artifacts"
+    ]["facts.json"]["content_hash"]
+
+
 def test_focus_identity_must_match_run_and_approved_case(tmp_path: Path) -> None:
     run, _, _ = _run(tmp_path)
     with pytest.raises(ArtifactConflictError, match="run_id"):

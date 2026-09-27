@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Mapping
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from fanglei.artifact_registry import ArtifactRegistry
-from fanglei.artifacts import read_json
+from fanglei.artifacts import read_json, sha256_text
 from fanglei.errors import ArtifactConflictError
 from fanglei.models import RunManifest
 from fanglei.paths import resolve_run_dir
@@ -106,16 +106,27 @@ def write_research_focus(
     if artifact_path.exists():
         if state.status == "missing" or not state.content_hash:
             raise ArtifactConflictError("existing research_focus.json is unregistered; refusing to overwrite")
-        try:
-            registry.validate("research_focus.json")
-        except ArtifactConflictError:
-            registry.save_manifest()
-            raise
-        existing = registry.read_json("research_focus.json")
-        if existing == parsed.model_dump(mode="json"):
-            return artifact_path
-        if not force:
+        existing_text = artifact_path.read_text(encoding="utf-8")
+        if sha256_text(existing_text) != state.content_hash:
+            raise ArtifactConflictError("existing research_focus.json hash differs from its registry record")
+        existing = read_json(artifact_path)
+        if existing == parsed.model_dump(mode="json") and state.status == "valid":
+            try:
+                registry.validate("research_focus.json")
+            except ArtifactConflictError:
+                registry.save_manifest()
+                if not force:
+                    raise
+            else:
+                return artifact_path
+        elif not force:
+            if existing == parsed.model_dump(mode="json"):
+                raise ArtifactConflictError("research focus is stale; use force to refresh its current dependencies")
             raise ArtifactConflictError("research focus already exists; use force to replace through its owner")
+        try:
+            ResearchFocusV1.model_validate(existing)
+        except Exception as error:
+            raise ArtifactConflictError(f"existing research_focus.json is malformed: {error}") from error
 
     registry.write_json(
         "research_focus.json",

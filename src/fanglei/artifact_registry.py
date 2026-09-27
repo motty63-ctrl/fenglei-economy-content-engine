@@ -93,6 +93,20 @@ def _human_angle_selection_graph(
         ),
     }
 
+
+def _evidence_target_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Register explicit run-bound evidence targets as a facts input."""
+    graph = dict(base_graph)
+    facts_owner, facts_dependencies = graph["facts.json"]
+    graph["evidence_targets.json"] = ("evidence_targets", ("sources.json",))
+    graph["facts.json"] = (
+        facts_owner,
+        tuple(dict.fromkeys((*facts_dependencies, "evidence_targets.json"))),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -151,6 +165,7 @@ class ArtifactRegistry:
         *,
         research_focus_mode: bool | None = None,
         human_angle_selection_mode: bool = False,
+        evidence_targets_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -172,6 +187,12 @@ class ArtifactRegistry:
             # later owner must use the same graph. Old manifests stay legacy.
             selection_enabled = human_angle_selection_mode or "angle_selection.json" in manifest.artifacts
             self.graph = _human_angle_selection_graph(base_graph) if selection_enabled else base_graph
+            target_state = manifest.artifacts.get("evidence_targets.json")
+            target_enabled = evidence_targets_mode or (self.run_dir / "evidence_targets.json").is_file() or (
+                target_state is not None and target_state.status != "missing"
+            )
+            if target_enabled:
+                self.graph = _evidence_target_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

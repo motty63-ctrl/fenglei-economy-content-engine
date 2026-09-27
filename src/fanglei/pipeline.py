@@ -38,6 +38,11 @@ from fanglei.publication_metadata import (
 )
 from fanglei.security import safe_error_message, sanitize_url
 from fanglei.evidence_policy import gate_evidence
+from fanglei.evidence_targets import (
+    EvidenceTargetSetV1,
+    build_authority_claim_proposals,
+    parse_evidence_target_set,
+)
 
 
 class DocumentFetcher(Protocol):
@@ -52,10 +57,14 @@ def _load(
     run_dir: Path,
     *,
     human_angle_selection_mode: bool = False,
+    evidence_targets_mode: bool = False,
 ) -> tuple[RunManifest, ArtifactRegistry]:
     manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
     registry = ArtifactRegistry(
-        run_dir, manifest, human_angle_selection_mode=human_angle_selection_mode
+        run_dir,
+        manifest,
+        human_angle_selection_mode=human_angle_selection_mode,
+        evidence_targets_mode=evidence_targets_mode,
     )
     for name, owner in (("source.md", "ingest"), ("questions.json", "analyze")):
         path = run_dir / name
@@ -96,6 +105,7 @@ STAGE_ARTIFACT = {
     "search": "search_results.json",
     "source_fetch": "source_documents/index.json",
     "source_selection": "sources.json",
+    "evidence_targets": "evidence_targets.json",
     "factcheck": "facts.json",
     "research_synthesis": "research.md",
     "angle_generation": "angles.json",
@@ -555,9 +565,32 @@ def run_v02_pipeline(
     force_stage: str | None = None,
     source_policy: Mapping[str, Any] | None = None,
     authority_claims: Mapping[str, Mapping[str, Any]] | None = None,
+    evidence_targets: EvidenceTargetSetV1 | Mapping[str, object] | None = None,
 ) -> Path:
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
-    manifest, registry = _load(run_dir)
+    if evidence_targets is not None:
+        target_identity = evidence_targets.model_dump(mode="json") if isinstance(evidence_targets, EvidenceTargetSetV1) else evidence_targets
+        if not isinstance(target_identity, Mapping) or not isinstance(target_identity.get("case_id"), str):
+            raise ValueError("evidence targets require an explicit case_id")
+        parsed_targets = parse_evidence_target_set(
+            evidence_targets, run_id=run_id, case_id=target_identity["case_id"]
+        )
+    else:
+        parsed_targets = None
+    manifest, registry = _load(run_dir, evidence_targets_mode=parsed_targets is not None)
+
+    if parsed_targets is None and (run_dir / "evidence_targets.json").is_file():
+        target_state = manifest.artifacts.get("evidence_targets.json")
+        target_path = run_dir / "evidence_targets.json"
+        if target_state is None or target_state.status == "missing" or not target_state.content_hash:
+            raise ArtifactConflictError("existing evidence_targets.json is unregistered; refusing to load")
+        target_text = target_path.read_text(encoding="utf-8")
+        if sha256_text(target_text) != target_state.content_hash:
+            raise ArtifactConflictError("existing evidence_targets.json hash differs from its registry record")
+        raw_targets = json.loads(target_text)
+        parsed_targets = parse_evidence_target_set(
+            raw_targets, run_id=run_id, case_id=raw_targets.get("case_id")
+        )
 
     def search() -> None:
         questions = registry.read_json("questions.json")
@@ -699,6 +732,54 @@ def run_v02_pipeline(
     _execute(manifest, registry, "source_selection", select, force_source_selection)
     if stop_after == "source_selection": return run_dir
 
+    target_set_sha256: str | None = None
+    document_roles: dict[str, str] = {}
+    if parsed_targets is not None:
+        source_artifact = registry.read_json("sources.json")
+        parsed_sources = parse_sources_artifact(source_artifact)
+        source_policy_model = getattr(parsed_sources, "source_policy", None)
+        if isinstance(source_policy_model, AuthoritativePrimarySetPolicyV1):
+            if (
+                source_policy_model.run_id != parsed_targets.run_id
+                or source_policy_model.case_id != parsed_targets.case_id
+                or source_artifact.get("package_admissibility") != "admissible"
+            ):
+                raise ArtifactConflictError("evidence targets do not match the approved authority source package identity")
+            document_roles = {
+                document.source_id: document.evidence_role
+                for document in source_policy_model.approved_documents
+            }
+            allowed_roles = set(document_roles.values())
+            if any(not set(target.source_roles).issubset(allowed_roles) for target in parsed_targets.targets):
+                raise ArtifactConflictError("evidence target source_roles must match roles in the approved package")
+        else:
+            document_roles = {row["source_id"]: row["source_type"] for row in source_artifact["sources"]}
+
+        target_payload = parsed_targets.model_dump(mode="json")
+        target_path = run_dir / "evidence_targets.json"
+        target_state = manifest.artifacts["evidence_targets.json"]
+        target_force = force_stage == "evidence_targets"
+        if target_path.exists():
+            existing_text = target_path.read_text(encoding="utf-8")
+            if target_state.status == "missing" or not target_state.content_hash:
+                raise ArtifactConflictError("existing evidence_targets.json is unregistered; refusing to overwrite")
+            if sha256_text(existing_text) != target_state.content_hash:
+                raise ArtifactConflictError("existing evidence_targets.json hash differs from its registry record")
+            existing_target = json.loads(existing_text)
+            target_force = target_force or existing_target != target_payload or target_state.status != "valid"
+        else:
+            if target_state.status != "missing":
+                raise ArtifactConflictError("registered evidence_targets.json is missing; refusing to recreate")
+            target_force = True
+
+        def save_targets() -> None:
+            registry.write_json(
+                "evidence_targets.json", target_payload, "evidence_targets", force=target_force
+            )
+
+        _execute(manifest, registry, "evidence_targets", save_targets, target_force)
+        target_set_sha256 = manifest.artifacts["evidence_targets.json"].content_hash
+
     def factcheck() -> None:
         source_artifact = registry.read_json("sources.json")
         source_version = source_artifact.get("schema_version")
@@ -709,7 +790,13 @@ def run_v02_pipeline(
             raise ValueError("AUTHORITY_CLAIMS_REQUIRE_SOURCES_2_1: authority claims need a versioned approved source package")
         if source_artifact.get("schema_version") == "2.1" and source_artifact.get("package_admissibility") != "admissible":
             raise ValueError("SOURCE_PACKAGE_INADMISSIBLE: source package does not permit claim extraction")
-        evidence = RuleBasedEvidenceExtractor().extract(documents, _question_texts(registry.read_json("questions.json")))
+        evidence = RuleBasedEvidenceExtractor().extract(
+            documents,
+            _question_texts(registry.read_json("questions.json")),
+            evidence_targets=parsed_targets,
+            document_roles=document_roles if parsed_targets is not None else None,
+            target_set_sha256=target_set_sha256,
+        )
         if (
             authority_claims
             and parsed_source_artifact is not None
@@ -749,6 +836,23 @@ def run_v02_pipeline(
                 if hasattr(parsed_source_artifact.source_policy, "case_id")
                 else None
             )
+            resolved_authority_claims = {key: dict(value) for key, value in (authority_claims or {}).items()}
+            if (
+                parsed_targets is not None
+                and isinstance(parsed_source_artifact.source_policy, AuthoritativePrimarySetPolicyV1)
+            ):
+                target_evidence = gate_evidence(
+                    [item for item in evidence if item.get("evidence_target_id")], documents
+                )
+                generated = build_authority_claim_proposals(
+                    target_evidence,
+                    parsed_targets,
+                    institution_display_name=parsed_source_artifact.source_policy.institution.display_name,
+                )
+                collision = set(resolved_authority_claims) & set(generated)
+                if collision:
+                    raise ArtifactConflictError("authority claim proposal key collision: " + ", ".join(sorted(collision)))
+                resolved_authority_claims.update(generated)
             facts = verify_claims_v22(
                 evidence,
                 source_context,
@@ -757,7 +861,7 @@ def run_v02_pipeline(
                 registry.read_json("source_documents/index.json"),
                 run_id=run_id,
                 case_id=policy_case_id,
-                authority_claims={key: dict(value) for key, value in (authority_claims or {}).items()},
+                authority_claims=resolved_authority_claims,
                 checked_at=_now(),
             )
         registry.write_json("facts.json", facts, "factcheck", force=force_stage == "factcheck")
