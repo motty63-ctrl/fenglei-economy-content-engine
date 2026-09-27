@@ -48,9 +48,15 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _load(run_dir: Path) -> tuple[RunManifest, ArtifactRegistry]:
+def _load(
+    run_dir: Path,
+    *,
+    human_angle_selection_mode: bool = False,
+) -> tuple[RunManifest, ArtifactRegistry]:
     manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
-    registry = ArtifactRegistry(run_dir, manifest)
+    registry = ArtifactRegistry(
+        run_dir, manifest, human_angle_selection_mode=human_angle_selection_mode
+    )
     for name, owner in (("source.md", "ingest"), ("questions.json", "analyze")):
         path = run_dir / name
         state = manifest.artifacts[name]
@@ -94,6 +100,7 @@ STAGE_ARTIFACT = {
     "research_synthesis": "research.md",
     "angle_generation": "angles.json",
     "angle_selection": "angle.md",
+    "human_angle_selection": "angle_selection.json",
     "script_generation": "script.json",
     "script_render": "script.md",
     "visual_planning": "visual_beats.json",

@@ -1,7 +1,7 @@
 import json
 
 from fanglei.artifact_registry import ArtifactRegistry
-from fanglei.content_pipeline import run_content_pipeline
+from fanglei.content_pipeline import run_legacy_content_pipeline
 from fanglei.models import RunManifest
 from fanglei.providers.content import MockContentPlanningProvider
 from fanglei.providers.visual import DeterministicVisualPlanningProvider
@@ -11,7 +11,7 @@ from tests.test_content_pipeline import _prepared_run
 
 def _visual_ready_run(tmp_path):
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider())
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider())
     return run
 
 

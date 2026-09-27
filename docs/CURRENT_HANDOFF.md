@@ -4,9 +4,9 @@
 
 - V0.1.0 is frozen; do not regenerate the Fed video or change the public `v0.1.0` Release as part of V0.2 planning.
 - Active branch: `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 1A, Phase 1B, Phase 1C, and Phase 2A are complete on the V0.2 development branch. Phase 2A uses one fail-closed claim eligibility contract (`verification_status == verified` and `allowed_downstream is True`) across Research Focus rendering, Angle planning inputs, Script generation/repair context, and script lint. Focused regression passed (126 tests); safe non-integration regression passed (695 tests). Fed run artifacts and the public V0.1.0 release were not changed.
+- Current phase: Phases 1A, 1B, 1C, 2A, and 2B are complete on the V0.2 development branch. Phase 2A uses one fail-closed claim eligibility contract (`verification_status == verified` and `allowed_downstream is True`) across the V0.2 content path. Phase 2B records explicit human angle selection in `angle_selection.json`, bound to the current run, angle hash, and facts hash; Script generation/repair fail before provider calls if the record is missing, stale, or invalid. The automatic recommendation fallback remains on explicitly named legacy compatibility routes. Fed V0.1 run artifacts and the public release were not changed.
 - Phase 1B generalizes DeepSeek script generation and repair, plus deterministic mock script generation. Its only remaining topic-specific provider mapping is isolated as a historical Fed V0.1 compatibility adapter.
-- Next: Phase 2B — define and enforce a recorded human angle-selection prerequisite before a V0.2 production script. Phase 2 and V0.2 are not complete, and a second real case has not yet validated end-to-end generality. See [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not start Phase 2B automatically.
+- Next: Phase 3 — validate the reusable workflow with a second real economic case. Phase 3 has not started; Phase 2 and V0.2 are not complete, and no second real case has yet validated end-to-end generality. See [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not start Phase 3 automatically.
 - Phase 1A and Phase 1B commits are pushed to the V0.2 branch. Phase 1C and Phase 2A branch state is recorded in Git; check actual HEAD and ahead/behind before further work. The Fed run and V0.1.0 release remain untouched.
 
 ## Current public release
@@ -31,4 +31,4 @@ The old checkpoint recovery remains closed. Do not repair, backfill, infer, defa
 
 ## Handoff boundary
 
-V0.1.0 remains frozen and public. Phase 1A, Phase 1B, and Phase 1C are complete on the V0.2 branch. Phase 1C is undergoing final verification before its local commit; do not start Phase 2 or push without separate authorization.
+V0.1.0 remains frozen and public. Phases 1A, 1B, 1C, 2A, and 2B are complete on the V0.2 branch. Phase 3 is the next separately bounded phase; do not start it automatically or push without separate authorization.

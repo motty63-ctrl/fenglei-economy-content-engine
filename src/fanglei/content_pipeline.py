@@ -2,8 +2,10 @@
 from __future__ import annotations
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from fanglei.angle_policy import score_angles, select_angle, validate_angle_diversity
+from fanglei.angle_selection import HumanAngleSelectionV1
 from fanglei.content_models import AngleCandidate, ScriptDraft
 from fanglei.content_policy import build_fact_palette
 from fanglei.content_render import render_angle_markdown, render_script_json, render_script_markdown
@@ -20,6 +22,162 @@ from fanglei.providers.content import (
 )
 from fanglei.script_lint import lint_script
 from fanglei.script_patch import apply_script_patches, build_repair_scope
+
+
+def _selection_failure(code: str, detail: str) -> ArtifactConflictError:
+    return ArtifactConflictError(f"{code}: {detail}")
+
+
+def _load_human_selected_angle(
+    run_id: str,
+    run_dir: Path,
+    manifest,
+    registry,
+    angles: dict,
+    eligible_claim_ids: set[str],
+) -> AngleCandidate:
+    selection_path = run_dir / "angle_selection.json"
+    state = manifest.artifacts["angle_selection.json"]
+    if state.status == "missing":
+        code = "ANGLE_SELECTION_INVALID" if selection_path.exists() else "ANGLE_SELECTION_REQUIRED"
+        raise _selection_failure(code, "record an explicit human selection with select-angle")
+    if state.status != "valid":
+        raise _selection_failure("ANGLE_SELECTION_STALE", "selection artifact is not current")
+    try:
+        registry.validate("angle_selection.json")
+        raw = registry.read_json("angle_selection.json")
+    except Exception as error:
+        registry.save_manifest()
+        raise _selection_failure("ANGLE_SELECTION_STALE", str(error)) from error
+    try:
+        selection = HumanAngleSelectionV1.model_validate(raw)
+    except Exception as error:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", str(error)) from error
+
+    if selection.run_id != run_id:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "run identity does not match")
+    if (selection.angles_sha256 != manifest.artifacts["angles.json"].content_hash
+            or selection.facts_sha256 != manifest.artifacts["facts.json"].content_hash):
+        raise _selection_failure("ANGLE_SELECTION_STALE", "bound angles or facts hash changed")
+
+    candidates = angles.get("candidates")
+    if not isinstance(candidates, list):
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "angles.json has no candidate list")
+    matches = [row for row in candidates if isinstance(row, dict)
+               and row.get("angle_id") == selection.selected_angle_id]
+    if len(matches) != 1:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate is missing or ambiguous")
+    try:
+        selected = AngleCandidate.model_validate(matches[0])
+    except Exception as error:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", f"selected candidate is malformed: {error}") from error
+    if selected.eligibility != "eligible":
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate is not eligible")
+    if not set(selected.supporting_claim_ids) <= eligible_claim_ids:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate has ineligible supporting claims")
+
+    try:
+        registry.validate("angle.md")
+        angle_markdown = (run_dir / "angle.md").read_text(encoding="utf-8")
+    except Exception as error:
+        registry.save_manifest()
+        raise _selection_failure("ANGLE_SELECTION_STALE", f"rendered angle is not current: {error}") from error
+    markers = re.findall(r"(?m)^selected_angle_id: `([^`]+)`\s*$", angle_markdown)
+    if markers != [selection.selected_angle_id]:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "angle.md does not match the human selection")
+    return selected
+
+
+def record_human_angle_selection(
+    run_id: str,
+    runs_dir: Path,
+    selected_angle_id: str,
+    *,
+    reviewer: str | None = None,
+    rationale: str | None = None,
+) -> Path:
+    """Record one explicit human choice for the current angles/facts artifacts."""
+    from fanglei.paths import resolve_run_dir
+
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir, human_angle_selection_mode=True)
+    if registry.imported_checkpoint_mode:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "checkpoint imports use their materialized angle")
+    selection_path = run_dir / "angle_selection.json"
+    selection_state = manifest.artifacts["angle_selection.json"]
+    if selection_path.exists() and selection_state.status == "missing":
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selection file is not registered")
+    if selection_state.status == "valid":
+        try:
+            registry.validate("angle_selection.json")
+            existing_selection = HumanAngleSelectionV1.model_validate(
+                registry.read_json("angle_selection.json")
+            )
+            if existing_selection.run_id != run_id:
+                raise ValueError("existing selection run identity does not match")
+        except Exception as error:
+            registry.save_manifest()
+            raise _selection_failure("ANGLE_SELECTION_INVALID", f"existing selection is invalid: {error}") from error
+    try:
+        registry.validate("angles.json")
+        registry.validate("facts.json")
+        angles = registry.read_json("angles.json")
+        facts = registry.read_json("facts.json")
+    except Exception as error:
+        registry.save_manifest()
+        raise _selection_failure("ANGLE_SELECTION_STALE", str(error)) from error
+    if angles.get("run_id") != run_id or (facts.get("run_id") is not None and facts.get("run_id") != run_id):
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "angles/facts run identity does not match")
+    rows = angles.get("candidates")
+    if not isinstance(rows, list):
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "angles.json has no candidate list")
+    matches = [row for row in rows if isinstance(row, dict) and row.get("angle_id") == selected_angle_id]
+    if len(matches) != 1:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate is missing or ambiguous")
+    try:
+        selected = AngleCandidate.model_validate(matches[0])
+    except Exception as error:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", f"selected candidate is malformed: {error}") from error
+    if selected.eligibility != "eligible":
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate is not eligible")
+    eligible_claim_ids = {claim.claim_id for claim in build_fact_palette(facts)}
+    if not set(selected.supporting_claim_ids) <= eligible_claim_ids:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", "selected candidate has ineligible supporting claims")
+
+    angles_hash = manifest.artifacts["angles.json"].content_hash
+    facts_hash = manifest.artifacts["facts.json"].content_hash
+    if not angles_hash or not facts_hash:
+        raise _selection_failure("ANGLE_SELECTION_STALE", "current angles/facts hashes are unavailable")
+    try:
+        selection = HumanAngleSelectionV1(
+            schema_version="human-angle-selection/1.0",
+            run_id=run_id,
+            selected_angle_id=selected_angle_id,
+            source="human",
+            selected_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            angles_sha256=angles_hash,
+            facts_sha256=facts_hash,
+            reviewer=reviewer,
+            rationale=rationale,
+        )
+    except Exception as error:
+        raise _selection_failure("ANGLE_SELECTION_INVALID", str(error)) from error
+
+    def write_selection() -> None:
+        registry.write_json(
+            "angle_selection.json", selection.model_dump(mode="json", exclude_none=True),
+            "human_angle_selection", force=True,
+        )
+
+    _execute(manifest, registry, "human_angle_selection", write_selection, force=True)
+    # First-time selection may leave an older legacy Script with identical
+    # angle text. It still predates this human decision and must be regenerated.
+    registry.invalidate_descendants("angle_selection.json")
+    registry.write_text(
+        "angle.md", render_angle_markdown(selected), "angle_selection", force=True
+    )
+    registry.save_manifest()
+    return run_dir / "angle_selection.json"
 
 
 def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
@@ -65,9 +223,17 @@ def _issue_codes(issues: list[RepairIssue]) -> list[str]:
 
 def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningProvider, *,
                          stop_after: str | None = None, force_stage: str | None = None,
-                         angle_id: str | None = None, speaking_rate: float = 4.0) -> Path:
+                         angle_id: str | None = None, speaking_rate: float = 4.0,
+                         legacy_auto_recommended: bool = False) -> Path:
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
-    manifest, registry = _load(run_dir)
+    manifest, registry = _load(
+        run_dir, human_angle_selection_mode=not legacy_auto_recommended
+    )
+    if legacy_auto_recommended and "angle_selection.json" in registry.graph:
+        raise _selection_failure(
+            "ANGLE_SELECTION_INVALID",
+            "legacy recommendation fallback cannot downgrade a run using human selection",
+        )
     facts = registry.read_json("facts.json")
     palette = build_fact_palette(facts)
     if not palette: raise ValueError("NO_SCRIPT_READY_FACTS")
@@ -103,6 +269,10 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     }
 
     def generate_angles() -> None:
+        # A deliberate regeneration is a new review event. Invalidate a human
+        # choice even when deterministic/provider output happens to hash alike.
+        if force_stage == "angle_generation" and "angle_selection.json" in registry.graph:
+            registry.invalidate_descendants("angles.json")
         proposed = provider.generate_angles(AngleGenerationInput(run_id=run_id,
             core_topic=core_topic,
             research_questions=research_questions,
@@ -138,26 +308,40 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     _execute(manifest, registry, "angle_generation", generate_angles, force_stage == "angle_generation")
     if stop_after == "angle_generation": return run_dir
 
-    existing_selected = None
-    if (run_dir / "angle.md").is_file():
-        match = re.search(r"selected_angle_id: `([^`]+)`", (run_dir / "angle.md").read_text(encoding="utf-8"))
-        existing_selected = match.group(1) if match else None
-    force_select = force_stage == "angle_selection" or bool(angle_id and angle_id != existing_selected)
-    def choose_angle() -> None:
-        artifact = registry.read_json("angles.json")
-        candidates = [AngleCandidate.model_validate(row) for row in artifact["candidates"]]
-        chosen = select_angle(candidates, angle_id or artifact["recommended_angle_id"])
-        registry.write_text("angle.md", render_angle_markdown(chosen), "angle_selection", force=force_select)
-    _execute(manifest, registry, "angle_selection", choose_angle, force_select)
-    if stop_after == "angle_selection": return run_dir
+    if legacy_auto_recommended:
+        existing_selected = None
+        if (run_dir / "angle.md").is_file():
+            match = re.search(r"selected_angle_id: `([^`]+)`", (run_dir / "angle.md").read_text(encoding="utf-8"))
+            existing_selected = match.group(1) if match else None
+        force_select = force_stage == "angle_selection" or bool(angle_id and angle_id != existing_selected)
+
+        def choose_angle() -> None:
+            artifact = registry.read_json("angles.json")
+            candidates = [AngleCandidate.model_validate(row) for row in artifact["candidates"]]
+            chosen = select_angle(candidates, angle_id or artifact["recommended_angle_id"])
+            registry.write_text("angle.md", render_angle_markdown(chosen), "angle_selection", force=force_select)
+
+        _execute(manifest, registry, "angle_selection", choose_angle, force_select)
+        if stop_after == "angle_selection":
+            return run_dir
+        selected_id = re.search(r"selected_angle_id: `([^`]+)`", (run_dir / "angle.md").read_text(encoding="utf-8")).group(1)
+        angles = registry.read_json("angles.json")
+        selected = AngleCandidate.model_validate(next(row for row in angles["candidates"] if row["angle_id"] == selected_id))
+    else:
+        if angle_id is not None:
+            raise _selection_failure("ANGLE_SELECTION_REQUIRED", "use select-angle to record the human choice")
+        angles = registry.read_json("angles.json")
+        selected = _load_human_selected_angle(
+            run_id, run_dir, manifest, registry, angles,
+            {claim.claim_id for claim in palette},
+        )
+        if stop_after == "angle_selection":
+            return run_dir
 
     force_script = force_stage == "script_generation"
     if (run_dir / "script.json").is_file():
         old = registry.read_json("script.json") if manifest.artifacts["script.json"].status == "valid" else {}
         force_script = force_script or old.get("speaking_rate_chars_per_second") != speaking_rate
-    selected_id = re.search(r"selected_angle_id: `([^`]+)`", (run_dir / "angle.md").read_text(encoding="utf-8")).group(1)
-    angles = registry.read_json("angles.json")
-    selected = AngleCandidate.model_validate(next(row for row in angles["candidates"] if row["angle_id"] == selected_id))
     def generate_script() -> None:
         if force_script:
             for artifact_name in ("script.json", "script.md"):
@@ -262,3 +446,15 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     manifest.status = "scripted"
     registry.save_manifest()
     return run_dir
+
+
+def run_legacy_content_pipeline(
+    run_id: str,
+    runs_dir: Path,
+    provider: ContentPlanningProvider,
+    **kwargs,
+) -> Path:
+    """Explicit compatibility path retaining the historical recommendation fallback."""
+    return run_content_pipeline(
+        run_id, runs_dir, provider, legacy_auto_recommended=True, **kwargs
+    )

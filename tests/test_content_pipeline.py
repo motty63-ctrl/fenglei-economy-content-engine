@@ -4,7 +4,7 @@ import pytest
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.models import RunManifest
-from fanglei.content_pipeline import _repair_issues, run_content_pipeline
+from fanglei.content_pipeline import _repair_issues, run_content_pipeline, run_legacy_content_pipeline
 from fanglei.content_models import AngleCandidate, ScriptReadyClaim
 from fanglei.providers.content import MockContentPlanningProvider, ScriptGenerationInput
 from fanglei.script_patch import ScriptPatch, ScriptPatchResult
@@ -47,7 +47,7 @@ def _prepared_run(tmp_path: Path) -> Path:
 def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
     provider = MockContentPlanningProvider()
-    run_content_pipeline(run.name, tmp_path, provider, angle_id="angle_003", speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, angle_id="angle_003", speaking_rate=4.0)
     angles = json.loads((run / "angles.json").read_text(encoding="utf-8"))
     assert 3 <= len(angles["candidates"]) <= 5
     assert angles["recommended_angle_id"] in {item["angle_id"] for item in angles["candidates"]}
@@ -264,7 +264,7 @@ def test_content_pipeline_passes_research_focus_and_authority_metadata_to_script
     registry.save_manifest()
 
     provider = _CapturingScriptProvider()
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
 
     assert provider.script_request.research_focus["primary_question"] == focus["primary_question"]
     assert provider.script_request.authority_metadata["selection_status"] == "insufficient_sources"
@@ -331,8 +331,8 @@ def test_angle_generation_uses_legacy_questions_when_focus_is_absent(tmp_path: P
 def test_rate_change_rebuilds_script_and_stales_are_resolved(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
     provider = MockContentPlanningProvider()
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=3.8)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=3.8)
     script = json.loads((run / "script.json").read_text(encoding="utf-8"))
     assert script["speaking_rate_chars_per_second"] == 3.8
     assert manifest_status(run, "script.json") == "valid"
@@ -370,13 +370,13 @@ class _RepairingProvider(MockContentPlanningProvider):
 
 def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
     before = json.loads((run / "run.json").read_text(encoding="utf-8"))
     angle_hash = before["artifacts"]["angles.json"]["content_hash"]
     angle_attempts = before["stages"]["angle_generation"]["attempts"]
     provider = _RepairingProvider(pass_on_attempt=2)
 
-    run_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
+    run_legacy_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
 
     after = json.loads((run / "run.json").read_text(encoding="utf-8"))
     script = json.loads((run / "script.json").read_text(encoding="utf-8"))
@@ -404,11 +404,11 @@ def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_pat
 
 def test_script_repair_loop_stops_after_two_and_does_not_publish_failed_draft(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
     provider = _RepairingProvider(pass_on_attempt=None)
 
     with pytest.raises(ValueError, match="SCRIPT_REPAIR_EXHAUSTED"):
-        run_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
+        run_legacy_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
 
     manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
     assert provider.angle_calls == 0

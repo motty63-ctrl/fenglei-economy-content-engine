@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fanglei.providers.content import DeepSeekContentPlanningProvider
-from fanglei.content_pipeline import run_content_pipeline
+from fanglei.content_pipeline import run_legacy_content_pipeline
 
 
 @pytest.mark.integration
@@ -56,7 +56,7 @@ def test_deepseek_live_content_acceptance_uses_existing_verified_run_only() -> N
         def repair_script(self, request):
             return provider.repair_script(request)
 
-    run_content_pipeline(run_id, runs_dir, ScriptOnlyDeepSeekProvider(), force_stage="script_generation")
+    run_legacy_content_pipeline(run_id, runs_dir, ScriptOnlyDeepSeekProvider(), force_stage="script_generation")
 
     after = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert {name: after["artifacts"][name]["content_hash"] for name in upstream_hashes} == upstream_hashes
