@@ -77,9 +77,10 @@ def score_angles(
         if authority_claims:
             angle_text = " ".join((proposal.title, proposal.hook, proposal.core_question,
                                    proposal.core_insight))
+            related_claims = [claim.model_dump(mode="python") for claim in authority_claims]
             for claim in authority_claims:
                 rejected.extend(code for code in authority_text_issues(
-                    angle_text, claim.model_dump(mode="python")
+                    angle_text, claim.model_dump(mode="python"), related_claims=related_claims
                 ) if code not in rejected)
         evidence = _evidence_strength(usable, source_independence_keys)
         if evidence < 2: rejected.append("INSUFFICIENT_EVIDENCE")

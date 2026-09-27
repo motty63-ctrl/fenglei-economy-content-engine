@@ -163,6 +163,11 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
         if sentence.claim_ids:
             contexts: list[str] = []
             valid = True
+            related_authority_claims = [
+                claims[claim_id] for claim_id in sentence.claim_ids
+                if claim_id in claims
+                and claims[claim_id].get("verification_basis") == "authoritative_primary_attestation"
+            ]
             for claim_id in sentence.claim_ids:
                 claim = claims.get(claim_id)
                 if not claim or not is_claim_eligible_for_content(claim):
@@ -178,7 +183,9 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
                 if not eligible: valid = False
                 contexts.append(_evidence_context(claim, eligible))
                 if claim.get("verification_basis") == "authoritative_primary_attestation":
-                    for code in authority_text_issues(sentence.text, claim):
+                    for code in authority_text_issues(
+                        sentence.text, claim, related_claims=related_authority_claims
+                    ):
                         issues.append(LintIssue(
                             code=code,
                             message="authority-backed claim attribution and scope must remain intact",
