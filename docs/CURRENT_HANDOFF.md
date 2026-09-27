@@ -4,10 +4,10 @@
 
 - V0.1.0 is frozen; do not regenerate the Fed video or change the public `v0.1.0` Release as part of V0.2 planning.
 - Active branch: `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 1A and Phase 1B complete. Phase 1B focused provider/pipeline regression: 87 passed; safe non-integration regression: 678 passed. Fed run artifacts and the public V0.1.0 release were not changed.
+- Current phase: Phase 1A, Phase 1B, and Phase 1C are complete on the V0.2 development branch. Phase 1C generalizes the normal storyboard/visual-planning path and preserves GDP calibration only through explicitly named adapters. Its focused visual/rendering regression passed (78 tests), and safe non-integration regression passed (682 tests). Fed run artifacts and the public V0.1.0 release were not changed.
 - Phase 1B generalizes DeepSeek script generation and repair, plus deterministic mock script generation. Its only remaining topic-specific provider mapping is isolated as a historical Fed V0.1 compatibility adapter.
-- Next: Phase 1C — shared fact eligibility for the new Research/Angle/Script path and an explicit human-selection record before its production script. See [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not start Phase 1C automatically.
-- Phase 1A is committed and pushed. Phase 1B changes are committed locally and have not been pushed; inspect actual Git state for the current HEAD and ahead/behind before further work.
+- Next: Phase 2 — shared claim eligibility and a recorded human angle-selection prerequisite before a V0.2 production script. A second real case has not yet validated end-to-end generality. See [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not start Phase 2 automatically.
+- Phases 1A and 1B are committed and pushed to the V0.2 branch. Phase 1C changes are being verified locally before their separate commit; check actual Git state for current HEAD and ahead/behind before further work.
 
 ## Current public release
 
@@ -31,4 +31,4 @@ The old checkpoint recovery remains closed. Do not repair, backfill, infer, defa
 
 ## Handoff boundary
 
-V0.1.0 remains frozen and public. Phase 1A and Phase 1B are complete; wait for human review before starting Phase 1C or any other V0.2 implementation slice.
+V0.1.0 remains frozen and public. Phase 1A, Phase 1B, and Phase 1C are complete on the V0.2 branch. Phase 1C is undergoing final verification before its local commit; do not start Phase 2 or push without separate authorization.

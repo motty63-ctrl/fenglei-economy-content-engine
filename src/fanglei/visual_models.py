@@ -16,6 +16,13 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class VisualComparison(StrictModel):
+    label: str = Field(min_length=1)
+    before_value: str = Field(min_length=1)
+    after_value: str = Field(min_length=1)
+    change: str | None = None
+
+
 class VisualBeat(StrictModel):
     beat_id: str
     order: int = Field(ge=1)
@@ -26,6 +33,7 @@ class VisualBeat(StrictModel):
     core_visual_relationship: str
     key_objects: list[str] = Field(default_factory=list)
     emphasis_objects: list[str] = Field(default_factory=list)
+    comparison: VisualComparison | None = None
     claim_ids: list[str] = Field(default_factory=list)
     recommended_renderer: RendererType
     estimated_duration_seconds: float = Field(gt=0)

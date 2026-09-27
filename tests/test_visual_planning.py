@@ -1,4 +1,8 @@
-from fanglei.providers.visual import DeterministicVisualPlanningProvider, VisualPlanningRequest
+from fanglei.providers.visual import (
+    DeterministicVisualPlanningProvider,
+    LegacyGDPCalibrationVisualPlanningProvider,
+    VisualPlanningRequest,
+)
 
 
 def _script():
@@ -23,8 +27,29 @@ def _script():
                            "text": text, "claim_ids": claims} for i, sec, typ, text, claims in rows]}
 
 
+def _retail_script():
+    return {
+        "schema_version": "3.0", "script_id": "script_retail_synthetic",
+        "estimated_duration_seconds": 12,
+        "sentences": [
+            {"sentence_id": "retail_001", "section": "hook", "sentence_type": "interpretation",
+             "text": "这项合成指标有什么变化？", "claim_ids": []},
+            {"sentence_id": "retail_002", "section": "phenomenon", "sentence_type": "verified_fact",
+             "text": "合成零售指数：120 → 135（+12.5%）。",
+             "claim_ids": ["claim_retail_synthetic"]},
+            {"sentence_id": "retail_003", "section": "core_judgment", "sentence_type": "interpretation",
+             "text": "这里只描述记录变化，不据此推断原因。", "claim_ids": []},
+        ],
+    }
+
+
+def _retail_facts():
+    return {"claims": [{"claim_id": "claim_retail_synthetic", "verification_status": "verified",
+                         "allowed_downstream": True}]}
+
+
 def test_gdp_planner_creates_semantic_multi_sentence_beats() -> None:
-    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+    plan = LegacyGDPCalibrationVisualPlanningProvider().plan(VisualPlanningRequest(
         run_id="gdp", script=_script(), allowed_claim_ids={"claim_007"}
     ))
     assert 4 <= len(plan.beats) <= 7
@@ -35,7 +60,7 @@ def test_gdp_planner_creates_semantic_multi_sentence_beats() -> None:
 
 
 def test_gdp_planner_keeps_claims_and_exact_relationship() -> None:
-    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+    plan = LegacyGDPCalibrationVisualPlanningProvider().plan(VisualPlanningRequest(
         run_id="gdp", script=_script(), allowed_claim_ids={"claim_007"}
     ))
     payload = plan.model_dump(mode="json")
@@ -72,3 +97,23 @@ def test_planner_does_not_introduce_facts_absent_from_script() -> None:
     )).model_dump_json()
     for forbidden in ("2.8%", "2.7932%", "BEA", "World Bank", "2024"):
         assert forbidden not in payload
+
+
+def test_generic_planner_marks_synthetic_retail_numbers_as_comparison_without_theme_leakage() -> None:
+    script = _retail_script()
+    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+        run_id="synthetic-retail", script=script, allowed_claim_ids={"claim_retail_synthetic"},
+    ))
+
+    comparisons = [beat for beat in plan.beats if {"before_value", "after_value"} <= set(beat.key_objects)]
+    assert len(comparisons) == 1
+    assert comparisons[0].narration_summary == script["sentences"][1]["text"]
+    assert comparisons[0].narrative_role == "phenomenon"
+    assert comparisons[0].claim_ids == ["claim_retail_synthetic"]
+    assert {"metric_label", "before_value", "after_value", "change"} <= set(comparisons[0].key_objects)
+    assert comparisons[0].comparison.model_dump() == {
+        "label": "合成零售指数", "before_value": "120", "after_value": "135", "change": "+12.5%",
+    }
+    serialized = plan.model_dump_json()
+    for forbidden in ("Federal Reserve", "FOMC", "SEP", "GDP", "2.2%", "4.3%", "3.6%", "3.8%"):
+        assert forbidden.casefold() not in serialized.casefold()

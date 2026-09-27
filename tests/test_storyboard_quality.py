@@ -1,14 +1,14 @@
-from fanglei.storyboard_quality import lint_storyboard
+from fanglei.storyboard_quality import lint_legacy_gdp_calibration_storyboard
 from tests.test_storyboard import _board, _facts
 from tests.test_visual_planning import _script
 
 
 def _codes(board):
-    return {issue.code for issue in lint_storyboard(board, _script(), _facts()).issues}
+    return {issue.code for issue in lint_legacy_gdp_calibration_storyboard(board, _script(), _facts()).issues}
 
 
 def test_valid_gdp_storyboard_passes_all_gates() -> None:
-    result = lint_storyboard(_board(), _script(), _facts())
+    result = lint_legacy_gdp_calibration_storyboard(_board(), _script(), _facts())
     assert result.passed
     assert result.issues == []
     assert result.sentence_coverage_ratio == 1
@@ -29,6 +29,18 @@ def test_gate_rejects_unsupported_or_nondeterministic_fact() -> None:
     codes = _codes(board)
     assert "VISUAL_FACT_CLAIM_NOT_ALLOWED" in codes
     assert "FACTUAL_TEXT_NOT_DETERMINISTIC" in codes
+
+
+def test_legacy_gate_keeps_provenance_check_for_named_gdp_fact_text() -> None:
+    board = _board()
+    target = next(obj for scene in board.scenes for obj in scene.objects
+                  if obj.object_id == "bea_label")
+    target.factual = False
+    target.sentence_ids = []
+    target.claim_ids = []
+    target.deterministic_render = False
+
+    assert "VISUAL_FACT_PROVENANCE_MISSING" in _codes(board)
 
 
 def test_gate_rejects_missing_sentence_coverage_and_invalid_inheritance() -> None:
