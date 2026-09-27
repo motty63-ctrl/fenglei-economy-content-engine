@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3A.2 atomic claim/scope alignment complete; current Facts 2.2 and deterministic Research are ready for human review, not approved.**
+- Status: **Phase 3A human review approved for Angle Planning only; generic atomic-authority safety aligned; five eligible Phase 3B angle candidates generated; human angle selection pending.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- No BLS angle, script, audio, storyboard, timeline, or video has been generated.
+- Five BLS angle candidates have been generated; none has been human-selected. No Script, audio, storyboard, timeline, or video has been generated.
 
 ## Locked research question
 
@@ -62,9 +62,9 @@ The BLS run was reprocessed offline through the formal factcheck and determinist
 
 Research renders the same atomic proposition used by each verified claim and retains BLS attribution, source ID, and locator. Household-survey unemployment remains separate from establishment-survey payroll, earnings, hours, revisions, and industry claims. Industry coverage is partial: the current eligible evidence names two increasing industries and one declining industry; it is not a complete ranking of all industry changes. Current Research has 9 eligible findings; no unverified or conflicted claim enters it.
 
-Current Facts SHA-256: `f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`. Current Research SHA-256: `ce8cc78eda8f630386c410c39e170d6f393704534415f4612acaf21da2d99862`. The run artifacts are local under ignored `runs/`; this record does not imply they are tracked in Git. The rerun used fail-on-call search/fetch stubs; both call counts were zero. Sources, source index, captures, publication reviews, and approved package were unchanged. No Angle or later content artifact exists.
+Current Facts SHA-256: `f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`. Current Research SHA-256: `ce8cc78eda8f630386c410c39e170d6f393704534415f4612acaf21da2d99862`. The run artifacts are local under ignored `runs/`; this record does not imply they are tracked in Git. The rerun used fail-on-call search/fetch stubs; both call counts were zero. Sources, source index, captures, publication reviews, and approved package were unchanged. At the Phase 3A.2 reprocessing checkpoint, no Angle or later content artifact had yet been generated.
 
-Human-review status: **`PHASE_3A_HUMAN_REVIEW_READY`**. This is readiness for a human decision, not a facts approval or downstream content approval.
+Historical review status: **`PHASE_3A_HUMAN_REVIEW_READY`** was the state before the approval recorded in `PHASE3A_APPROVAL.json`. That record binds the reviewed Facts, Research, Research Focus, Sources, and source index hashes and authorizes Angle Planning only; it does not authorize angle selection or later content stages.
 
 ## Current deterministic Research
 
@@ -76,4 +76,10 @@ The reprocessing used only local artifacts. Search and fetch providers were repl
 
 Phase 3A.1 extraction-focused tests: 88 passed; Phase 3A.2 focused extraction/authority/Research/pipeline tests: 90 passed; Phase 3A.2 safe non-integration regression: 729 passed. `git diff --check` passed.
 
-**Exact next action: human review the current Facts 2.2 and deterministic Research artifacts, then stop.** Do not generate angles, select an angle, or enter Phase 3B as part of this handoff.
+## Current Phase 3B angle review
+
+The generic atomic-authority safety fix is committed at `a0ecb8be28ac911ecff3741a6330fa8d8339d828`. It treats the verified `proposition_span` as the factual unit for atomic V0.2 claims while retaining the complete evidence text as provenance; unsupported neighboring clauses remain ineligible unless backed by their own verified atomic claim.
+
+The formal offline Angle Planning owner generated five eligible candidates in `runs/2026-09-27-001-bls-august-2026-employment-situation/angles.json`, SHA-256 `b897f1eaca70ce4bd3b7482fd9304ecead3e1eb9930609c4ea39467bdbc70afb`. All five support only their listed verified claims and passed the current authority safety checks. See [ANGLE_REVIEW.md](ANGLE_REVIEW.md) for exact candidate content, supported propositions, coverage gaps, cautions, score details, and the human selection command.
+
+The planner recommends `angle_004` (`原文记载与解释之间的边界`, score 68). **系统推荐不等于人工选择，也不代表最佳选择。** No `angle_selection.json` exists. Script generation and repair remain blocked until a human records a choice. No Script, audio/TTS, storyboard, timeline, or video has been generated for this BLS run. Research still cites only the nine verified and downstream-allowed claims; industry coverage remains partial (two named increases and one decline), not a complete ranking. Phase 3B is waiting for human selection.
