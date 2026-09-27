@@ -668,6 +668,102 @@ def test_targeted_narrative_authority_requires_locator_to_reconstruct_exact_sent
     assert rejected_section["claims"][0]["verification_status"] == "unverified"
 
 
+def test_authority_verification_binds_only_the_targeted_atomic_proposition() -> None:
+    from fanglei.evidence_targets import (
+        build_authority_claim_proposals,
+        extract_targeted_evidence,
+        parse_evidence_target_set,
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    original = _documents()
+    text = "Metric A rose to 10 units in the reference period, while Metric B remained at 5 units in the reference period."
+    documents = [replace(original[0], text=text, document_hash=sha256_text(text)), *original[1:]]
+    artifact, documents, index = _source_artifact(documents, source_policy=_policy(documents))
+    targets = parse_evidence_target_set({
+        "schema_version": "evidence-targets/1.0",
+        "run_id": RUN_ID,
+        "case_id": CASE_ID,
+        "targets": [{
+            "target_id": target_id,
+            "concept": target_id,
+            "aliases": [alias],
+            "periods": ["the reference period"],
+            "source_roles": ["june_sep"],
+            "statistic": None,
+            "expected_unit_family": "units",
+            "evidence_kinds": ["narrative_sentence"],
+            "authority_scope": {
+                "subject": subject,
+                "measure": "units",
+                "period": "the reference period",
+                "unit": "units",
+                "statistic": None,
+                "certainty": certainty,
+            },
+        } for target_id, alias, subject, certainty in (
+            ("metric-a", "Metric A rose", "Metric A", "rose"),
+            ("metric-b", "Metric B remained", "Metric B", "remained"),
+        )],
+    }, run_id=RUN_ID, case_id=CASE_ID)
+    captured = extract_targeted_evidence(
+        documents, targets, document_roles={"src-1": "june_sep"}
+    )
+    gated = gate_evidence(captured, documents)
+    candidates = build_authority_claim_proposals(
+        gated, targets, institution_display_name="Federal Reserve"
+    )
+
+    facts = _verify_authority(gated, artifact, documents, index, candidates)
+    claims_by_subject = {
+        claim["authority_attestation"]["scope"]["subject"]: claim
+        for claim in facts["claims"]
+        if claim.get("authority_attestation")
+    }
+    assert set(claims_by_subject) == {"Metric A", "Metric B"}
+    assert all(claim["verification_status"] == "verified" for claim in claims_by_subject.values())
+    assert claims_by_subject["Metric A"]["evidence"][0]["evidence_text"] == text
+    assert claims_by_subject["Metric A"]["evidence"][0]["proposition_span"]["text"] == (
+        "Metric A rose to 10 units in the reference period"
+    )
+    assert claims_by_subject["Metric B"]["evidence"][0]["proposition_span"]["text"] == (
+        "Metric B remained at 5 units in the reference period."
+    )
+
+    metric_a_key = next(
+        key for key, value in candidates.items() if "Metric A" in value["claim_text"]
+    )
+    composite = deepcopy(candidates[metric_a_key])
+    composite["claim_text"] = f'Federal Reserve: "{text}"'
+    rejected = _verify_authority(
+        gated, artifact, documents, index, {metric_a_key: composite, **{
+            key: value for key, value in candidates.items() if key != metric_a_key
+        }}
+    )
+    rejected_a = next(
+        claim for claim in rejected["claims"]
+        if any(item.get("evidence_target_id") == "metric-a" for item in claim.get("evidence", []))
+    )
+    assert rejected_a["verification_status"] == "unverified"
+    assert rejected_a["verification_basis"] == "none"
+    assert rejected_a["allowed_downstream"] is False
+
+    mismatched_scope = deepcopy(candidates[metric_a_key])
+    mismatched_scope["authority_attestation"]["scope"]["certainty"] = "fell"
+    rejected_scope = _verify_authority(
+        gated, artifact, documents, index, {metric_a_key: mismatched_scope, **{
+            key: value for key, value in candidates.items() if key != metric_a_key
+        }}
+    )
+    rejected_scope_a = next(
+        claim for claim in rejected_scope["claims"]
+        if any(item.get("evidence_target_id") == "metric-a" for item in claim.get("evidence", []))
+    )
+    assert rejected_scope_a["verification_status"] == "unverified"
+    assert rejected_scope_a["verification_basis"] == "none"
+    assert rejected_scope_a["allowed_downstream"] is False
+
+
 def test_missing_attribution_outside_package_and_scope_expansion_stay_unverified() -> None:
     artifact, documents, index = _source_artifact(source_policy=_policy(_documents()))
     doc = documents[0]

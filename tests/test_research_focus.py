@@ -336,6 +336,47 @@ def test_research_focus_renderer_uses_synthetic_non_fed_roles_without_case_frami
         assert case_framing not in rendered
 
 
+def test_research_focus_renders_atomic_proposition_instead_of_full_evidence_span() -> None:
+    from fanglei.pipeline import _render_research_focus
+
+    focus = ResearchFocusV1.model_validate(_focus(
+        case_id="synthetic-retail-sales",
+        primary_question="What did the first synthetic metric report?",
+        subquestions=["What value was reported?"],
+        constraints=["Keep each assertion within its bound evidence scope."],
+    ))
+    full_evidence = "Metric A rose to 10 units in Period 1, while Metric B remained at 5 units in Period 1."
+    proposition = "Metric A rose to 10 units in Period 1"
+    sources = {
+        "sources": [{"source_id": "synthetic-source", "title": "Synthetic release",
+                     "url": "https://example.test/release", "credibility_tier": "A"}],
+        "source_policy": {"approved_documents": []},
+    }
+    facts = {"claims": [{
+        "claim_id": "synthetic_claim_a",
+        "claim_text": f'Synthetic Statistical Office: "{proposition}"',
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "allowed_downstream": True,
+        "source_ids": ["synthetic-source"],
+        "authority_attestation": {"kind": "document_report", "source_ids": ["synthetic-source"]},
+        "evidence": [{
+            "source_id": "synthetic-source",
+            "relation": "supports",
+            "evidence_eligible": True,
+            "paragraph_locator": "line:1",
+            "evidence_text": full_evidence,
+            "proposition_span": {"start": 0, "end": len(proposition), "text": proposition},
+        }],
+    }]}
+
+    rendered = _render_research_focus(RUN_ID, focus, sources, facts)
+
+    assert proposition in rendered
+    assert full_evidence not in rendered
+    assert "Metric B remained" not in rendered
+
+
 def test_research_focus_groups_same_fallback_roles_independent_of_source_order() -> None:
     from fanglei.pipeline import _render_research_focus
 

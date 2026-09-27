@@ -498,8 +498,19 @@ def _render_research_focus(
         for evidence in claim.get("evidence", []):
             if evidence.get("relation") != "supports" or not evidence.get("evidence_eligible", True):
                 continue
+            evidence_text = evidence.get("evidence_text", "")
+            proposition_span = evidence.get("proposition_span")
+            if proposition_span is not None:
+                from fanglei.evidence_targets import validate_proposition_span
+
+                parsed_span = validate_proposition_span(evidence_text, proposition_span)
+                if parsed_span is None:
+                    # A malformed proposition binding cannot fall back to the
+                    # larger evidence excerpt in substantive Research output.
+                    continue
+                evidence_text = str(parsed_span["text"])
             locator = evidence.get("paragraph_locator") or evidence.get("source_section") or "source excerpt"
-            lines.append(f"  - Evidence ({evidence.get('source_id')}, {locator}): “{evidence.get('evidence_text', '')}”")
+            lines.append(f"  - Evidence ({evidence.get('source_id')}, {locator}): “{evidence_text}”")
         return lines
 
     lines = [

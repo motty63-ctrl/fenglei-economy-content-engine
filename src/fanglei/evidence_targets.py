@@ -101,6 +101,20 @@ _TABLE_TITLE = re.compile(
 )
 _TERMINAL_LINE = re.compile(r"[.!?。！？][\"'’”)}\]]*\s*$")
 _SENTENCE_BOUNDARY = re.compile(r"(?P<end>[.!?。！？][\"'’”)}\]]*)\s+(?=[A-Z0-9“‘\"(])")
+_COORDINATED_CLAUSE_BOUNDARY = re.compile(r",\s+(?:and|but|while|whereas)\s+|;\s*", re.IGNORECASE)
+_FINITE_PREDICATE = re.compile(
+    r"^(?:(?:the|a|an|this|that|these|those|it|they|we|he|she)\s+)?"
+    r"[A-Za-z][\w'-]*(?:\s+(?:[A-Za-z][\w'-]*|of|in|for|to|by|from|the|a|an)){0,7}\s+"
+    r"(?:am|is|are|was|were|be|been|being|has|have|had|will|would|can|could|may|might|must|shall|should|"
+    r"do|does|did|[A-Za-z][\w'-]*(?:ed|s))\b",
+    re.IGNORECASE,
+)
+_NON_PROPOSITIONAL_COMMA_TAIL = re.compile(
+    r",\s+(?:(?:[A-Za-z][\w'-]*ly\s+)?[A-Za-z][\w'-]*ing\b|"
+    r"(?:well|far|slightly|substantially|much|somewhat)\s+(?:above|below|higher|lower|more|less)\b|"
+    r"compared\s+with\b|relative\s+to\b|following\b|which\b|although\b|despite\b)",
+    re.IGNORECASE,
+)
 _COMMON_ABBREVIATIONS = {
     "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.",
     "u.s.", "u.k.", "e.g.", "i.e.", "etc.", "vs.", "no.", "fig.",
@@ -159,6 +173,105 @@ def _explicit_values(text: str) -> list[dict[str, str | None]]:
             unit = _normalized(unit_match.group(1)) if unit_match else None
         values.append({"value": token, "unit": unit})
     return values
+
+
+def _looks_like_independent_clause(text: str) -> bool:
+    """Recognize a coordinated subject/predicate without splitting value lists."""
+    return _FINITE_PREDICATE.match(text.strip()) is not None
+
+
+def atomic_proposition_spans(text: str) -> list[dict[str, object]]:
+    """Return deterministic sentence-level proposition spans with exact offsets.
+
+    Evidence remains the complete captured sentence. Coordinated independent
+    clauses are split; comma-led comparative or participial tails are excluded
+    from the claim proposition while value continuations such as ``or 0.3%``
+    and ``to $37`` remain attached to the same metric.
+    """
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for boundary in _COORDINATED_CLAUSE_BOUNDARY.finditer(text):
+        if _looks_like_independent_clause(text[boundary.end():]):
+            ranges.append((cursor, boundary.start()))
+            cursor = boundary.end()
+    ranges.append((cursor, len(text)))
+
+    output: list[dict[str, object]] = []
+    for raw_start, raw_end in ranges:
+        start, end = raw_start, raw_end
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        local = text[start:end]
+        adjunct = _NON_PROPOSITIONAL_COMMA_TAIL.search(local)
+        if adjunct is not None:
+            end = start + adjunct.start()
+            while end > start and text[end - 1].isspace():
+                end -= 1
+        if start < end:
+            output.append({"start": start, "end": end, "text": text[start:end]})
+    return output
+
+
+def validate_proposition_span(evidence_text: str, value: object) -> dict[str, object] | None:
+    """Validate an exact code-point span contained by the full evidence text."""
+    if not isinstance(value, dict) or set(value) != {"start", "end", "text"}:
+        return None
+    start, end, selected = value.get("start"), value.get("end"), value.get("text")
+    if (
+        not isinstance(start, int) or isinstance(start, bool)
+        or not isinstance(end, int) or isinstance(end, bool)
+        or not isinstance(selected, str)
+        or start < 0 or end <= start or end > len(evidence_text)
+        or evidence_text[start:end] != selected
+        or selected != selected.strip()
+    ):
+        return None
+    return {"start": start, "end": end, "text": selected}
+
+
+def is_atomic_narrative_proposition(evidence_text: str, span: object) -> bool:
+    """Require a targeted narrative proposition to equal one deterministic atom."""
+    parsed = validate_proposition_span(evidence_text, span)
+    if parsed is None:
+        return False
+    return any(
+        candidate["start"] == parsed["start"]
+        and candidate["end"] == parsed["end"]
+        and candidate["text"] == parsed["text"]
+        for candidate in atomic_proposition_spans(evidence_text)
+    )
+
+
+def canonical_table_proposition(attribution: str, scope: EvidenceAuthorityScopeV1, context: Mapping[str, object]) -> str:
+    """Render one table cell as a deterministic, scope-bound proposition."""
+    value = context.get("value")
+    if not isinstance(value, str):
+        raise ValueError("table proposition requires a selected cell value")
+    statistic = f"{scope.statistic} " if scope.statistic else ""
+    unit = f" {context['unit']}" if isinstance(context.get("unit"), str) else ""
+    return (
+        f"{attribution}: reported {statistic}{scope.measure} for "
+        f"{scope.subject} ({scope.period}) at {value}{unit}."
+    )
+
+
+def _target_aliases(target: EvidenceTargetV1) -> list[str]:
+    """Use only each alias's first atom so a noisy trailing clause cannot select itself."""
+    output: list[str] = []
+    for alias in target.aliases:
+        spans = atomic_proposition_spans(alias)
+        selected = str(spans[0]["text"]) if spans else alias
+        selected = re.sub(r"^(?:and|but|while|whereas)\s+", "", selected, flags=re.IGNORECASE)
+        if selected:
+            output.append(selected)
+    return output
+
+
+def _matches_target_alias(target: EvidenceTargetV1, text: str) -> bool:
+    folded = _normalized(text)
+    return any(_normalized(alias) in folded for alias in _target_aliases(target))
 
 
 def _revision_values(text: str, *, period: str | None = None) -> dict[str, str | None] | None:
@@ -320,6 +433,7 @@ def _targeted_record(
     target: EvidenceTargetV1,
     *,
     evidence_text: str,
+    proposition_span: dict[str, object] | None,
     locator: str,
     kind: str,
     period_matches: list[str],
@@ -329,6 +443,18 @@ def _targeted_record(
     source_section: str | None = None,
     source_section_locator: str | None = None,
 ) -> dict[str, object]:
+    proposition_text = str(proposition_span["text"]) if proposition_span is not None else evidence_text
+    explicit_values = _explicit_values(proposition_text)
+    claim_values = [item["value"] for item in explicit_values]
+    if table_context is not None:
+        table_value = table_context.get("value")
+        table_unit = table_context.get("unit")
+        if isinstance(table_value, str):
+            claim_values = [table_value]
+            explicit_values = [{
+                "value": table_value,
+                "unit": table_unit if isinstance(table_unit, str) else None,
+            }]
     row: dict[str, object] = {
         "source_id": document.source_id,
         "evidence_text": evidence_text,
@@ -340,7 +466,7 @@ def _targeted_record(
         "relation": "supports",
         "claim_type": "fact",
         "claim_key": f"evidence-target|{target.target_id}|{document.source_id}|{locator}",
-        "claim_values": [item["value"] for item in _explicit_values(evidence_text)],
+        "claim_values": claim_values,
         "document_hash": document.document_hash,
         "document_format": document.document_format,
         "evidence_origin": "original_document",
@@ -349,9 +475,11 @@ def _targeted_record(
         "evidence_target_concept": target.concept,
         "evidence_kind": kind,
         "evidence_period_matches": period_matches,
-        "explicit_values": _explicit_values(evidence_text),
+        "explicit_values": explicit_values,
         "authority_scope_candidate": target.authority_scope.model_dump(mode="json"),
     }
+    if proposition_span is not None:
+        row["proposition_span"] = proposition_span
     if source_section_locator is not None:
         row["source_section_locator"] = source_section_locator
     revision = revision_values if kind == "revision" else None
@@ -647,44 +775,47 @@ def extract_targeted_evidence(
         for target in parsed.targets:
             if role not in target.source_roles:
                 continue
-            seen: set[tuple[str, str]] = set()
+            seen: set[tuple[str, str, int, int]] = set()
             for locator, excerpt, source_section, source_section_locator in _paragraph_spans(document.text):
                 if target.required_source_section is not None and _normalized(
                     (source_section or "").strip()
                 ) != _normalized(target.required_source_section):
                     continue
-                folded = _normalized(excerpt)
-                if not _matches_alias(target, folded):
-                    continue
-                matched_periods = _period_matches(target, folded)
-                if not matched_periods:
-                    continue
-                if target.expected_unit_family is not None and not any(
-                    _unit_matches(target.expected_unit_family, value.get("unit"))
-                    for value in _explicit_values(excerpt)
-                ):
-                    continue
-                revision = _revision_values(excerpt)
-                kind = "revision" if revision is not None else "narrative_sentence"
-                if kind not in target.evidence_kinds:
-                    continue
-                key = (locator, kind)
-                if key in seen:
-                    continue
-                seen.add(key)
-                revision_values = _revision_values(excerpt, period=matched_periods[0]) if kind == "revision" else None
-                output.append(_targeted_record(
-                    document,
-                    target,
-                    evidence_text=excerpt,
-                    locator=locator,
-                    kind=kind,
-                    period_matches=matched_periods,
-                    target_set_sha256=target_set_sha256,
-                    revision_values=revision_values,
-                    source_section=source_section,
-                    source_section_locator=source_section_locator,
-                ))
+                for proposition_span in atomic_proposition_spans(excerpt):
+                    proposition = str(proposition_span["text"])
+                    if not _matches_target_alias(target, proposition):
+                        continue
+                    matched_periods = _period_matches(target, proposition)
+                    if not matched_periods:
+                        continue
+                    explicit_values = _explicit_values(proposition)
+                    if target.expected_unit_family is not None and not any(
+                        _unit_matches(target.expected_unit_family, value.get("unit"))
+                        for value in explicit_values
+                    ):
+                        continue
+                    revision = _revision_values(proposition)
+                    kind = "revision" if revision is not None else "narrative_sentence"
+                    if kind not in target.evidence_kinds:
+                        continue
+                    key = (locator, kind, int(proposition_span["start"]), int(proposition_span["end"]))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    revision_values = _revision_values(proposition, period=matched_periods[0]) if kind == "revision" else None
+                    output.append(_targeted_record(
+                        document,
+                        target,
+                        evidence_text=excerpt,
+                        proposition_span=proposition_span,
+                        locator=locator,
+                        kind=kind,
+                        period_matches=matched_periods,
+                        target_set_sha256=target_set_sha256,
+                        revision_values=revision_values,
+                        source_section=source_section,
+                        source_section_locator=source_section_locator,
+                    ))
             if "table_cell" in target.evidence_kinds:
                 for candidate in extract_generic_table_evidence(document):
                     context = candidate["table_context"]
@@ -700,7 +831,7 @@ def extract_targeted_evidence(
                         " ".join(str(part) for part in context.get("row_path", [])),
                         " ".join(str(part) for part in context.get("column_header_path", [])),
                     ])
-                    if not _matches_alias(target, text_for_match):
+                    if not _matches_target_alias(target, text_for_match):
                         continue
                     matched_periods = _period_matches(target, str(context.get("period", "")))
                     if not matched_periods:
@@ -710,14 +841,28 @@ def extract_targeted_evidence(
                     ):
                         continue
                     locator = str(candidate["paragraph_locator"])
-                    key = (locator, "table_cell")
+                    raw_text = str(candidate["evidence_text"])
+                    table_value = str(context.get("value", ""))
+                    value_positions = [match.start() for match in re.finditer(re.escape(table_value), raw_text)] if table_value else []
+                    if len(value_positions) != 1:
+                        # Repeated values in one row do not identify a unique
+                        # column proposition, so this candidate remains unusable.
+                        continue
+                    value_start = value_positions[0]
+                    proposition_span = {
+                        "start": value_start,
+                        "end": value_start + len(table_value),
+                        "text": table_value,
+                    }
+                    key = (locator, "table_cell", value_start, value_start + len(table_value))
                     if key in seen:
                         continue
                     seen.add(key)
                     output.append(_targeted_record(
                         document,
                         target,
-                        evidence_text=str(candidate["evidence_text"]),
+                        evidence_text=raw_text,
+                        proposition_span=proposition_span,
                         locator=locator,
                         kind="table_cell",
                         period_matches=matched_periods,
@@ -773,9 +918,21 @@ def build_authority_claim_proposals(
         if key in proposals:
             # A target must not turn several spans into one ambiguous quote.
             raise ValueError(f"multiple evidence candidates share target claim key: {key}")
+        proposition_span = item.get("proposition_span")
+        if validate_proposition_span(excerpt, proposition_span) is None:
+            continue
+        table_context = item.get("table_context")
+        if isinstance(table_context, dict):
+            if proposition_span.get("text") != table_context.get("value"):
+                continue
+            proposition = canonical_table_proposition(
+                institution_display_name, target.authority_scope, table_context
+            )
+        else:
+            proposition = f'{institution_display_name}: "{proposition_span["text"]}"'
         proposals[key] = {
             "claim_type": "fact",
-            "claim_text": f'{institution_display_name}: "{excerpt}"',
+            "claim_text": proposition,
             "authority_attestation": {
                 "kind": "document_report",
                 "source_ids": [source_id],

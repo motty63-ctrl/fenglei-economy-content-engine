@@ -440,6 +440,120 @@ def test_numeric_locator_parser_keeps_terminal_decimal_values_and_currency() -> 
     assert {value["unit"] for value in found[0]["explicit_values"]} == {"$", "percent"}
 
 
+def test_targeted_propositions_split_two_independent_metrics_but_keep_full_evidence() -> None:
+    text = "Metric A rose to 10 units in the reference period, while Metric B remained at 5 units in the reference period."
+    targets = parse_evidence_target_set(_target_set([
+        _target(
+            target_id="metric-a", aliases=["Metric A rose"], periods=["the reference period"],
+            expected_unit_family="units",
+            scope=_scope(subject="Metric A", measure="units", period="the reference period", unit="units", statistic=None, certainty="rose"),
+        ),
+        _target(
+            target_id="metric-b", aliases=["Metric B remained"], periods=["the reference period"],
+            expected_unit_family="units",
+            scope=_scope(subject="Metric B", measure="units", period="the reference period", unit="units", statistic=None, certainty="remained"),
+        ),
+    ]), run_id="synthetic-run", case_id="synthetic-case")
+
+    found = extract_targeted_evidence(
+        [_document(text)], targets, document_roles={"src_001": "monthly-release"}
+    )
+    by_target = {item["evidence_target_id"]: item for item in found}
+
+    assert by_target["metric-a"]["evidence_text"] == text
+    assert by_target["metric-a"]["proposition_span"]["text"] == "Metric A rose to 10 units in the reference period"
+    assert by_target["metric-a"]["explicit_values"] == [{"value": "10", "unit": "units"}]
+    assert by_target["metric-b"]["evidence_text"] == text
+    assert by_target["metric-b"]["proposition_span"]["text"] == "Metric B remained at 5 units in the reference period."
+    assert by_target["metric-b"]["explicit_values"] == [{"value": "5", "unit": "units"}]
+
+    for item in found:
+        item["evidence_eligible"] = True
+    proposals = build_authority_claim_proposals(
+        found, targets, institution_display_name="Synthetic Statistical Office"
+    )
+    proposal_texts = [candidate["claim_text"] for candidate in proposals.values()]
+    assert any('"Metric A rose to 10 units in the reference period"' in value for value in proposal_texts)
+    assert any('"Metric B remained at 5 units in the reference period."' in value for value in proposal_texts)
+    assert all(not ("Metric A" in value and "Metric B" in value) for value in proposal_texts)
+
+
+def test_targeted_revision_propositions_split_periods_and_keep_shared_evidence_span() -> None:
+    text = (
+        "The estimate for June was revised up by 11,000, from +20,000 to +31,000, "
+        "and the estimate for July was revised down by 4,000, from +40,000 to +36,000."
+    )
+    targets = parse_evidence_target_set(_target_set([
+        _target(
+            target_id="june-revision", aliases=["estimate for June"], periods=["June"],
+            evidence_kinds=["revision"], expected_unit_family=None,
+            scope=_scope(subject="June estimate", measure="revision", period="June", unit="jobs", statistic="revision amount", certainty="revised up"),
+        ),
+        _target(
+            target_id="july-revision", aliases=["estimate for July"], periods=["July"],
+            evidence_kinds=["revision"], expected_unit_family=None,
+            scope=_scope(subject="July estimate", measure="revision", period="July", unit="jobs", statistic="revision amount", certainty="revised down"),
+        ),
+    ]), run_id="synthetic-run", case_id="synthetic-case")
+
+    found = extract_targeted_evidence(
+        [_document(text)], targets, document_roles={"src_001": "monthly-release"}
+    )
+    by_target = {item["evidence_target_id"]: item for item in found}
+
+    assert by_target["june-revision"]["evidence_text"] == text
+    assert "July" not in by_target["june-revision"]["proposition_span"]["text"]
+    assert by_target["june-revision"]["revision_values"] == {
+        "previous_value": "+20,000", "revised_value": "+31,000",
+        "revision_amount": "11,000", "direction": "up",
+    }
+    assert by_target["july-revision"]["evidence_text"] == text
+    assert "June" not in by_target["july-revision"]["proposition_span"]["text"]
+    assert by_target["july-revision"]["revision_values"] == {
+        "previous_value": "+40,000", "revised_value": "+36,000",
+        "revision_amount": "4,000", "direction": "down",
+    }
+
+
+def test_current_period_proposition_excludes_unattested_historical_comparison() -> None:
+    text = (
+        "Sector employment rose by 5,000 jobs in the current period, "
+        "compared with an average gain of 1,000 jobs over the prior year."
+    )
+    target = _target(
+        target_id="sector-employment-current", aliases=["Sector employment rose"],
+        periods=["the current period"], expected_unit_family="count",
+        scope=_scope(subject="Sector employment", measure="employment", period="the current period", unit="jobs", statistic=None, certainty="rose"),
+    )
+    targets = parse_evidence_target_set(
+        _target_set([target]), run_id="synthetic-run", case_id="synthetic-case"
+    )
+
+    item = extract_targeted_evidence(
+        [_document(text)], targets, document_roles={"src_001": "monthly-release"}
+    )[0]
+
+    assert item["evidence_text"] == text
+    assert item["proposition_span"]["text"] == "Sector employment rose by 5,000 jobs in the current period"
+    assert item["explicit_values"] == [{"value": "5,000", "unit": "jobs"}]
+
+
+def test_explicit_count_unit_is_retained_in_targeted_structured_values() -> None:
+    text = "Sector A added 42,000 jobs in the current period."
+    targets = parse_evidence_target_set(_target_set([_target(
+        target_id="sector-a-jobs", aliases=["Sector A added"], periods=["the current period"],
+        expected_unit_family="count",
+        scope=_scope(subject="Sector A", measure="employment", period="the current period", unit="jobs", statistic=None, certainty="added"),
+    )]), run_id="synthetic-run", case_id="synthetic-case")
+
+    item = extract_targeted_evidence(
+        [_document(text)], targets, document_roles={"src_001": "monthly-release"}
+    )[0]
+
+    assert item["proposition_span"]["text"] == text
+    assert item["explicit_values"] == [{"value": "42,000", "unit": "jobs"}]
+
+
 def test_case_targets_are_candidates_and_do_not_bypass_exact_authority_verification_input() -> None:
     document = _document("Retail sales increased by 2.4 percent in August 2026.")
     targets = parse_evidence_target_set(

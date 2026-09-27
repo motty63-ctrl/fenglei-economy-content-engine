@@ -143,7 +143,17 @@
         "document_format": {"type": "string"},
         "evidence_origin": {"type": "string"},
         "evidence_eligible": {"type": "boolean"},
-        "eligibility_reason": {"type": "string", "minLength": 1}
+        "eligibility_reason": {"type": "string", "minLength": 1},
+        "proposition_span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end", "text"],
+          "properties": {
+            "start": {"type": "integer", "minimum": 0},
+            "end": {"type": "integer", "minimum": 1},
+            "text": {"type": "string", "minLength": 1}
+          }
+        }
       },
       "additionalProperties": true
     }

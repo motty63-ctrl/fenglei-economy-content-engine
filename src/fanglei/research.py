@@ -594,9 +594,21 @@ def _authority_evidence_matches(
         if not any(expected_rows):
             return False
     elif item.get("evidence_target_id") is not None:
-        from fanglei.evidence_targets import resolve_text_locator
+        from fanglei.evidence_targets import (
+            is_atomic_narrative_proposition,
+            resolve_text_locator,
+            validate_proposition_span,
+        )
 
         if resolve_text_locator(document.text, str(item.get("paragraph_locator", ""))) != item["evidence_text"]:
+            return False
+        proposition = validate_proposition_span(item["evidence_text"], item.get("proposition_span"))
+        if proposition is None:
+            return False
+        if table_context is not None:
+            if proposition["text"] != table_context.get("value"):
+                return False
+        elif not is_atomic_narrative_proposition(item["evidence_text"], item.get("proposition_span")):
             return False
         section_locator = item.get("source_section_locator")
         if section_locator is not None and (
@@ -613,8 +625,17 @@ def _authority_evidence_matches(
 
 def _authority_scope_matches(scope: Any, item: dict[str, Any], approved: Any) -> bool:
     context = item.get("table_context")
+    if item.get("evidence_target_id") is not None:
+        expected_scope = item.get("authority_scope_candidate")
+        actual_scope = scope.model_dump(mode="json") if hasattr(scope, "model_dump") else None
+        if expected_scope != actual_scope:
+            return False
     if context is None:
-        folded = " ".join(item["evidence_text"].casefold().split())
+        proposition = item.get("proposition_span")
+        text = proposition.get("text") if isinstance(proposition, dict) else item["evidence_text"]
+        if not isinstance(text, str):
+            return False
+        folded = " ".join(text.casefold().split())
         required = [scope.subject, scope.measure, scope.certainty]
         required.extend(value for value in (scope.unit, scope.statistic) if value is not None)
         if not all(" ".join(value.casefold().split()) in folded for value in required):
@@ -708,7 +729,9 @@ def _verify_authority_candidate(
         source_id not in documents
         or not _authority_evidence_matches(item, documents[source_id], approved_by_id[source_id])
         or not _authority_scope_matches(attestation.scope, item, approved_by_id[source_id])
-        or _AUTHORITY_SCOPE_EXPANSION.search(item["evidence_text"])
+        or _AUTHORITY_SCOPE_EXPANSION.search(
+            str(item.get("proposition_span", {}).get("text", item["evidence_text"]))
+        )
         for item, source_id in zip(items, item_ids)
     ):
         return None
@@ -716,7 +739,23 @@ def _verify_authority_candidate(
     if attestation.kind == "document_report":
         if len(items) != 1 or len(attestation.source_ids) != 1 or "comparison" in candidate:
             return None
-        exact_proposition = f'{attestation.attribution}: "{items[0]["evidence_text"]}"'
+        item = items[0]
+        proposition_span = item.get("proposition_span")
+        if isinstance(item.get("table_context"), dict) and isinstance(proposition_span, dict):
+            from fanglei.evidence_targets import canonical_table_proposition
+
+            exact_proposition = canonical_table_proposition(
+                attestation.attribution,
+                attestation.scope,
+                item["table_context"],
+            )
+        else:
+            proposition_text = (
+                proposition_span.get("text")
+                if isinstance(proposition_span, dict)
+                else item["evidence_text"]
+            )
+            exact_proposition = f'{attestation.attribution}: "{proposition_text}"'
         if candidate["claim_text"] != exact_proposition:
             return None
         return candidate["claim_text"], attestation.model_dump(mode="json")
@@ -749,7 +788,12 @@ def _verify_authority_candidate(
         return None
     item_by_id = {item["source_id"]: item for item in items}
     if any(
-        not _value_appears(values[source_id], item_by_id[source_id]["evidence_text"])
+        not _value_appears(
+            values[source_id],
+            str(item_by_id[source_id].get("proposition_span", {}).get(
+                "text", item_by_id[source_id]["evidence_text"]
+            )),
+        )
         for source_id in ordered
     ):
         return None
