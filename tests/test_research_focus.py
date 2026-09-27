@@ -148,6 +148,8 @@ def test_focus_identity_must_match_run_and_approved_case(tmp_path: Path) -> None
 
 def test_research_focus_rendering_prefers_focus_and_keeps_legacy_dispatch(tmp_path: Path) -> None:
     run, search, fetcher = _run(tmp_path)
+    search_calls_before_synthesis = search.calls
+    fetch_calls_before_synthesis = fetcher.calls
     old_questions = json.loads((run / "questions.json").read_text("utf-8"))
     old_question = old_questions["research_questions"][1]["question"]
     old_research = (run / "research.md").read_text("utf-8")
@@ -159,12 +161,14 @@ def test_research_focus_rendering_prefers_focus_and_keeps_legacy_dispatch(tmp_pa
     assert "What changed between the two published projection sets?" in new_research
     assert "Do not infer unsupported causality." in new_research
     assert old_question not in new_research
-    assert search.calls == 1
-    assert fetcher.calls == 3
+    assert search.calls == search_calls_before_synthesis
+    assert fetcher.calls == fetch_calls_before_synthesis
 
 
 def test_invalid_present_focus_fails_closed_without_legacy_fallback(tmp_path: Path) -> None:
     run, search, fetcher = _run(tmp_path)
+    search_calls_before_dispatch = search.calls
+    fetch_calls_before_dispatch = fetcher.calls
     write_research_focus(run.name, tmp_path, _focus(run_id=run.name))
     original = (run / "research.md").read_bytes()
     (run / "research_focus.json").write_text('{"schema_version":"research-focus/99.0"}\n', encoding="utf-8")
@@ -172,24 +176,28 @@ def test_invalid_present_focus_fails_closed_without_legacy_fallback(tmp_path: Pa
     with pytest.raises(ArtifactConflictError):
         run_v02_pipeline(run.name, tmp_path, search, fetcher, force_stage="research_synthesis")
     assert (run / "research.md").read_bytes() == original
-    assert search.calls == 1
-    assert fetcher.calls == 3
+    assert search.calls == search_calls_before_dispatch
+    assert fetcher.calls == fetch_calls_before_dispatch
 
 
 def test_unregistered_focus_file_fails_closed_before_pipeline_stage_dispatch(tmp_path: Path) -> None:
     run, search, fetcher = _run(tmp_path)
+    search_calls_before_dispatch = search.calls
+    fetch_calls_before_dispatch = fetcher.calls
     original = (run / "research.md").read_bytes()
     (run / "research_focus.json").write_text('{"schema_version":"research-focus/99.0"}\n', encoding="utf-8")
 
     with pytest.raises(ArtifactConflictError, match="research_focus"):
         run_v02_pipeline(run.name, tmp_path, search, fetcher, force_stage="research_synthesis")
     assert (run / "research.md").read_bytes() == original
-    assert search.calls == 1
-    assert fetcher.calls == 3
+    assert search.calls == search_calls_before_dispatch
+    assert fetcher.calls == fetch_calls_before_dispatch
 
 
 def test_deleted_registered_focus_fails_closed_without_legacy_fallback(tmp_path: Path) -> None:
     run, search, fetcher = _run(tmp_path)
+    search_calls_before_dispatch = search.calls
+    fetch_calls_before_dispatch = fetcher.calls
     write_research_focus(run.name, tmp_path, _focus(run_id=run.name))
     original = (run / "research.md").read_bytes()
     (run / "research_focus.json").unlink()
@@ -197,8 +205,8 @@ def test_deleted_registered_focus_fails_closed_without_legacy_fallback(tmp_path:
     with pytest.raises(ArtifactConflictError, match="research_focus"):
         run_v02_pipeline(run.name, tmp_path, search, fetcher, force_stage="research_synthesis")
     assert (run / "research.md").read_bytes() == original
-    assert search.calls == 1
-    assert fetcher.calls == 3
+    assert search.calls == search_calls_before_dispatch
+    assert fetcher.calls == fetch_calls_before_dispatch
 
 
 def test_renderer_uses_only_allowed_verified_claims_and_separates_evidence_layers() -> None:
@@ -244,8 +252,103 @@ def test_renderer_uses_only_allowed_verified_claims_and_separates_evidence_layer
     ]}
 
     rendered = _render_research_focus(RUN_ID, focus, sources, facts)
-    assert "A. June-to-September SEP revisions" in rendered
-    assert "B. September FOMC statement context" in rendered
+    assert focus.primary_question in rendered
+    assert "baseline-sep" in rendered and "target-sep" in rendered
+    assert "target-meeting-context" in rendered
     assert "claim_001" in rendered and "claim_002" in rendered
     assert "claim_003" not in rendered and "claim_004" not in rendered
-    assert "does not infer a causal relationship" in rendered
+
+
+def test_research_focus_renderer_uses_synthetic_non_fed_roles_without_case_framing() -> None:
+    from fanglei.pipeline import _render_research_focus
+
+    focus = ResearchFocusV1.model_validate(_focus(
+        case_id="synthetic-retail-sales",
+        primary_question="How did monthly retail sales change between period 1 and period 2?",
+        subquestions=["Which category recorded the largest change?", "What does the release say about coverage?"],
+        constraints=["Describe reported changes; do not infer causes."],
+    ))
+    sources = {
+        "schema_version": "2.1",
+        "source_policy": {"approved_documents": [
+            {"source_id": "retail-period-1", "document_identity": "synthetic-retail-release-p1",
+             "evidence_role": "baseline-monthly-retail-release-period-1"},
+            {"source_id": "retail-period-2", "document_identity": "synthetic-retail-release-p2",
+             "evidence_role": "target-monthly-retail-release-period-2"},
+        ]},
+        "sources": [
+            {"source_id": "retail-period-1", "title": "Synthetic Retail Release Period 1",
+             "url": "https://example.test/retail/p1", "credibility_tier": "A"},
+            {"source_id": "retail-period-2", "title": "Synthetic Retail Release Period 2",
+             "url": "https://example.test/retail/p2", "credibility_tier": "A"},
+        ],
+    }
+    facts = {"claims": [{
+        "claim_id": "synthetic_claim_001",
+        "claim_text": "The synthetic release reports retail sales volume rose from 100 to 103 units.",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "allowed_downstream": True,
+        "source_ids": ["retail-period-1", "retail-period-2"],
+        "evidence": [
+            {"source_id": "retail-period-1", "relation": "supports", "evidence_eligible": True,
+             "evidence_text": "Period 1 index: 100 units."},
+            {"source_id": "retail-period-2", "relation": "supports", "evidence_eligible": True,
+             "evidence_text": "Period 2 index: 103 units."},
+        ],
+        "authority_attestation": {
+            "kind": "deterministic_document_comparison", "source_ids": ["retail-period-1", "retail-period-2"],
+        },
+    }]}
+
+    rendered = _render_research_focus(RUN_ID, focus, sources, facts)
+    assert focus.primary_question in rendered
+    assert all(question in rendered for question in focus.subquestions)
+    assert all(constraint in rendered for constraint in focus.constraints)
+    assert "baseline-monthly-retail-release-period-1" in rendered
+    assert "target-monthly-retail-release-period-2" in rendered
+    assert "synthetic_claim_001" in rendered
+    assert "Period 1 index: 100 units." in rendered
+    assert "Period 2 index: 103 units." in rendered
+    for case_framing in ("SEP", "FOMC", "June-to-September", "Federal Reserve"):
+        assert case_framing not in rendered
+
+
+def test_research_focus_groups_same_fallback_roles_independent_of_source_order() -> None:
+    from fanglei.pipeline import _render_research_focus
+
+    focus = ResearchFocusV1.model_validate(_focus(
+        case_id="synthetic-retail-sales",
+        primary_question="What do the two synthetic releases report?",
+        subquestions=["Compare the release values."],
+        constraints=["Do not infer causes."],
+    ))
+    sources = {
+        "sources": [
+            {"source_id": "source-a", "title": "Synthetic release A", "source_type": "baseline_release",
+             "url": "https://example.test/a"},
+            {"source_id": "source-b", "title": "Synthetic release B", "source_type": "target_release",
+             "url": "https://example.test/b"},
+        ],
+        "source_policy": {"approved_documents": []},
+    }
+    facts = {"claims": [
+        {
+            "claim_id": claim_id,
+            "claim_text": claim_id,
+            "verification_status": "verified",
+            "allowed_downstream": True,
+            "source_ids": source_ids,
+            "evidence": [],
+        }
+        for claim_id, source_ids in (
+            ("claim_ab", ["source-a", "source-b"]),
+            ("claim_ba", ["source-b", "source-a"]),
+        )
+    ]}
+
+    rendered = _render_research_focus(RUN_ID, focus, sources, facts)
+
+    assert rendered.count("### Evidence group") == 1
+    assert "claim_ab" in rendered
+    assert "claim_ba" in rendered

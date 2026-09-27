@@ -4,8 +4,9 @@
 
 - V0.1.0 is frozen and remains publicly available; its Release and Fed Case 2 video are not being regenerated or changed.
 - V0.2 development has started on `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 0 — baseline and generalization-gap inventory. This phase changes documentation only; production code, tests, and Fed run artifacts remain untouched.
-- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Phase 1 requires a separate review/authorization.
+- Current phase: Phase 1A complete — Search and Research Focus generalization. Focused tests: 55 passed; safe non-integration regression: 676 passed. Fed run artifacts and the V0.1.0 release remain unchanged.
+- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Phase 1B requires a separate review/authorization.
+- Next: Phase 1B — generalize content provider prompts; it has not started.
 
 ## Verified implementation baseline
 
@@ -53,7 +54,7 @@ The final MP4 is `runs/2026-09-24-001-fed-sep-case-2-source-inventory/final.mp4`
 
 The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. The missing 12 formal `AngleCandidate` fields were not recovered from approved source material. Do not repair, backfill, infer, default, copy, or upgrade that checkpoint. GDP artifacts and test fixtures are prohibited recovery sources.
 
-V0.1.0 implementation and video release are public on `main`. V0.2 work is isolated on `v0.2/generalize-video-workflow` from the `148d2ebdaee1437c038ead4631a5953d42b9a392` main baseline. This is a branch-start snapshot, not a requirement for the branch's current HEAD; always read Git for the current state. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
+V0.1.0 implementation and video release are public on `main`. V0.2 work is isolated on `v0.2/generalize-video-workflow` from the `148d2ebdaee1437c038ead4631a5953d42b9a392` main baseline. Phase 1A is complete; its local commit is not pushed. This is a branch-start snapshot, not a requirement for the branch's current HEAD; always read Git for the current state. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
 
 ## Voice, alignment, and renderer boundaries
 

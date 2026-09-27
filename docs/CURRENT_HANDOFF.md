@@ -4,8 +4,9 @@
 
 - V0.1.0 is frozen; do not regenerate the Fed video or change the public `v0.1.0` Release as part of V0.2 planning.
 - Active branch: `v0.2/generalize-video-workflow`, created from `origin/main` at `148d2ebdaee1437c038ead4631a5953d42b9a392`.
-- Current phase: Phase 0 — establish the development baseline and document the generalization debt map. Production code, tests, and Fed run artifacts are unchanged in this phase.
-- Review [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md); do not begin Phase 1 until it is separately reviewed and authorized.
+- Current phase: Phase 1A complete — Search and Research Focus generalization. Focused tests: 55 passed; safe non-integration regression: 676 passed. Fed run artifacts and the public V0.1.0 release were not changed.
+- Phase 1B (content provider prompts) is next and has not started. Review [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md) before authorizing it.
+- The Phase 1A changes are committed locally on this branch and have not been pushed; read Git for the current ahead/behind state.
 
 ## Current public release
 
@@ -29,4 +30,4 @@ The old checkpoint recovery remains closed. Do not repair, backfill, infer, defa
 
 ## Handoff boundary
 
-V0.1.0 remains frozen and public. Phase 0 only documents findings and the proposed V0.2 sequence. Stop after this phase and wait for human review before production-code changes.
+V0.1.0 remains frozen and public. Phase 1A is complete; wait for human review before starting Phase 1B or any other V0.2 implementation slice.

@@ -301,37 +301,50 @@ def rebuild_source_selection_from_index(
 
 
 def _search_requests(questions: dict[str, Any]) -> list[SearchRequest]:
-    claims = [item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])]
-    queries = [claim for claim in claims if claim] or _question_texts(questions)
-    context = " ".join([questions.get("core_topic", ""), *queries])
-    domain_map = {
-        "bea": ("bea.gov", "BEA"),
-        "world bank": ("data.worldbank.org", "World Bank"),
-        "imf": ("imf.org", "IMF"),
-        "oecd": ("oecd.org", "OECD"),
-    }
-    named_authorities = [value for marker, value in domain_map.items() if marker in context.lower()]
-    requests: list[SearchRequest] = []
-    for query in queries:
-        core_topic = questions.get("core_topic", "").strip() or query
-        target_year = next(iter(re.findall(r"(?:19|20)\d{2}", core_topic)), "")
-        authority_focus = {
-            "BEA": f"fourth quarter and year {target_year}",
-            "World Bank": "GDP growth (annual %) United States",
-            "IMF": "World Economic Outlook United States",
-            "OECD": "Economic Outlook United States",
-        }
-        if named_authorities:
-            requests.extend(
-                SearchRequest(
-                    query=f"{core_topic} {authority} annual real GDP growth rate {authority_focus[authority]} official data",
-                    max_results=6,
-                    include_domains=[domain],
-                )
-                for domain, authority in named_authorities
-            )
+    def values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, (list, tuple)):
+            candidates = [item for item in value if isinstance(item, str)]
         else:
-            requests.append(SearchRequest(query=f"{core_topic} annual real GDP growth rate official data", max_results=12))
+            candidates = []
+        return [item.strip() for item in candidates if item.strip()]
+
+    shared_context = [
+        *values(questions.get("core_topic")),
+        *values(questions.get("entities")),
+        *values(questions.get("measures")),
+        *values(questions.get("periods")),
+    ]
+    intents: list[list[str]] = []
+    for claim in questions.get("claims_requiring_external_verification", []):
+        if not isinstance(claim, dict):
+            continue
+        intents.append([*values(claim.get("claim")), *values(claim.get("reason"))])
+    for question in questions.get("research_questions", []):
+        if not isinstance(question, dict):
+            continue
+        intents.append([
+            *values(question.get("question")),
+            *values(question.get("purpose")),
+            *values(question.get("expected_source_types")),
+        ])
+    intents.extend([[item] for item in values(questions.get("subquestions"))])
+    if not intents:
+        intents = [[question] for question in _question_texts(questions)]
+    if not intents:
+        intents = [[]]
+
+    requests: list[SearchRequest] = []
+    seen_queries: set[str] = set()
+    for intent in intents:
+        query_parts = list(dict.fromkeys([*shared_context, *intent]))
+        query = " ".join(query_parts).strip()
+        normalized = " ".join(query.casefold().split())
+        if not normalized or normalized in seen_queries:
+            continue
+        seen_queries.add(normalized)
+        requests.append(SearchRequest(query=query, max_results=12))
     return requests
 
 
@@ -341,9 +354,20 @@ def _fetch_context(questions: dict[str, Any]) -> FetchContext:
         *[item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])],
         *_question_texts(questions),
     ])
-    country = "USA" if re.search(r"\bUS\b|United States|美国", text, re.I) else None
-    years = tuple(sorted(set(re.findall(r"(?:19|20)\d{2}", text))))
-    indicators = ("real_gdp_growth",) if re.search(r"real\s+GDP|实际GDP|实际国内生产总值", text, re.I) else ()
+    def values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, (list, tuple)):
+            candidates = [item for item in value if isinstance(item, str)]
+        else:
+            candidates = []
+        return [item.strip() for item in candidates if item.strip()]
+
+    explicit_country = questions.get("country")
+    country = explicit_country.strip() if isinstance(explicit_country, str) and explicit_country.strip() else None
+    explicit_years = values(questions.get("years"))
+    years = tuple(sorted(set(explicit_years or re.findall(r"(?:19|20)\d{2}", text))))
+    indicators = tuple(dict.fromkeys(values(questions.get("indicators"))))
     return FetchContext(country=country, years=years, indicators=indicators, questions=tuple(_question_texts(questions)))
 
 
@@ -385,33 +409,6 @@ def _render_research(run_id: str, questions: list[str], sources: list[dict[str, 
     return "\n".join(lines)
 
 
-def _focus_evidence_layer(
-    claim: dict[str, Any], approved_documents: dict[str, dict[str, str]]
-) -> str | None:
-    attestation = claim.get("authority_attestation")
-    if not isinstance(attestation, dict):
-        return None
-    source_ids = attestation.get("source_ids", [])
-    metadata = [approved_documents[source_id] for source_id in source_ids if source_id in approved_documents]
-    if len(metadata) != len(source_ids) or not metadata:
-        return None
-    descriptors = [
-        f"{row.get('document_identity', '')} {row.get('evidence_role', '')}".casefold()
-        for row in metadata
-    ]
-    if attestation.get("kind") == "deterministic_document_comparison" and all(
-        "sep" in value or "projection" in value for value in descriptors
-    ):
-        return "sep"
-    if attestation.get("kind") == "document_report" and any(
-        ("statement" in value or ("meeting" in value and "context" in value))
-        and "target" in value
-        for value in descriptors
-    ):
-        return "statement"
-    return None
-
-
 def _render_research_focus(
     run_id: str,
     focus: ResearchFocusV1,
@@ -421,21 +418,64 @@ def _render_research_focus(
     """Render a focused, deterministic brief from allowed facts only."""
     sources = source_artifact.get("sources", [])
     policy = source_artifact.get("source_policy", {})
-    approved_documents = {
-        row["source_id"]: row
-        for row in policy.get("approved_documents", [])
+    document_metadata = {
+        row["source_id"]: dict(row)
+        for row in sources
         if isinstance(row, dict) and isinstance(row.get("source_id"), str)
-    } if isinstance(policy, dict) else {}
+    }
+    source_order = {
+        row["source_id"]: index
+        for index, row in enumerate(sources)
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    approved_documents = policy.get("approved_documents", []) if isinstance(policy, dict) else []
+    document_order: dict[str, int] = {}
+    for index, row in enumerate(approved_documents):
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str):
+            source_id = row["source_id"]
+            document_order[source_id] = index
+            document_metadata.setdefault(source_id, {}).update(row)
     allowed_claims = [
         claim for claim in facts.get("claims", [])
         if isinstance(claim, dict)
         and claim.get("verification_status") == "verified"
         and claim.get("allowed_downstream") is True
     ]
-    sep_claims = [claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "sep"]
-    statement_claims = [
-        claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "statement"
-    ]
+
+    def role_group(claim: dict[str, Any]) -> tuple[str, ...]:
+        attestation = claim.get("authority_attestation")
+        source_ids = attestation.get("source_ids", []) if isinstance(attestation, dict) else []
+        if not source_ids:
+            source_ids = claim.get("source_ids", [])
+        if not source_ids:
+            source_ids = [
+                evidence.get("source_id")
+                for evidence in claim.get("evidence", [])
+                if isinstance(evidence, dict) and isinstance(evidence.get("source_id"), str)
+            ]
+        source_ids = list(dict.fromkeys(source_id for source_id in source_ids if isinstance(source_id, str)))
+        source_ids.sort(
+            key=lambda source_id: (
+                0,
+                document_order[source_id],
+                source_id,
+            ) if source_id in document_order else (
+                1,
+                source_order.get(source_id, len(source_order)),
+                source_id,
+            )
+        )
+        roles: list[str] = []
+        for source_id in source_ids:
+            metadata = document_metadata.get(source_id, {})
+            role = metadata.get("evidence_role") or metadata.get("source_type") or metadata.get("title")
+            role = " ".join(role.split()) if isinstance(role, str) else ""
+            roles.append(role or f"source:{source_id}")
+        return tuple(dict.fromkeys(roles)) or ("source role not recorded",)
+
+    grouped_claims: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for claim in allowed_claims:
+        grouped_claims.setdefault(role_group(claim), []).append(claim)
 
     def render_claim(claim: dict[str, Any]) -> list[str]:
         source_ids = list(dict.fromkeys(claim.get("source_ids", [])))
@@ -460,21 +500,19 @@ def _render_research_focus(
         "",
     ]
     lines.extend(f"{index}. {question}" for index, question in enumerate(focus.subquestions, start=1))
-    lines.extend(["", "## A. June-to-September SEP revisions", ""])
-    lines.extend(line for claim in sep_claims for line in render_claim(claim))
-    if not sep_claims:
-        lines.append("- No verified, downstream-allowed SEP comparison facts are available.")
-    lines.extend(["", "## B. September FOMC statement context", ""])
-    lines.extend(line for claim in statement_claims for line in render_claim(claim))
-    if not statement_claims:
-        lines.append("- No verified, downstream-allowed target-meeting statement facts are available.")
+    lines.extend(["", "## Evidence-grounded findings", ""])
+    if not grouped_claims:
+        lines.append("- No verified facts currently satisfy the downstream eligibility rule.")
+    for index, (roles, claims) in enumerate(grouped_claims.items(), start=1):
+        lines.extend([f"### Evidence group {index}", "", f"Document roles: {'; '.join(roles)}", ""])
+        lines.extend(line for claim in claims for line in render_claim(claim))
     lines.extend([
         "",
         "## Evidence boundary",
         "",
-        "The SEP records FOMC participants’ projections and assessments; it is not a unified Federal Reserve commitment. "
-        "The FOMC statement records the Committee’s public meeting statement. "
-        "These evidence layers are presented side by side as documented context; this report does not infer a causal relationship.",
+        "Substantive findings below use only claim records with `verification_status=verified` and `allowed_downstream=true`. "
+        "Source-package approval does not itself verify a claim. Preserve each claim’s recorded attribution and scope; "
+        "do not infer causality beyond its evidence.",
         "",
         "## Framing constraints",
         "",
@@ -486,13 +524,12 @@ def _render_research_focus(
             isinstance(claim, dict)
             and claim.get("verification_status") == "verified"
             and claim.get("allowed_downstream") is True
-            and _focus_evidence_layer(claim, approved_documents) in {"sep", "statement"}
         )
     ]
     lines.extend(["", "## Excluded fact records", ""])
     lines.append(
-        f"{len(excluded)} records were not used as substantive assertions because they are unverified, "
-        "not allowed downstream, or outside the two focused evidence layers."
+        f"{len(excluded)} records were not used as substantive assertions because they are unverified "
+        "or not allowed downstream."
     )
     lines.extend(["", "## Source index", ""])
     for source in sources:
