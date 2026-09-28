@@ -4,7 +4,7 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3A human review approved for Angle Planning only; generic atomic-authority safety aligned; five eligible Phase 3B angle candidates generated; human angle selection pending.**
+- Status: **Phase 3A human review approved for Angle Planning only; Phase 3B.2 generic angle coverage/editorial-quality pass complete; five eligible candidates regenerated; human angle selection pending.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
 - Five BLS angle candidates have been generated; none has been human-selected. No Script, audio, storyboard, timeline, or video has been generated.
@@ -76,10 +76,16 @@ The reprocessing used only local artifacts. Search and fetch providers were repl
 
 Phase 3A.1 extraction-focused tests: 88 passed; Phase 3A.2 focused extraction/authority/Research/pipeline tests: 90 passed; Phase 3A.2 safe non-integration regression: 729 passed. `git diff --check` passed.
 
-## Current Phase 3B angle review
+## Historical Phase 3B.1 angle review (superseded)
 
 The generic atomic-authority safety fix is committed at `a0ecb8be28ac911ecff3741a6330fa8d8339d828`. It treats the verified `proposition_span` as the factual unit for atomic V0.2 claims while retaining the complete evidence text as provenance; unsupported neighboring clauses remain ineligible unless backed by their own verified atomic claim.
 
-The formal offline Angle Planning owner generated five eligible candidates in `runs/2026-09-27-001-bls-august-2026-employment-situation/angles.json`, SHA-256 `b897f1eaca70ce4bd3b7482fd9304ecead3e1eb9930609c4ea39467bdbc70afb`. All five support only their listed verified claims and passed the current authority safety checks. See [ANGLE_REVIEW.md](ANGLE_REVIEW.md) for exact candidate content, supported propositions, coverage gaps, cautions, score details, and the human selection command.
+The formal offline Angle Planning owner generated five eligible candidates in `runs/2026-09-27-001-bls-august-2026-employment-situation/angles.json`, SHA-256 `b897f1eaca70ce4bd3b7482fd9304ecead3e1eb9930609c4ea39467bdbc70afb`. All five supported only their listed verified claims and passed the authority-safety check. That review packet was superseded by Phase 3B.2; the historical hash is retained as evidence of the earlier candidate set.
 
-The planner recommends `angle_004` (`原文记载与解释之间的边界`, score 68). **系统推荐不等于人工选择，也不代表最佳选择。** No `angle_selection.json` exists. Script generation and repair remain blocked until a human records a choice. No Script, audio/TTS, storyboard, timeline, or video has been generated for this BLS run. Research still cites only the nine verified and downstream-allowed claims; industry coverage remains partial (two named increases and one decline), not a complete ranking. Phase 3B is waiting for human selection.
+## Current Phase 3B.2 generic angle coverage and editorial quality
+
+The canonical offline angle-generation owner regenerated five candidates after the generic coverage and editorial-quality update. Current `angles.json` SHA-256 is `32a80578bbeebc6b5f9c10d740d97d436205374b602a9a1d7b2a266edb2d48d8`. All five are `eligible`, have no rejection codes, pass the authority-safety check, pass the editorial-quality check, and pass candidate-set diversity. The system recommendation is `angle_001` with score 87; it is not a human choice.
+
+The candidate set uses all nine eligible claims (`claim_063`–`claim_071`). Four of five Research Focus dimensions have supporting claims: payroll/unemployment, earnings/workweek, June/July revisions, and selected industry changes. The survey-boundary dimension has no directly eligible supporting claim and remains explicitly omitted. Industry coverage remains partial: two named increases and one decline, not a complete ranking. The review packet is [ANGLE_REVIEW.md](ANGLE_REVIEW.md).
+
+No `angle_selection.json` exists. Script generation remains blocked until a human records a choice. No Script, audio/TTS, storyboard, timeline, or video has been generated for this BLS run. Exact next action: human review of the regenerated candidates and, only if desired, explicit selection through the documented `select-angle` command. Phase 3B is waiting for human selection; later content stages were not run.
