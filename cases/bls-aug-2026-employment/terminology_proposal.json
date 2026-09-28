@@ -1,0 +1,692 @@
+{
+  "schema_version": "script-terminology-map/1.0",
+  "case_id": "bls-aug-2026-employment",
+  "run_id": "2026-09-27-001-bls-august-2026-employment-situation",
+  "facts_sha256": "f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882",
+  "source_language": "en",
+  "target_language": "zh-Hans",
+  "review_status": "pending",
+  "reviewer": null,
+  "reviewed_at": null,
+  "entries": [
+    {
+      "entry_id": "term_27391d541746",
+      "claim_ids": [
+        "claim_070"
+      ],
+      "source_term": "added",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "新增"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_fa163349e957",
+      "claim_ids": [
+        "claim_071"
+      ],
+      "source_term": "declined",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "减少"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_039e74be1921",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "edged up",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "小幅上升"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_0ad79a906d3b",
+      "claim_ids": [
+        "claim_063",
+        "claim_069"
+      ],
+      "source_term": "increased",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "增加"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_1cf6e60facfd",
+      "claim_ids": [
+        "claim_067",
+        "claim_068"
+      ],
+      "source_term": "revised up",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "上调"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_8049e91c4603",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "rose",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "上升"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_93cbd650e380",
+      "claim_ids": [
+        "claim_064"
+      ],
+      "source_term": "unchanged",
+      "source_field": "authority_attestation.scope.certainty",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "持平",
+        "保持不变"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_6706f06415f3",
+      "claim_ids": [
+        "claim_067",
+        "claim_068"
+      ],
+      "source_term": "up",
+      "source_field": "evidence.revision_values.direction",
+      "semantic_role": "direction",
+      "proposed_target_terms": [
+        "上调"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_a8efeac80fd5",
+      "claim_ids": [
+        "claim_067",
+        "claim_068"
+      ],
+      "source_term": "change",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "变动"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_d4ee78b1b15f",
+      "claim_ids": [
+        "claim_069",
+        "claim_071"
+      ],
+      "source_term": "employment",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "就业人数"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_3523b5fbb4b6",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "hourly earnings",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "时薪收入"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_16399175a16b",
+      "claim_ids": [
+        "claim_070"
+      ],
+      "source_term": "jobs",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "工作岗位数"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_4883a07f5088",
+      "claim_ids": [
+        "claim_063"
+      ],
+      "source_term": "payroll employment",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "非农就业人数"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_7f9bc81daac8",
+      "claim_ids": [
+        "claim_064"
+      ],
+      "source_term": "unemployment rate",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "失业率"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_279a4b08ff53",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "workweek",
+      "source_field": "authority_attestation.scope.measure",
+      "semantic_role": "metric",
+      "proposed_target_terms": [
+        "每周工时",
+        "工作周时长"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_1a9a7f53de5a",
+      "claim_ids": [
+        "claim_063",
+        "claim_064",
+        "claim_065",
+        "claim_066",
+        "claim_069",
+        "claim_070",
+        "claim_071"
+      ],
+      "source_term": "August",
+      "source_field": "authority_attestation.scope.period",
+      "semantic_role": "period",
+      "proposed_target_terms": [
+        "8月"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_e98a88c97258",
+      "claim_ids": [
+        "claim_068"
+      ],
+      "source_term": "July",
+      "source_field": "authority_attestation.scope.period",
+      "semantic_role": "period",
+      "proposed_target_terms": [
+        "7月"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_16239021dd74",
+      "claim_ids": [
+        "claim_067"
+      ],
+      "source_term": "June",
+      "source_field": "authority_attestation.scope.period",
+      "semantic_role": "period",
+      "proposed_target_terms": [
+        "6月"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_5bb97b24c6d3",
+      "claim_ids": [
+        "claim_065",
+        "claim_066",
+        "claim_067",
+        "claim_068",
+        "claim_069",
+        "claim_070",
+        "claim_071"
+      ],
+      "source_term": "Establishment Survey Data",
+      "source_field": "evidence.source_section",
+      "semantic_role": "reporting_scope",
+      "proposed_target_terms": [
+        "企业调查数据"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_bb8f42a8a4c0",
+      "claim_ids": [
+        "claim_064"
+      ],
+      "source_term": "Household Survey Data",
+      "source_field": "evidence.source_section",
+      "semantic_role": "reporting_scope",
+      "proposed_target_terms": [
+        "家庭调查数据"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_9b118cbc90e0",
+      "claim_ids": [
+        "claim_063"
+      ],
+      "source_term": "THE EMPLOYMENT SITUATION - AUGUST 2026",
+      "source_field": "evidence.source_section",
+      "semantic_role": "reporting_scope",
+      "proposed_target_terms": [
+        "2026年8月《就业形势报告》"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_1e20d23d221e",
+      "claim_ids": [
+        "claim_067"
+      ],
+      "source_term": "11,000",
+      "source_field": "evidence.revision_values.revision_amount",
+      "semantic_role": "revision_delta",
+      "proposed_target_terms": [
+        "修订幅度"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_f9219321f921",
+      "claim_ids": [
+        "claim_068"
+      ],
+      "source_term": "44,000",
+      "source_field": "evidence.revision_values.revision_amount",
+      "semantic_role": "revision_delta",
+      "proposed_target_terms": [
+        "修订幅度"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_87d4c94b741c",
+      "claim_ids": [
+        "claim_067"
+      ],
+      "source_term": "+20,000",
+      "source_field": "evidence.revision_values.previous_value",
+      "semantic_role": "revision_previous",
+      "proposed_target_terms": [
+        "此前估值"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_8985453d1b88",
+      "claim_ids": [
+        "claim_068"
+      ],
+      "source_term": "-23,000",
+      "source_field": "evidence.revision_values.previous_value",
+      "semantic_role": "revision_previous",
+      "proposed_target_terms": [
+        "此前估值"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_7686cf4dfee7",
+      "claim_ids": [
+        "claim_068"
+      ],
+      "source_term": "+21,000",
+      "source_field": "evidence.revision_values.revised_value",
+      "semantic_role": "revision_revised",
+      "proposed_target_terms": [
+        "修订后估值"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_160e3366da8b",
+      "claim_ids": [
+        "claim_067"
+      ],
+      "source_term": "+31,000",
+      "source_field": "evidence.revision_values.revised_value",
+      "semantic_role": "revision_revised",
+      "proposed_target_terms": [
+        "修订后估值"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_80d02c14e96e",
+      "claim_ids": [
+        "claim_063",
+        "claim_064",
+        "claim_065",
+        "claim_066",
+        "claim_067",
+        "claim_068",
+        "claim_069",
+        "claim_070",
+        "claim_071"
+      ],
+      "source_term": "U.S. Bureau of Labor Statistics",
+      "source_field": "authority_attestation.attribution",
+      "semantic_role": "source_attribution",
+      "proposed_target_terms": [
+        "美国劳工统计局",
+        "美国劳工统计局（BLS）"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_b2e339e34134",
+      "claim_ids": [
+        "claim_068"
+      ],
+      "source_term": "July",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "7月"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_14174132408e",
+      "claim_ids": [
+        "claim_067"
+      ],
+      "source_term": "June",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "6月"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_0496b858c0eb",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "average hourly earnings",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "平均时薪"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_00064aba7f02",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "average workweek",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "平均每周工时",
+        "平均工作周时长"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_f9efff7b3631",
+      "claim_ids": [
+        "claim_069"
+      ],
+      "source_term": "food services and drinking places",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "餐饮服务和饮酒场所"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_3c677e754b4c",
+      "claim_ids": [
+        "claim_071"
+      ],
+      "source_term": "information employment",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "信息业就业"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_dcd86890f4a9",
+      "claim_ids": [
+        "claim_070"
+      ],
+      "source_term": "local government education",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "地方政府教育部门"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_aa627b6a0fbf",
+      "claim_ids": [
+        "claim_063"
+      ],
+      "source_term": "total nonfarm payroll employment",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "非农就业总人数",
+        "非农薪资就业总人数"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_b73ea8039866",
+      "claim_ids": [
+        "claim_064"
+      ],
+      "source_term": "unemployment rate",
+      "source_field": "authority_attestation.scope.subject",
+      "semantic_role": "subject",
+      "proposed_target_terms": [
+        "失业率"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_19262a1df4be",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "$",
+      "source_field": "authority_attestation.scope.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "美元",
+        "$"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_d41a22d041aa",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "hours",
+      "source_field": "authority_attestation.scope.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "小时"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_2fa106cf335a",
+      "claim_ids": [
+        "claim_064"
+      ],
+      "source_term": "percent",
+      "source_field": "authority_attestation.scope.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "%",
+        "百分比"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_c814edabf40e",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "$",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "美元",
+        "$"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_ceea18e765c5",
+      "claim_ids": [
+        "claim_065"
+      ],
+      "source_term": "cents",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "美分"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_5b75f2f41c81",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "hour",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "小时"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_38f19a84c81a",
+      "claim_ids": [
+        "claim_066"
+      ],
+      "source_term": "hours",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "小时"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_f7fdd7a31244",
+      "claim_ids": [
+        "claim_070"
+      ],
+      "source_term": "jobs",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "个岗位"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    },
+    {
+      "entry_id": "term_d33a287a6ca4",
+      "claim_ids": [
+        "claim_064",
+        "claim_065"
+      ],
+      "source_term": "percent",
+      "source_field": "evidence.explicit_values.unit",
+      "semantic_role": "unit",
+      "proposed_target_terms": [
+        "%",
+        "百分比"
+      ],
+      "approved_target_terms": [],
+      "review_status": "pending"
+    }
+  ]
+}

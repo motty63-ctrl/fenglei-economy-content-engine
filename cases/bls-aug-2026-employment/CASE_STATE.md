@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3A human review approved for Angle Planning only; Phase 3B.2 generic angle coverage/editorial-quality pass complete; five eligible candidates regenerated; human angle selection pending.**
+- Status: **Phase 3A human review approved for Angle Planning only; five eligible Phase 3B.2 candidates generated; `angle_001` explicitly selected; generic Phase 3C.1.2 terminology/script-quality foundation implemented; BLS terminology review pending.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates have been generated; none has been human-selected. No Script, audio, storyboard, timeline, or video has been generated.
+- Five BLS angle candidates have been generated and `angle_001` was human-selected. No valid Script, audio, storyboard, timeline, or video has been generated for this run.
 
 ## Locked research question
 
@@ -72,7 +72,7 @@ Historical review status: **`PHASE_3A_HUMAN_REVIEW_READY`** was the state before
 
 The reprocessing used only local artifacts. Search and fetch providers were replaced with fail-on-call stubs and were not called. Sources and normalized captures were not rewritten. No facts, source approvals, or case input values were manually inserted into the run artifacts.
 
-## Verification and exact next action
+## Historical Phase 3A verification
 
 Phase 3A.1 extraction-focused tests: 88 passed; Phase 3A.2 focused extraction/authority/Research/pipeline tests: 90 passed; Phase 3A.2 safe non-integration regression: 729 passed. `git diff --check` passed.
 
@@ -82,10 +82,22 @@ The generic atomic-authority safety fix is committed at `a0ecb8be28ac911ecff3741
 
 The formal offline Angle Planning owner generated five eligible candidates in `runs/2026-09-27-001-bls-august-2026-employment-situation/angles.json`, SHA-256 `b897f1eaca70ce4bd3b7482fd9304ecead3e1eb9930609c4ea39467bdbc70afb`. All five supported only their listed verified claims and passed the authority-safety check. That review packet was superseded by Phase 3B.2; the historical hash is retained as evidence of the earlier candidate set.
 
-## Current Phase 3B.2 generic angle coverage and editorial quality
+## Historical Phase 3B.2 generic angle coverage and editorial quality
 
 The canonical offline angle-generation owner regenerated five candidates after the generic coverage and editorial-quality update. Current `angles.json` SHA-256 is `32a80578bbeebc6b5f9c10d740d97d436205374b602a9a1d7b2a266edb2d48d8`. All five are `eligible`, have no rejection codes, pass the authority-safety check, pass the editorial-quality check, and pass candidate-set diversity. The system recommendation is `angle_001` with score 87; it is not a human choice.
 
 The candidate set uses all nine eligible claims (`claim_063`–`claim_071`). Four of five Research Focus dimensions have supporting claims: payroll/unemployment, earnings/workweek, June/July revisions, and selected industry changes. The survey-boundary dimension has no directly eligible supporting claim and remains explicitly omitted. Industry coverage remains partial: two named increases and one decline, not a complete ranking. The review packet is [ANGLE_REVIEW.md](ANGLE_REVIEW.md).
 
-No `angle_selection.json` exists. Script generation remains blocked until a human records a choice. No Script, audio/TTS, storyboard, timeline, or video has been generated for this BLS run. Exact next action: human review of the regenerated candidates and, only if desired, explicit selection through the documented `select-angle` command. Phase 3B is waiting for human selection; later content stages were not run.
+The five-candidate review resulted in a human selection of `angle_001`; see the current selection record below. This section retains the prior recommendation and coverage snapshot as phase history.
+
+## Current Phase 3C.1.2 — terminology and script-quality foundation
+
+The selected angle is `angle_001`. Facts, Research Focus, Research, `angles.json`, and `angle_selection.json` remain current and unchanged. Their recorded SHA-256 values are Facts `f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`, Focus `fe638d26622e271951365188f9fe0ba0b474ee2fb3bde3c544e0e91f4098b32a`, Research `ce8cc78eda8f630386c410c39e170d6f393704534415f4612acaf21da2d99862`, Angles `32a80578bbeebc6b5f9c10d740d97d436205374b602a9a1d7b2a266edb2d48d8`, and selection `84d8474eef0bcfd02d78b705dfc50ec8103f974b41ca85cd165780442309cc77`.
+
+Phase 3C.1 and 3C.1.1 are retained as historical blocked checkpoints: English authoritative claims could not safely validate Chinese narration through literal proposition matching. Phase 3C.1.2 adds a generic, Facts-hash-bound `script-terminology-map/1.0` contract, cross-language validation foundations, structured numeric/revision/scope checks, bounded attribution context, duration-target quality, repair editability, and generic closing checks. These changes do not themselves approve any translation.
+
+The 46-entry proposal in [TERMINOLOGY_REVIEW.md](TERMINOLOGY_REVIEW.md) and [terminology_proposal.json](terminology_proposal.json) is **PENDING**. No trusted/approved BLS terminology artifact exists. No live Script retry was performed in this phase; the earlier failed attempt remains historical evidence, and no valid `script.json` or `script.md` exists. TTS, storyboard, timeline, and MP4 generation have not started.
+
+Verification for the generic contract reconciliation: the three previously failing focused tests passed; the Phase 3C.1.2 focused suite passed 96 tests; the safe non-integration regression passed 789 tests (baseline 758). `git diff --check` passed. These checks used offline/local fixtures and did not retry Script or alter this run's facts, Research, angle, or selection artifacts.
+
+Exact next action: human review of the 46 proposed mappings. If approved, record the decisions through the formal terminology-map owner; then separately review the resulting script before any voice-production stage. Do not treat proposal aliases as trusted or start the next stage automatically.
