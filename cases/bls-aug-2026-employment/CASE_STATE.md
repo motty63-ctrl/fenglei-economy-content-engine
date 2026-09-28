@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3A human review approved for Angle Planning only; five eligible Phase 3B.2 candidates generated; `angle_001` explicitly selected; generic Phase 3C.1.2 terminology/script-quality foundation implemented; BLS terminology review pending.**
+- Status: **Phase 3A human review approved for Angle Planning only; five eligible Phase 3B.2 candidates generated; `angle_001` explicitly selected; Phase 3C.1.3 terminology decisions recorded (40 approved, 6 numeric entries rejected as non-terminology, 0 pending); the formal map is current; Script generation has not yet been retried.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates have been generated and `angle_001` was human-selected. No valid Script, audio, storyboard, timeline, or video has been generated for this run.
+- Five BLS angle candidates have been generated and `angle_001` was human-selected. The formal terminology map is current. No valid Script, audio, storyboard, timeline, or video has been generated for this run.
 
 ## Locked research question
 
@@ -90,14 +90,14 @@ The candidate set uses all nine eligible claims (`claim_063`–`claim_071`). Fou
 
 The five-candidate review resulted in a human selection of `angle_001`; see the current selection record below. This section retains the prior recommendation and coverage snapshot as phase history.
 
-## Current Phase 3C.1.2 — terminology and script-quality foundation
+## Current Phase 3C.1.3 — terminology approved; Script review pending
 
 The selected angle is `angle_001`. Facts, Research Focus, Research, `angles.json`, and `angle_selection.json` remain current and unchanged. Their recorded SHA-256 values are Facts `f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`, Focus `fe638d26622e271951365188f9fe0ba0b474ee2fb3bde3c544e0e91f4098b32a`, Research `ce8cc78eda8f630386c410c39e170d6f393704534415f4612acaf21da2d99862`, Angles `32a80578bbeebc6b5f9c10d740d97d436205374b602a9a1d7b2a266edb2d48d8`, and selection `84d8474eef0bcfd02d78b705dfc50ec8103f974b41ca85cd165780442309cc77`.
 
-Phase 3C.1 and 3C.1.1 are retained as historical blocked checkpoints: English authoritative claims could not safely validate Chinese narration through literal proposition matching. Phase 3C.1.2 adds a generic, Facts-hash-bound `script-terminology-map/1.0` contract, cross-language validation foundations, structured numeric/revision/scope checks, bounded attribution context, duration-target quality, repair editability, and generic closing checks. These changes do not themselves approve any translation.
+Phase 3C.1 and 3C.1.1 are retained as historical blocked checkpoints: English authoritative claims could not safely validate Chinese narration through literal proposition matching. Phase 3C.1.2 adds a generic, Facts-hash-bound `script-terminology-map/1.0` contract, cross-language validation foundations, structured numeric/revision/scope checks, bounded attribution context, duration-target quality, repair editability, and generic closing checks. Phase 3C.1.3 records the human decisions through the formal owner; it does not change Facts, Research, the selected angle, or terminology trust rules.
 
-The 46-entry proposal in [TERMINOLOGY_REVIEW.md](TERMINOLOGY_REVIEW.md) and [terminology_proposal.json](terminology_proposal.json) is **PENDING**. No trusted/approved BLS terminology artifact exists. No live Script retry was performed in this phase; the earlier failed attempt remains historical evidence, and no valid `script.json` or `script.md` exists. TTS, storyboard, timeline, and MP4 generation have not started.
+The 46-entry review in [TERMINOLOGY_REVIEW.md](TERMINOLOGY_REVIEW.md) records **40 APPROVED / 6 REJECTED_AS_NON_TERMINOLOGY / 0 PENDING**. Reviewer `motty63-ctrl` recorded the decisions at `2026-09-28T14:57:47+08:00`. The formal map at `runs/2026-09-27-001-bls-august-2026-employment-situation/script_terminology.json` is bound to case `bls-aug-2026-employment`, this run, and Facts SHA-256 `f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`; its artifact SHA-256 is `a9ee561650535b58d3c6f5bb36c30a884225f70c202f6f0923e2954f05262d2c`. The corrected `term_a8efeac80fd5` decision maps `change` (metric; `claim_067`, `claim_068`) to `变动`, with approved alias `变化`. The six numeric entries are excluded from the trusted terminology map and remain represented by structured Facts fields.
 
-Verification for the generic contract reconciliation: the three previously failing focused tests passed; the Phase 3C.1.2 focused suite passed 96 tests; the safe non-integration regression passed 789 tests (baseline 758). `git diff --check` passed. These checks used offline/local fixtures and did not retry Script or alter this run's facts, Research, angle, or selection artifacts.
+After recording the human map, terminology/selection/script-quality focused validation passed **103 tests** and the safe non-integration regression passed **796 tests**. The checks used offline/local fixtures; no live Script call has yet been made in this phase.
 
-Exact next action: human review of the 46 proposed mappings. If approved, record the decisions through the formal terminology-map owner; then separately review the resulting script before any voice-production stage. Do not treat proposal aliases as trusted or start the next stage automatically.
+Exact next action: revalidate the current Facts, Research, selected-angle record, terminology map, and Script entry dependencies; then use the formal V0.2 Script owner for one initial DeepSeek generation and at most two bounded repairs. If a valid Script is produced, prepare `SCRIPT_REVIEW.md` and stop for separate human Script review. Do not regenerate Facts, Research, or angles; do not start TTS or video production.

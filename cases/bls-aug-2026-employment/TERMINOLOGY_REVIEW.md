@@ -1,64 +1,71 @@
-# BLS 术语人工审核包
+# BLS 术语人工审核记录
 
+- Case ID：`bls-aug-2026-employment`
+- Run ID：`2026-09-27-001-bls-august-2026-employment-situation`
 - 当前 Facts SHA-256：`f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882`
-- 已选择角度：`angle_001` — 从已核验记录看核心问题的几个部分
-- 目标语言：`zh-Hans`（简体中文）
-- 拟议术语条目：46
-- 审核状态：**PENDING**
-- Run：`2026-09-27-001-bls-august-2026-employment-situation`
+- 人工审阅人：`motty63-ctrl`
+- 审阅时间：`2026-09-28T14:57:47+08:00`
+- 目标语言：`zh-CN`
+- 审核结果：**40 APPROVED / 6 REJECTED_AS_NON_TERMINOLOGY / 0 PENDING**
+- 正式可信术语表：`runs/2026-09-27-001-bls-august-2026-employment-situation/script_terminology.json`
+- 正式术语表 SHA-256：`a9ee561650535b58d3c6f5bb36c30a884225f70c202f6f0923e2954f05262d2c`
 
-本文件与 JSON 都是未批准建议。候选译法没有进入脚本验证；请逐项确认词义、范围和口播表达。批准别名必须由人工显式记录，不能从候选项自动升级。
+正式术语表只包含获批的语言映射。六条被排除项是结构化数值事实，记录为非术语决定但不进入可信术语映射；`claim_067` 和 `claim_068` 仍是已批准、可下游使用的事实。提案文件仍只是历史候选，不作为运行时信任来源。
 
-## 术语建议
+## 决定明细
 
-| ID | 英文原词 / 结构字段 | 语义角色 | Claim IDs | 建议中文 | 备选 | 歧义 / 审核提示 | 决策 |
+| ID | 英文原词 / 结构字段 | 语义角色 | Claim scope | 批准的中文术语 | 获批别名 | 审核说明 | Decision |
 |---|---|---|---|---|---|---|---|
-| term_27391d541746 | added (`authority_attestation.scope.certainty`) | direction | claim_070 | 新增 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_fa163349e957 | declined (`authority_attestation.scope.certainty`) | direction | claim_071 | 减少 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_039e74be1921 | edged up (`authority_attestation.scope.certainty`) | direction | claim_066 | 小幅上升 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_0ad79a906d3b | increased (`authority_attestation.scope.certainty`) | direction | claim_063, claim_069 | 增加 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_1cf6e60facfd | revised up (`authority_attestation.scope.certainty`) | direction | claim_067, claim_068 | 上调 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_8049e91c4603 | rose (`authority_attestation.scope.certainty`) | direction | claim_065 | 上升 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_93cbd650e380 | unchanged (`authority_attestation.scope.certainty`) | direction | claim_064 | 持平 | 保持不变 | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_6706f06415f3 | up (`evidence.revision_values.direction`) | direction | claim_067, claim_068 | 上调 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_a8efeac80fd5 | change (`authority_attestation.scope.measure`) | metric | claim_067, claim_068 | 变动 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_d4ee78b1b15f | employment (`authority_attestation.scope.measure`) | metric | claim_069, claim_071 | 就业人数 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_3523b5fbb4b6 | hourly earnings (`authority_attestation.scope.measure`) | metric | claim_065 | 时薪收入 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_16399175a16b | jobs (`authority_attestation.scope.measure`) | metric | claim_070 | 工作岗位数 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_4883a07f5088 | payroll employment (`authority_attestation.scope.measure`) | metric | claim_063 | 非农就业人数 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_7f9bc81daac8 | unemployment rate (`authority_attestation.scope.measure`) | metric | claim_064 | 失业率 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_279a4b08ff53 | workweek (`authority_attestation.scope.measure`) | metric | claim_066 | 每周工时 | 工作周时长 | 指每周工时，不是工作日或排班安排。 | PENDING |
-| term_1a9a7f53de5a | August (`authority_attestation.scope.period`) | period | claim_063, claim_064, claim_065, claim_066, claim_069, claim_070, claim_071 | 8月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_e98a88c97258 | July (`authority_attestation.scope.period`) | period | claim_068 | 7月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_16239021dd74 | June (`authority_attestation.scope.period`) | period | claim_067 | 6月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_5bb97b24c6d3 | Establishment Survey Data (`evidence.source_section`) | reporting_scope | claim_065, claim_066, claim_067, claim_068, claim_069, claim_070, claim_071 | 企业调查数据 | — | 区分 Household / Establishment 调查；报告标题不是调查口径。 | PENDING |
-| term_bb8f42a8a4c0 | Household Survey Data (`evidence.source_section`) | reporting_scope | claim_064 | 家庭调查数据 | — | 区分 Household / Establishment 调查；报告标题不是调查口径。 | PENDING |
-| term_9b118cbc90e0 | THE EMPLOYMENT SITUATION - AUGUST 2026 (`evidence.source_section`) | reporting_scope | claim_063 | 2026年8月《就业形势报告》 | — | 区分 Household / Establishment 调查；报告标题不是调查口径。 | PENDING |
-| term_1e20d23d221e | 11,000 (`evidence.revision_values.revision_amount`) | revision_delta | claim_067 | 修订幅度 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_f9219321f921 | 44,000 (`evidence.revision_values.revision_amount`) | revision_delta | claim_068 | 修订幅度 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_87d4c94b741c | +20,000 (`evidence.revision_values.previous_value`) | revision_previous | claim_067 | 此前估值 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_8985453d1b88 | -23,000 (`evidence.revision_values.previous_value`) | revision_previous | claim_068 | 此前估值 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_7686cf4dfee7 | +21,000 (`evidence.revision_values.revised_value`) | revision_revised | claim_068 | 修订后估值 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_160e3366da8b | +31,000 (`evidence.revision_values.revised_value`) | revision_revised | claim_067 | 修订后估值 | — | 数值角色标签；核对不得交换此前值、修订后值与差额。 | PENDING |
-| term_80d02c14e96e | U.S. Bureau of Labor Statistics (`authority_attestation.attribution`) | source_attribution | claim_063, claim_064, claim_065, claim_066, claim_067, claim_068, claim_069, claim_070, claim_071 | 美国劳工统计局 | 美国劳工统计局（BLS） | 确认机构中文名及是否保留 BLS 缩写。 | PENDING |
-| term_b2e339e34134 | July (`authority_attestation.scope.subject`) | subject | claim_068 | 7月 | — | 该字段是被修订月份，不是报告发布日期。 | PENDING |
-| term_14174132408e | June (`authority_attestation.scope.subject`) | subject | claim_067 | 6月 | — | 该字段是被修订月份，不是报告发布日期。 | PENDING |
-| term_0496b858c0eb | average hourly earnings (`authority_attestation.scope.subject`) | subject | claim_065 | 平均时薪 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_00064aba7f02 | average workweek (`authority_attestation.scope.subject`) | subject | claim_066 | 平均每周工时 | 平均工作周时长 | 指每周工时，不是工作日或排班安排。 | PENDING |
-| term_f9efff7b3631 | food services and drinking places (`authority_attestation.scope.subject`) | subject | claim_069 | 餐饮服务和饮酒场所 | — | 确认中文覆盖原行业类别中的饮食场所范围。 | PENDING |
-| term_3c677e754b4c | information employment (`authority_attestation.scope.subject`) | subject | claim_071 | 信息业就业 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_dcd86890f4a9 | local government education (`authority_attestation.scope.subject`) | subject | claim_070 | 地方政府教育部门 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_aa627b6a0fbf | total nonfarm payroll employment (`authority_attestation.scope.subject`) | subject | claim_063 | 非农就业总人数 | 非农薪资就业总人数 | 确认 total 与 payroll employment 口径，不缩窄为工资金额。 | PENDING |
-| term_b73ea8039866 | unemployment rate (`authority_attestation.scope.subject`) | subject | claim_064 | 失业率 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | PENDING |
-| term_19262a1df4be | $ (`authority_attestation.scope.unit`) | unit | claim_065 | 美元 | $ | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_d41a22d041aa | hours (`authority_attestation.scope.unit`) | unit | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_2fa106cf335a | percent (`authority_attestation.scope.unit`) | unit | claim_064 | % | 百分比 | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_c814edabf40e | $ (`evidence.explicit_values.unit`) | unit | claim_065 | 美元 | $ | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_ceea18e765c5 | cents (`evidence.explicit_values.unit`) | unit | claim_065 | 美分 | — | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_5b75f2f41c81 | hour (`evidence.explicit_values.unit`) | unit | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_38f19a84c81a | hours (`evidence.explicit_values.unit`) | unit | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_f7fdd7a31244 | jobs (`evidence.explicit_values.unit`) | unit | claim_070 | 个岗位 | — | 检查数值单位及紧邻数字的符号别名。 | PENDING |
-| term_d33a287a6ca4 | percent (`evidence.explicit_values.unit`) | unit | claim_064, claim_065 | % | 百分比 | 检查数值单位及紧邻数字的符号别名。 | PENDING |
+| `term_27391d541746` | added (`authority_attestation.scope.certainty`) | `direction` | claim_070 | 新增 | 增加 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_fa163349e957` | declined (`authority_attestation.scope.certainty`) | `direction` | claim_071 | 减少 | 下降 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_039e74be1921` | edged up (`authority_attestation.scope.certainty`) | `direction` | claim_066 | 小幅上升 | 小幅增加 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_0ad79a906d3b` | increased (`authority_attestation.scope.certainty`) | `direction` | claim_063, claim_069 | 增加 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_1cf6e60facfd` | revised up (`authority_attestation.scope.certainty`) | `direction` | claim_067, claim_068 | 上修 | 向上修正 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_8049e91c4603` | rose (`authority_attestation.scope.certainty`) | `direction` | claim_065 | 上升 | 增加 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_93cbd650e380` | unchanged (`authority_attestation.scope.certainty`) | `direction` | claim_064 | 持平 | 保持不变 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_6706f06415f3` | up (`evidence.revision_values.direction`) | `direction` | claim_067, claim_068 | 上修 | 向上修正 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_a8efeac80fd5` | change (`authority_attestation.scope.measure`) | `metric` | claim_067, claim_068 | 变动 | 变化 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_d4ee78b1b15f` | employment (`authority_attestation.scope.measure`) | `metric` | claim_069, claim_071 | 就业人数 | 就业 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_3523b5fbb4b6` | hourly earnings (`authority_attestation.scope.measure`) | `metric` | claim_065 | 时薪 | 时薪收入 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_16399175a16b` | jobs (`authority_attestation.scope.measure`) | `metric` | claim_070 | 岗位数 | 就业岗位数、工作岗位数 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_4883a07f5088` | payroll employment (`authority_attestation.scope.measure`) | `metric` | claim_063 | 非农就业 | 非农就业人数 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_7f9bc81daac8` | unemployment rate (`authority_attestation.scope.measure`) | `metric` | claim_064 | 失业率 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_279a4b08ff53` | workweek (`authority_attestation.scope.measure`) | `metric` | claim_066 | 每周工时 | 工作周时长 | 指每周工时，不是工作日或排班安排。 | **APPROVED** |
+| `term_1a9a7f53de5a` | August (`authority_attestation.scope.period`) | `period` | claim_063, claim_064, claim_065, claim_066, claim_069, claim_070, claim_071 | 8月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_e98a88c97258` | July (`authority_attestation.scope.period`) | `period` | claim_068 | 7月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_16239021dd74` | June (`authority_attestation.scope.period`) | `period` | claim_067 | 6月 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_5bb97b24c6d3` | Establishment Survey Data (`evidence.source_section`) | `reporting_scope` | claim_065, claim_066, claim_067, claim_068, claim_069, claim_070, claim_071 | 企业调查数据 | 企业调查 | 区分 Household / Establishment 调查；报告标题不是调查口径。 | **APPROVED** |
+| `term_bb8f42a8a4c0` | Household Survey Data (`evidence.source_section`) | `reporting_scope` | claim_064 | 家庭调查数据 | 家庭调查 | 区分 Household / Establishment 调查；报告标题不是调查口径。 | **APPROVED** |
+| `term_9b118cbc90e0` | THE EMPLOYMENT SITUATION - AUGUST 2026 (`evidence.source_section`) | `reporting_scope` | claim_063 | 2026年8月就业形势报告 | 8月就业报告、就业形势报告 | 区分 Household / Establishment 调查；报告标题不是调查口径。 | **APPROVED** |
+| `term_1e20d23d221e` | 11,000 (`evidence.revision_values.revision_amount`) | `revision_delta` | claim_067 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_f9219321f921` | 44,000 (`evidence.revision_values.revision_amount`) | `revision_delta` | claim_068 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_87d4c94b741c` | +20,000 (`evidence.revision_values.previous_value`) | `revision_previous` | claim_067 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_8985453d1b88` | -23,000 (`evidence.revision_values.previous_value`) | `revision_previous` | claim_068 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_7686cf4dfee7` | +21,000 (`evidence.revision_values.revised_value`) | `revision_revised` | claim_068 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_160e3366da8b` | +31,000 (`evidence.revision_values.revised_value`) | `revision_revised` | claim_067 | — | — | 该数值属于结构化事实值，不是术语；通过 previous_value / revised_value / revision_amount / direction / period / unit 校验，禁止纳入术语映射。 | **REJECTED_AS_NON_TERMINOLOGY** |
+| `term_80d02c14e96e` | U.S. Bureau of Labor Statistics (`authority_attestation.attribution`) | `source_attribution` | claim_063, claim_064, claim_065, claim_066, claim_067, claim_068, claim_069, claim_070, claim_071 | 美国劳工统计局 | 美国劳工统计局（BLS）、BLS | 确认机构中文名及是否保留 BLS 缩写。 | **APPROVED** |
+| `term_b2e339e34134` | July (`authority_attestation.scope.subject`) | `subject` | claim_068 | 7月 | — | 该字段是被修订月份，不是报告发布日期。 | **APPROVED** |
+| `term_14174132408e` | June (`authority_attestation.scope.subject`) | `subject` | claim_067 | 6月 | — | 该字段是被修订月份，不是报告发布日期。 | **APPROVED** |
+| `term_0496b858c0eb` | average hourly earnings (`authority_attestation.scope.subject`) | `subject` | claim_065 | 平均时薪 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_00064aba7f02` | average workweek (`authority_attestation.scope.subject`) | `subject` | claim_066 | 平均每周工时 | 平均工作周时长 | 指每周工时，不是工作日或排班安排。 | **APPROVED** |
+| `term_f9efff7b3631` | food services and drinking places (`authority_attestation.scope.subject`) | `subject` | claim_069 | 餐饮服务和饮酒场所 | — | 确认中文覆盖原行业类别中的饮食场所范围。 | **APPROVED** |
+| `term_3c677e754b4c` | information employment (`authority_attestation.scope.subject`) | `subject` | claim_071 | 信息业就业人数 | 信息业就业 | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_dcd86890f4a9` | local government education (`authority_attestation.scope.subject`) | `subject` | claim_070 | 地方政府教育部门 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_aa627b6a0fbf` | total nonfarm payroll employment (`authority_attestation.scope.subject`) | `subject` | claim_063 | 非农就业人数 | 非农就业、非农就业总人数 | 确认 total 与 payroll employment 口径，不缩窄为工资金额。 | **APPROVED** |
+| `term_b73ea8039866` | unemployment rate (`authority_attestation.scope.subject`) | `subject` | claim_064 | 失业率 | — | 确认译法只覆盖字段含义并保留 claim 范围。 | **APPROVED** |
+| `term_19262a1df4be` | $ (`authority_attestation.scope.unit`) | `unit` | claim_065 | 美元 | $ | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_d41a22d041aa` | hours (`authority_attestation.scope.unit`) | `unit` | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_2fa106cf335a` | percent (`authority_attestation.scope.unit`) | `unit` | claim_064 | % | 百分比 | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_c814edabf40e` | $ (`evidence.explicit_values.unit`) | `unit` | claim_065 | 美元 | $ | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_ceea18e765c5` | cents (`evidence.explicit_values.unit`) | `unit` | claim_065 | 美分 | — | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_5b75f2f41c81` | hour (`evidence.explicit_values.unit`) | `unit` | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_38f19a84c81a` | hours (`evidence.explicit_values.unit`) | `unit` | claim_066 | 小时 | — | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_f7fdd7a31244` | jobs (`evidence.explicit_values.unit`) | `unit` | claim_070 | 个岗位 | 岗位 | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+| `term_d33a287a6ca4` | percent (`evidence.explicit_values.unit`) | `unit` | claim_064, claim_065 | % | 百分比 | 检查数值单位及紧邻数字的符号别名。 | **APPROVED** |
+
+## 数值条目的明确排除决定
+
+以下六项被标记为 `REJECTED_AS_NON_TERMINOLOGY`：`term_1e20d23d221e`、`term_f9219321f921`、`term_87d4c94b741c`、`term_8985453d1b88`、`term_7686cf4dfee7`、`term_160e3366da8b`。这是对术语映射资格的拒绝，不是对其底层事实的拒绝；数值与修订角色继续由 Facts 2.2 的结构化字段验证。
 
 ## 对应事实与 source context
 
@@ -131,14 +138,10 @@ cents, or 0.3 percent, to $37.75.`
 - Source context：`Establishment Survey Data` / `August employment change in the information industry` / `registered exact evidence target`
 - Exact evidence：`Information employment declined by 23,000 in August`
 
-## 人工审核决定
 
-总状态保持 **PENDING**，表格中每一项决定也保持 `PENDING`。正式批准前须通过 owner API 写入 reviewer、reviewed_at、批准状态、rationale，并继续绑定上述 Facts SHA。
 
-需优先检查：
+## 审核边界
 
-- `total nonfarm payroll employment`、`payroll employment` 与 `employment` 的对象和指标层级。
-- Household Survey 与 Establishment Survey 的中文边界。
-- June / July 修订数值的三个角色标签。
-- `food services and drinking places` 是否以完整行业范围表达。
-- 美元符号、百分号和小时单位是否采用适合口播且不丢失精度的写法。
+- `餐饮业` 未获批，避免扩张 `food services and drinking places` 的范围。
+- `非农薪资就业总人数` 未获批。
+- 所有批准映射都受 case、run、当前 Facts SHA 与具体 claim scope 限制；未知中文术语继续 fail closed。
