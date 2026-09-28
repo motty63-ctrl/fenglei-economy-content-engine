@@ -454,8 +454,8 @@ def test_revision_numbers_require_their_structured_roles() -> None:
     ):
         entries.append(_entry(role, source_field, source_term, alias))
     terminology = ScriptTerminologyMapV1.model_validate(_approved_map(entries=entries))
-    valid = "数据署报告：6月零售调查，此前估值+20,000，修订后估值+31,000，修订幅度11,000，上调。"
-    invalid = "数据署报告：6月零售调查，修订后估值+20,000，此前估值+31,000，修订幅度11,000，上调。"
+    valid = "数据署报告：6月零售调查的变动从+20,000修正为+31,000，上修11,000。"
+    invalid = "数据署报告：6月零售调查的变动从+31,000修正为+20,000，上修11,000。"
     assert "REVISION_ROLE_MISMATCH" not in _cross_language_claim_issues(valid, claim, terminology)
     assert "REVISION_ROLE_MISMATCH" in _cross_language_claim_issues(invalid, claim, terminology)
 
@@ -642,6 +642,304 @@ def test_duration_target_miss_is_warning_inside_hard_range() -> None:
     assert issue.severity == "warning"
     assert 60 <= result.estimated_duration_seconds <= 90
     assert "DURATION_OUT_OF_RANGE" not in {item.code for item in result.issues}
+
+
+def _synthetic_revision_claim() -> dict:
+    from fanglei.evidence_targets import atomic_proposition_spans
+
+    claim = _claim()
+    excerpt = "Metric Alpha changed in August: previous 100, revised 120, revision amount 20."
+    scope = claim["authority_attestation"]["scope"]
+    scope.update(measure="Metric Alpha", unit=None, certainty="revised up")
+    evidence = claim["evidence"][0]
+    evidence.update(
+        evidence_text=excerpt,
+        proposition_span=atomic_proposition_spans(excerpt)[0],
+        authority_scope_candidate=dict(scope),
+        explicit_values=[
+            {"value": "100", "unit": None},
+            {"value": "120", "unit": None},
+            {"value": "20", "unit": None},
+        ],
+        revision_values={
+            "previous_value": "100",
+            "revised_value": "120",
+            "revision_amount": "20",
+            "direction": "up",
+        },
+    )
+    return claim
+
+
+def _synthetic_revision_terminology() -> dict:
+    payload = _approved_map()
+    rows = []
+    for row in payload["entries"]:
+        if row["semantic_role"] == "direction":
+            row = dict(row)
+            row["source_term"] = "revised up"
+            row["proposed_target_terms"] = ["上修"]
+            row["approved_target_terms"] = ["上修"]
+        rows.append(row)
+    payload["entries"] = rows
+    return payload
+
+
+def test_structural_reporting_scope_is_not_required_in_fact_narration() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    claim = _claim()
+    terminology = ScriptTerminologyMapV1.model_validate(_approved_map())
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标增加10单位。", claim, terminology,
+    )
+    assert "TERMINOLOGY_TERM_MISSING" not in issues
+
+
+def test_explicit_scope_alias_from_another_claim_still_fails_closed() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta = _claim(), _beta_claim()
+    terminology = ScriptTerminologyMapV1.model_validate(_map_with_beta(beta))
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月就业调查的甲指标增加10单位。", alpha, terminology,
+    )
+    assert "TERMINOLOGY_TERM_MISSING" in issues
+
+
+def test_revision_numbers_use_structured_roles_without_numeric_terminology() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    claim = _synthetic_revision_claim()
+    terminology = ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology())
+    assert not any(entry.semantic_role.startswith("revision_") for entry in terminology.entries)
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标从100修正为120，上修20。", claim, terminology,
+    )
+    assert "REVISION_ROLE_MISMATCH" not in issues
+    assert "TERMINOLOGY_TERM_MISSING" not in issues
+    assert "UNSUPPORTED_NUMERIC_VALUE" not in issues
+
+
+def test_revision_role_markers_reject_swapped_previous_and_revised_values() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标从120修正为100，上修20。",
+        _synthetic_revision_claim(),
+        ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology()),
+    )
+    assert "REVISION_ROLE_MISMATCH" in issues
+
+
+def test_revision_delta_cannot_be_described_as_the_revised_value() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标从100修正为120，上修120。",
+        _synthetic_revision_claim(),
+        ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology()),
+    )
+    assert "REVISION_ROLE_MISMATCH" in issues
+
+
+def test_revision_delta_direction_marker_must_match_structured_direction() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标从100修正为120，下修20。",
+        _synthetic_revision_claim(),
+        ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology()),
+    )
+    assert "REVISION_ROLE_MISMATCH" in issues
+
+
+def test_revision_role_normalization_handles_exact_chinese_magnitude_values() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    claim = _synthetic_revision_claim()
+    claim["evidence"][0]["explicit_values"] = [
+        {"value": "10,000", "unit": None},
+        {"value": "12,000", "unit": None},
+        {"value": "2,000", "unit": None},
+    ]
+    claim["evidence"][0]["revision_values"] = {
+        "previous_value": "10,000", "revised_value": "12,000",
+        "revision_amount": "2,000", "direction": "up",
+    }
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月甲指标从1万修正为1.2万，上修0.2万。",
+        claim,
+        ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology()),
+    )
+    assert "REVISION_ROLE_MISMATCH" not in issues
+    assert "UNSUPPORTED_NUMERIC_FORMAT" not in issues
+    assert "UNSUPPORTED_NUMERIC_VALUE" not in issues
+
+
+@pytest.mark.parametrize(
+    ("surface", "expected_value", "expected_unit"),
+    [
+        ("4.2万个单位", "42000", "units"),
+        ("16.2万个单位", "162000", "units"),
+        ("37.75美元", "37.75", "currency"),
+        ("10美分", "10", "cents"),
+        ("0.1小时", "0.1", "hours"),
+        ("4.1%", "4.1", "percent"),
+        ("2.3万", "23000", "number"),
+        ("1.1万", "11000", "number"),
+        ("3.1万", "31000", "number"),
+    ],
+)
+def test_generic_numeric_parser_preserves_magnitude_and_adjacent_units(
+    surface: str, expected_value: str, expected_unit: str,
+) -> None:
+    from decimal import Decimal
+    from fanglei.script_lint import (
+        _CHINESE_NUMERIC_WITH_CONTEXT_RE,
+        _TRANSLATED_NUMBER_RE,
+        _number_and_unit,
+    )
+
+    matches = list(_TRANSLATED_NUMBER_RE.finditer(surface))
+    assert len(matches) == 1
+    parsed = _number_and_unit(matches[0].group(0))
+    assert parsed is not None
+    assert parsed[0] == Decimal(expected_value)
+    assert parsed[1] == expected_unit
+    if "万" in surface:
+        assert not _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(surface)
+
+
+def test_unstructured_or_unsupported_numeric_value_still_fails_closed() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    issues = _cross_language_claim_issues(
+        "数据署报告，8月零售调查的甲指标增加11单位。",
+        _claim(), ScriptTerminologyMapV1.model_validate(_approved_map()),
+    )
+    assert "UNSUPPORTED_NUMERIC_VALUE" in issues
+
+
+def test_explicit_metric_scope_cannot_be_added_to_an_unbound_closing_claim_set() -> None:
+    from fanglei.content_models import ScriptDraft, ScriptSentence
+    from fanglei.script_lint import _cross_language_closing_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta = _claim(), _beta_claim()
+    gamma = _claim("claim_gamma", subject="Metric Gamma")
+    payload = _map_with_beta(beta)
+    gamma_rows = []
+    for row in _approved_map()["entries"]:
+        copy = dict(row)
+        copy["entry_id"] += "_gamma"
+        copy["claim_ids"] = ["claim_gamma"]
+        if copy["semantic_role"] in {"subject", "metric"}:
+            copy["source_term"] = "Metric Gamma"
+            copy["proposed_target_terms"] = ["丙指标"]
+            copy["approved_target_terms"] = ["丙指标"]
+        gamma_rows.append(copy)
+    payload["entries"].extend(gamma_rows)
+    terminology = ScriptTerminologyMapV1.model_validate(payload)
+    angle = _angle(["claim_alpha", "claim_beta", "claim_gamma"])
+    closing = ScriptSentence(
+        sentence_id="close", section="core_judgment", sentence_type="interpretation",
+        text="甲指标与乙指标和丙指标应分别放回各自问题中理解。",
+        claim_ids=["claim_alpha", "claim_beta"],
+    )
+    draft = ScriptDraft(angle_id=angle.angle_id, title=angle.title, sentences=[closing])
+    issues = _cross_language_closing_issues(
+        draft, angle, {c["claim_id"]: c for c in (alpha, beta, gamma)}, terminology,
+    )
+    assert "CORE_JUDGMENT_WEAK" in issues
+
+
+def test_claim_lint_diagnostics_expose_minimum_numeric_and_terminology_repair_context() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha = _synthetic_revision_claim()
+    alpha["authority_attestation"]["scope"]["unit"] = "units"
+    alpha["evidence"][0]["authority_scope_candidate"]["unit"] = "units"
+    alpha["evidence"][0]["explicit_values"] = [
+        {"value": value, "unit": "units"} for value in ("100", "120", "20")
+    ]
+    alpha["evidence"][0]["revision_values"] = {
+        "previous_value": "100 units", "revised_value": "120 units",
+        "revision_amount": "20 units", "direction": "up",
+    }
+    beta = _beta_claim()
+    payload = _map_with_beta(beta)
+    terminology = ScriptTerminologyMapV1.model_validate(payload)
+    diagnostics = []
+    text = "数据署报告，8月甲指标从120单位修正为100单位，上修20岗位。"
+    codes = _cross_language_claim_issues(
+        text, alpha, terminology, diagnostics=diagnostics,
+    )
+    assert {"REVISION_ROLE_MISMATCH", "UNIT_SCOPE_MISMATCH"} <= codes
+    mismatch = next(row for row in diagnostics if row["code"] == "REVISION_ROLE_MISMATCH")
+    assert mismatch["claim_id"] == "claim_alpha"
+    assert mismatch["surface_token"] == "120单位"
+    assert mismatch["normalized_value"] == "120"
+    assert mismatch["expected_roles"] == ["revision_revised"]
+    assert mismatch["expected_values"] == {
+        "previous_value": "100 units", "revised_value": "120 units", "revision_delta": "20 units",
+    }
+    unit = next(row for row in diagnostics if row["code"] == "UNIT_SCOPE_MISMATCH")
+    assert unit["surface_token"] == "20岗位"
+    assert unit["expected_unit"] == "units"
+    assert unit["actual_parsed_unit"] == "jobs"
+
+
+def test_attribution_and_closing_lint_diagnostics_explain_authorized_repairs() -> None:
+    from fanglei.content_models import ScriptDraft, ScriptSentence
+    from fanglei.script_lint import (
+        _cross_language_closing_issues,
+        _validate_cross_language_attribution_contexts,
+    )
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta = _claim(), _beta_claim()
+    terminology = ScriptTerminologyMapV1.model_validate(_map_with_beta(beta))
+    claimless = ScriptSentence(
+        sentence_id="transition", section="mechanism", sentence_type="explanation",
+        text="再把问题分开看。", attribution_context_id="stale_context",
+    )
+    context_details = {}
+    failures, _ = _validate_cross_language_attribution_contexts(
+        [claimless], {"claim_alpha": alpha, "claim_beta": beta}, terminology,
+        diagnostics_by_sentence=context_details,
+    )
+    assert "ATTRIBUTION_CONTEXT_INVALID" in failures["transition"]
+    assert context_details["transition"] == {
+        "sentence_id": "transition", "claim_ids": [], "context_id": "stale_context",
+        "expected_source_ids": [], "claimless": True, "section": "mechanism",
+        "reset_reason": "claimless_or_non_authority_sentence_cannot_reuse_authority_context",
+    }
+
+    angle = _angle(["claim_alpha", "claim_beta"])
+    closing = ScriptSentence(
+        sentence_id="close", section="core_judgment", sentence_type="interpretation",
+        text="先说出自己的理解。", claim_ids=[],
+    )
+    draft = ScriptDraft(angle_id=angle.angle_id, title=angle.title, sentences=[closing])
+    closing_details = []
+    codes = _cross_language_closing_issues(
+        draft, angle, {"claim_alpha": alpha, "claim_beta": beta}, terminology,
+        diagnostics=closing_details,
+    )
+    assert "CORE_JUDGMENT_WEAK" in codes
+    assert closing_details[0]["selected_angle_id"] == angle.angle_id
+    assert closing_details[0]["closing_claim_ids"] == []
+    assert closing_details[0]["minimum_requirements"]["distinct_dimensions"] == 2
 
 
 @pytest.mark.parametrize(

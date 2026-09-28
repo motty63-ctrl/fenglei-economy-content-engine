@@ -2,6 +2,7 @@
 from __future__ import annotations
 from decimal import Decimal
 import re
+from typing import Any
 from fanglei.authority_safety import authority_text_issues
 from fanglei.content_models import AngleCandidate, LintIssue, ScriptDraft, ScriptLintResult
 from fanglei.evidence_policy import is_claim_eligible_for_content
@@ -99,14 +100,14 @@ def _evidence_context(claim: dict, evidence: list[dict]) -> str:
 _TRANSLATED_NUMBER_RE = re.compile(
     r"(?P<prefix>\$|USD\s*|CNY\s*)?(?P<sign>[+-]?)\s*"
     r"(?P<number>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
-    r"(?P<magnitude>万|億|亿)?\s*"
+    r"(?P<magnitude>万|億|亿)?\s*(?:个\s*)?"
     r"(?P<unit>percentage\s+points?|percentage|percent|个百分点|百分比|%|"
     r"cents?|美分|dollars?|美元|元|hours?|小时|units?|单位|jobs?|岗位|人)?",
     re.I,
 )
 _CHINESE_NUMERIC_WITH_CONTEXT_RE = re.compile(
     r"(?:百分之[零〇一二两三四五六七八九十百千万亿点]+|"
-    r"[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?)(?="
+    r"(?<![\d.])[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?)(?="
     r"个|单位|人|岗位|小时|美元|百分比|个百分点|倍|项|件|年|月|日)|"
     r"(?:增加|减少|上升|下降|提高|降低|为|达|从|到)"
     r"[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?"
@@ -292,15 +293,140 @@ def _expected_numbers(claim: dict) -> list[tuple[Decimal, str, bool, str | None]
 
 
 def _number_token_role_ok(
-    text: str, start: int, end: int, role: str | None, claim_id: str,
-    terminology: ScriptTerminologyMapV1,
+    text: str, start: int, end: int, role: str | None,
+    expected_direction: str | None = None,
 ) -> bool:
     if role is None:
         return True
-    entries = _approved_entries(terminology, claim_id, role)
-    before = text[max(0, start - 24):start]
-    return bool(entries) and any(_has_term(before, alias)
-                                 for entry in entries for alias in entry.approved_target_terms)
+    surface_role, surface_direction = _surface_revision_role(text, start, end)
+    if surface_role != role:
+        return False
+    if role == "revision_delta" and expected_direction and surface_direction:
+        normalized = expected_direction.casefold()
+        is_up = normalized in {"up", "increase", "increased", "positive", "上修", "上调"}
+        is_down = normalized in {"down", "decrease", "decreased", "negative", "下修", "下调"}
+        if is_up and surface_direction != "up" or is_down and surface_direction != "down":
+            return False
+    return True
+
+
+_REVISION_ROLE_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("revision_previous", re.compile(r"(?:从|由|from|previous(?:ly)?|此前(?:为)?|原值(?:为)?)\s*$", re.I)),
+    ("revision_revised", re.compile(r"(?:修正为|修订为|调整为|调整至|改为|变为|revised\s+to|to)\s*$", re.I)),
+    ("revision_delta", re.compile(
+        r"(?:上修|下修|上调|下调|修订(?:幅度)?(?:为)?|调整(?:幅度)?(?:为)?|"
+        r"(?:revised\s+(?:up|down)\s+by|revision(?:\s+amount)?(?:\s+of)?|by))\s*$", re.I,
+    )),
+)
+
+
+def _surface_revision_role(text: str, start: int, end: int) -> tuple[str | None, str | None]:
+    """Return a revision role only when local language marks that role explicitly."""
+    prefix = text[max(0, start - 64):start]
+    # A new clause resets role markers so an earlier "from" cannot label a later value.
+    clause_start = max((prefix.rfind(mark) + 1 for mark in ("，", ",", ";", "；", "。")), default=0)
+    prefix = prefix[clause_start:]
+    candidates = [
+        (match.end(), role, match.group(0))
+        for role, pattern in _REVISION_ROLE_MARKERS
+        for match in pattern.finditer(prefix)
+    ]
+    if not candidates:
+        return None, None
+    _, role, marker = max(candidates, key=lambda item: item[0])
+    direction = None
+    if role == "revision_delta":
+        if re.search(r"上修|上调|revised\s+up", marker, re.I):
+            direction = "up"
+        elif re.search(r"下修|下调|revised\s+down", marker, re.I):
+            direction = "down"
+    return role, direction
+
+
+def _claim_has_revision_values(claim: dict) -> bool:
+    return any(isinstance(item, dict) and isinstance(item.get("revision_values"), dict)
+               for item in claim.get("evidence", []))
+
+
+def _lexical_term_requirements(
+    text: str, claim: dict, terminology: ScriptTerminologyMapV1,
+    *, bound_claim_ids: set[str] | None = None,
+) -> tuple[set[str], list[dict[str, Any]]]:
+    """Check only approved concepts that the narration actually expresses.
+
+    Reporting scope/source section remain structural provenance unless an
+    approved scope term is spoken. Numeric revision roles are validated against
+    structured values and generic revision grammar, never numeric term aliases.
+    """
+    claim_id = claim.get("claim_id")
+    relevant_claim_ids = bound_claim_ids or ({claim_id} if isinstance(claim_id, str) else set())
+    issues: set[str] = set()
+    diagnostics: list[dict[str, Any]] = []
+    revision_values_present = _claim_has_revision_values(claim)
+    for role, source_field, source_term in _required_cross_language_terms(claim):
+        if role in {"revision_previous", "revision_revised", "revision_delta"}:
+            continue
+        if revision_values_present and (
+            source_field == "authority_attestation.scope.certainty"
+            or source_field == "evidence.revision_values.direction"
+        ):
+            continue
+        equivalent_fields = {source_field}
+        if role == "reporting_scope":
+            equivalent_fields.update({
+                field for field in ("authority_attestation.scope.reporting_scope", "evidence.source_section")
+                if source_term in _canonical_field_values(claim, field)
+            })
+        elif role == "unit":
+            equivalent_fields.update({
+                field for field in ("authority_attestation.scope.unit", "evidence.explicit_values.unit")
+                if source_term in _canonical_field_values(claim, field)
+            })
+        matching = [entry for entry in _approved_entries(terminology, claim_id, role)
+                    if entry.source_field in equivalent_fields and entry.source_term == source_term]
+        all_role_entries = [entry for entry in terminology.entries
+                            if entry.semantic_role == role and entry.review_status == "approved"]
+        spoken_aliases = [
+            (entry, alias) for entry in all_role_entries for alias in entry.approved_target_terms
+            if _has_term(text, alias)
+        ]
+        bound_aliases = {
+            (entry.semantic_role, alias.casefold())
+            for entry in all_role_entries if set(entry.claim_ids) & relevant_claim_ids
+            for alias in entry.approved_target_terms
+        }
+        bound_spoken_aliases = [(entry, alias) for entry, alias in spoken_aliases
+                                if (entry.semantic_role, alias.casefold()) in bound_aliases]
+        unbound_spoken_aliases = [(entry, alias) for entry, alias in spoken_aliases
+                                  if (entry.semantic_role, alias.casefold()) not in bound_aliases]
+        always_lexical = role in {"subject", "metric"}
+        if not bound_spoken_aliases and not unbound_spoken_aliases and not always_lexical:
+            # These concepts are metadata until their target-language form is spoken.
+            continue
+        has_bound_claim_term = any(_has_term(text, alias)
+                                   for entry in matching for alias in entry.approved_target_terms)
+        scope_conflict = role == "reporting_scope" and bool(unbound_spoken_aliases)
+        if (not has_bound_claim_term and (always_lexical or spoken_aliases)) or scope_conflict:
+            issues.add("TERMINOLOGY_TERM_MISSING")
+            diagnostics.append({
+                "claim_id": claim_id,
+                "semantic_role": role,
+                "source_field": source_field,
+                "source_term": source_term,
+                "approved_target_terms": sorted({
+                    alias for entry in matching for alias in entry.approved_target_terms
+                }),
+                "lexical_requirement": (
+                    "required_claim_subject_or_metric" if always_lexical
+                    else "required_when_explicitly_spoken"
+                ),
+                "structural_only_by_default": role in {"reporting_scope", "source_section"},
+                "unsupported_surface_terms": sorted({
+                    alias for entry, alias in spoken_aliases
+                    if (entry.semantic_role, alias.casefold()) not in bound_aliases
+                }),
+            })
+    return issues, diagnostics
 
 
 def _cross_language_claim_issues(
@@ -309,9 +435,17 @@ def _cross_language_claim_issues(
     terminology: ScriptTerminologyMapV1,
     *,
     attribution_inherited: bool = False,
+    diagnostics: list[dict[str, Any]] | None = None,
+    bound_claim_ids: set[str] | None = None,
 ) -> set[str]:
     issues: set[str] = set()
     claim_id = claim.get("claim_id")
+
+    def add(code: str, **details: Any) -> None:
+        issues.add(code)
+        if diagnostics is not None:
+            diagnostics.append({"code": code, "claim_id": claim_id, **details})
+
     if not isinstance(claim_id, str) or not is_claim_eligible_for_content(claim):
         return {"CLAIM_NOT_ELIGIBLE"}
     attestation = claim.get("authority_attestation")
@@ -327,11 +461,15 @@ def _cross_language_claim_issues(
     required_scope = attestation.get("scope", {})
     if not all(isinstance(required_scope.get(key), str) and required_scope[key].strip()
                for key in ("subject", "measure", "period", "certainty")):
-        issues.add("AUTHORITY_SCOPE_INCOMPLETE")
+        add("AUTHORITY_SCOPE_INCOMPLETE", missing_fields=[
+            key for key in ("subject", "measure", "period", "certainty")
+            if not isinstance(required_scope.get(key), str) or not required_scope[key].strip()
+        ])
     explicit_scopes = _canonical_field_values(claim, "authority_attestation.scope.reporting_scope")
     section_scopes = _canonical_field_values(claim, "evidence.source_section")
     if not explicit_scopes and len(set(section_scopes)) != 1:
-        issues.add("AUTHORITY_SCOPE_INCOMPLETE")
+        add("AUTHORITY_SCOPE_INCOMPLETE", missing_fields=["reporting_scope_or_unambiguous_source_section"],
+             available_source_sections=sorted(set(section_scopes)))
     attribution = attestation.get("attribution")
     attribution_entries = [entry for entry in _approved_entries(terminology, claim_id, "source_attribution")
                            if entry.source_field == "authority_attestation.attribution"
@@ -339,29 +477,22 @@ def _cross_language_claim_issues(
     if not attribution_inherited and (not attribution_entries or not any(
         _has_term(text, alias) for entry in attribution_entries for alias in entry.approved_target_terms
     )):
-        issues.add("ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED")
+        add("ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED", expected_source=attribution,
+             approved_attribution_terms=sorted({alias for entry in attribution_entries
+                                                 for alias in entry.approved_target_terms}),
+             claimless=False)
 
-    for role, source_field, source_term in _required_cross_language_terms(claim):
-        equivalent_fields = {source_field}
-        if role == "reporting_scope":
-            equivalent_fields.update({
-                field for field in ("authority_attestation.scope.reporting_scope", "evidence.source_section")
-                if source_term in _canonical_field_values(claim, field)
-            })
-        elif role == "unit":
-            equivalent_fields.update({
-                field for field in ("authority_attestation.scope.unit", "evidence.explicit_values.unit")
-                if source_term in _canonical_field_values(claim, field)
-            })
-        matching = [entry for entry in _approved_entries(terminology, claim_id, role)
-                    if entry.source_field in equivalent_fields and entry.source_term == source_term]
-        if not matching or not any(
-            _has_term(text, alias) for entry in matching for alias in entry.approved_target_terms
-        ):
-            issues.add("TERMINOLOGY_TERM_MISSING")
+    lexical_issues, lexical_diagnostics = _lexical_term_requirements(
+        text, claim, terminology, bound_claim_ids=bound_claim_ids,
+    )
+    issues.update(lexical_issues)
+    if diagnostics is not None:
+        diagnostics.extend({"code": "TERMINOLOGY_TERM_MISSING", **item}
+                           for item in lexical_diagnostics)
 
     if _LANGUAGE_EXPANSION_RE.search(text):
-        issues.add("AUTHORITY_SCOPE_EXPANSION")
+        add("AUTHORITY_SCOPE_EXPANSION", surface=text,
+             reason="causal, predictive, motive, market-impact, or policy scope expansion")
 
     period_aliases = [alias for entry in _approved_entries(terminology, claim_id, "period")
                       for alias in entry.approved_target_terms]
@@ -369,25 +500,62 @@ def _cross_language_claim_issues(
     for alias in sorted(set(period_aliases), key=len, reverse=True):
         if alias:
             number_text = re.sub(re.escape(alias), " ", number_text, flags=re.I)
-    if _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(number_text):
-        issues.add("UNSUPPORTED_NUMERIC_FORMAT")
+    unsupported_format = _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(number_text)
+    if unsupported_format:
+        add("UNSUPPORTED_NUMERIC_FORMAT", surface_token=unsupported_format.group(0),
+             normalized_candidate=None, reason="numeric expression is not deterministically parseable")
 
     expected = _expected_numbers(claim)
     matches = list(_TRANSLATED_NUMBER_RE.finditer(number_text))
     for match in matches:
         parsed = _number_and_unit(match.group(0))
         if not parsed:
-            issues.add("UNSUPPORTED_NUMERIC_VALUE")
+            add("UNSUPPORTED_NUMERIC_VALUE", surface_token=match.group(0),
+                 normalized_candidate=None, expected_values=[
+                     {"value": str(value), "unit": unit, "role": role}
+                     for value, unit, _signed, role in expected
+                 ], actual_parsed_unit=None, reason="numeric token could not be normalized")
             continue
         value, unit, signed = parsed
         candidates = [row for row in expected if row[0] == value and row[1] == unit
                       and (not row[2] or signed)]
         if not candidates:
-            issues.add("UNSUPPORTED_NUMERIC_VALUE")
+            same_value = [row for row in expected if row[0] == value and (not row[2] or signed)]
+            code = "UNIT_SCOPE_MISMATCH" if same_value else "UNSUPPORTED_NUMERIC_VALUE"
+            expected_units = sorted({row[1] for row in same_value})
+            add(code, surface_token=match.group(0), normalized_candidate=str(value),
+                 expected_values=[{"value": str(row[0]), "unit": row[1], "role": row[3]}
+                                  for row in (same_value or expected)],
+                 expected_unit=(expected_units[0] if len(expected_units) == 1
+                                else expected_units if expected_units else None),
+                 actual_parsed_unit=unit,
+                 reason="numeric value has an unsupported unit" if same_value
+                 else "numeric value is absent from eligible structured evidence")
             continue
-        if not any(_number_token_role_ok(number_text, match.start(), match.end(), row[3],
-                                         claim_id, terminology) for row in candidates):
-            issues.add("REVISION_ROLE_MISMATCH")
+        direction = next((item.get("revision_values", {}).get("direction")
+                          for item in claim.get("evidence", [])
+                          if isinstance(item, dict) and isinstance(item.get("revision_values"), dict)
+                          and item.get("revision_values", {}).get("direction") is not None), None)
+        if not any(_number_token_role_ok(number_text, match.start(), match.end(), row[3], direction)
+                   for row in candidates):
+            surface_role, surface_direction = _surface_revision_role(
+                number_text, match.start(), match.end()
+            )
+            add("REVISION_ROLE_MISMATCH", surface_token=match.group(0),
+                 normalized_value=str(value), surface_role=surface_role,
+                 surface_direction=surface_direction,
+                 expected_roles=sorted({row[3] for row in candidates if row[3]}),
+                 expected_values={
+                     "previous_value": next((item.get("revision_values", {}).get("previous_value")
+                                              for item in claim.get("evidence", [])
+                                              if isinstance(item, dict) and isinstance(item.get("revision_values"), dict)), None),
+                     "revised_value": next((item.get("revision_values", {}).get("revised_value")
+                                             for item in claim.get("evidence", [])
+                                             if isinstance(item, dict) and isinstance(item.get("revision_values"), dict)), None),
+                     "revision_delta": next((item.get("revision_values", {}).get("revision_amount")
+                                             for item in claim.get("evidence", [])
+                                             if isinstance(item, dict) and isinstance(item.get("revision_values"), dict)), None),
+                 }, reason="surface grammar does not assign this number its structured revision role")
         declared_unit = unit != "number"
         if declared_unit:
             unit_entries = _approved_entries(terminology, claim_id, "unit")
@@ -398,12 +566,18 @@ def _cross_language_claim_issues(
                         for alias in entry.approved_target_terms)
                 for entry in unit_entries
             ):
-                issues.add("UNIT_SCOPE_MISMATCH")
+                add("UNIT_SCOPE_MISMATCH", surface_token=match.group(0),
+                     normalized_candidate=str(value), expected_unit=unit,
+                     actual_parsed_unit=unit,
+                     approved_unit_terms=sorted({alias for entry in unit_entries
+                                                 for alias in entry.approved_target_terms}),
+                     reason="unit is not expressed with an approved unit-role term")
     return issues
 
 
 def _validate_cross_language_attribution_contexts(
     sentences: list[Any], claims: dict[str, dict], terminology: ScriptTerminologyMapV1,
+    *, diagnostics_by_sentence: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, set[str]], set[str]]:
     """Validate explicit, consecutive source attribution contexts."""
     failures: dict[str, set[str]] = {}
@@ -418,6 +592,18 @@ def _validate_cross_language_attribution_contexts(
         if not authorities or len(authorities) != len(bound):
             if context_id is not None:
                 failures.setdefault(sentence.sentence_id, set()).add("ATTRIBUTION_CONTEXT_INVALID")
+                if diagnostics_by_sentence is not None:
+                    diagnostics_by_sentence[sentence.sentence_id] = {
+                        "sentence_id": sentence.sentence_id,
+                        "claim_ids": list(sentence.claim_ids),
+                        "context_id": context_id,
+                        "expected_source_ids": sorted({
+                            source_id for claim in authorities for source_id in claim.get("source_ids", [])
+                        }),
+                        "claimless": not bool(sentence.claim_ids),
+                        "section": sentence.section,
+                        "reset_reason": "claimless_or_non_authority_sentence_cannot_reuse_authority_context",
+                    }
             active_id, active_signature = None, None
             continue
         signatures = []
@@ -456,11 +642,33 @@ def _validate_cross_language_attribution_contexts(
             }
             if foreign_attributions:
                 failures.setdefault(sentence.sentence_id, set()).add("ATTRIBUTION_CONTEXT_CONFLICT")
+                if diagnostics_by_sentence is not None:
+                    diagnostics_by_sentence[sentence.sentence_id] = {
+                        "sentence_id": sentence.sentence_id,
+                        "claim_ids": list(sentence.claim_ids),
+                        "context_id": context_id,
+                        "expected_source_ids": sorted(signature[0]),
+                        "foreign_attributions": sorted(foreign_attributions),
+                        "claimless": False,
+                        "section": sentence.section,
+                        "reset_reason": "surface attribution conflicts with active authority context",
+                    }
                 active_id, active_signature = None, None
                 continue
             inherited.add(sentence.sentence_id)
         elif not explicit:
             failures.setdefault(sentence.sentence_id, set()).add("ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED")
+            if diagnostics_by_sentence is not None:
+                diagnostics_by_sentence[sentence.sentence_id] = {
+                    "sentence_id": sentence.sentence_id,
+                    "claim_ids": list(sentence.claim_ids),
+                    "context_id": context_id,
+                    "expected_source_ids": list(signature[0]),
+                    "expected_attributions": list(signature[1]),
+                    "claimless": False,
+                    "section": sentence.section,
+                    "reset_reason": "authority attribution anchor is not explicit or approved",
+                }
             active_id, active_signature = None, None
             continue
         if context_id is not None:
@@ -473,44 +681,91 @@ def _validate_cross_language_attribution_contexts(
 def _cross_language_closing_issues(
     draft: ScriptDraft, angle: AngleCandidate, claims: dict[str, dict],
     terminology: ScriptTerminologyMapV1,
+    *, diagnostics: list[dict[str, Any]] | None = None,
 ) -> set[str]:
     if not draft.sentences:
         return {"CORE_JUDGMENT_MISSING"}
-    selected_terms = {
-        (role, term.casefold())
-        for claim_id in angle.supporting_claim_ids
-        if isinstance(claims.get(claim_id), dict)
-        for role, _field, term in _required_cross_language_terms(claims[claim_id])
-        if role in {"subject", "metric"}
-    }
+    def dimensions_for(claim_ids: list[str]) -> set[tuple[str, str]]:
+        dimensions: set[tuple[str, str]] = set()
+        for claim_id in claim_ids:
+            claim = claims.get(claim_id)
+            if not isinstance(claim, dict):
+                continue
+            for role, field, source_term in _required_cross_language_terms(claim):
+                if role not in {"subject", "metric"}:
+                    continue
+                approved = [entry for entry in _approved_entries(terminology, claim_id, role)
+                            if entry.source_field == field and entry.source_term == source_term]
+                if approved:
+                    dimensions.add((role, source_term.casefold()))
+        return dimensions
+
+    selected_dimensions = dimensions_for(list(angle.supporting_claim_ids))
     # A one-dimension angle cannot produce a multi-dimension synthesis; retain
     # the generic declarative closing rule for that narrower case.
-    if len({term for _role, term in selected_terms}) < 2:
+    if len({term for _role, term in selected_dimensions}) < 2:
         return set()
     closing = draft.sentences[-1]
     bound_ids = list(dict.fromkeys(closing.claim_ids))
     if len(bound_ids) < 2 or not set(bound_ids) <= set(angle.supporting_claim_ids):
+        if diagnostics is not None:
+            diagnostics.append({
+                "reason": "closing must bind at least two selected supporting claims",
+                "selected_angle_id": angle.angle_id,
+                "selected_supporting_claim_ids": list(angle.supporting_claim_ids),
+                "closing_claim_ids": bound_ids,
+                "covered_dimensions": [],
+                "available_supporting_claims": list(angle.supporting_claim_ids),
+                "minimum_requirements": {"distinct_claims": 2, "distinct_dimensions": 2,
+                                         "selected_angle_claims_only": True},
+            })
         return {"CORE_JUDGMENT_WEAK"}
-    dimensions: set[tuple[str, str]] = set()
-    for claim_id in bound_ids:
-        claim = claims.get(claim_id)
-        if not isinstance(claim, dict):
-            continue
-        terms = _required_cross_language_terms(claim)
-        for role, field, source_term in terms:
-            if role not in {"subject", "metric"}:
-                continue
-            approved = [entry for entry in _approved_entries(terminology, claim_id, role)
-                        if entry.source_field == field and entry.source_term == source_term]
-            if not approved or not any(
-                _has_term(closing.text, alias)
-                for entry in approved for alias in entry.approved_target_terms
-            ):
-                continue
-            dimensions.add((role, source_term.casefold()))
-    if len({term for _, term in dimensions}) < 2:
+    dimensions = dimensions_for(bound_ids)
+    spoken_bound_dimensions = {
+        dimension for dimension in dimensions
+        if any(_has_term(closing.text, alias)
+               for claim_id in bound_ids
+               for entry in _approved_entries(terminology, claim_id, dimension[0])
+               if entry.source_term.casefold() == dimension[1]
+               for alias in entry.approved_target_terms)
+    }
+    unbound_dimensions = selected_dimensions - dimensions_for(bound_ids)
+    unsupported_spoken_dimensions = {
+        dimension for dimension in unbound_dimensions
+        if any(_has_term(closing.text, alias)
+               for claim_id in angle.supporting_claim_ids if claim_id not in bound_ids
+               for entry in _approved_entries(terminology, claim_id, dimension[0])
+               if entry.source_term.casefold() == dimension[1]
+               for alias in entry.approved_target_terms)
+    }
+    if len({term for _, term in spoken_bound_dimensions}) < 2 or unsupported_spoken_dimensions:
+        if diagnostics is not None:
+            diagnostics.append({
+                "reason": "closing must mention at least two bound dimensions and may not add an unbound angle dimension",
+                "selected_angle_id": angle.angle_id,
+                "selected_supporting_claim_ids": list(angle.supporting_claim_ids),
+                "closing_claim_ids": bound_ids,
+                "covered_dimensions": sorted(f"{role}:{term}" for role, term in spoken_bound_dimensions),
+                "unsupported_spoken_dimensions": sorted(
+                    f"{role}:{term}" for role, term in unsupported_spoken_dimensions
+                ),
+                "available_supporting_claims": list(angle.supporting_claim_ids),
+                "minimum_requirements": {"distinct_claims": 2, "distinct_dimensions": 2,
+                                         "selected_angle_claims_only": True,
+                                         "new_facts_causality_prediction_policy_judgment": False},
+            })
         return {"CORE_JUDGMENT_WEAK"}
     if _LANGUAGE_EXPANSION_RE.search(closing.text):
+        if diagnostics is not None:
+            diagnostics.append({
+                "reason": "closing contains causal, predictive, motive, market-impact, or policy expansion",
+                "selected_angle_id": angle.angle_id,
+                "selected_supporting_claim_ids": list(angle.supporting_claim_ids),
+                "closing_claim_ids": bound_ids,
+                "covered_dimensions": sorted(f"{role}:{term}" for role, term in spoken_bound_dimensions),
+                "minimum_requirements": {"no_causality": True, "no_prediction": True,
+                                         "no_policy_judgment": True},
+            })
         return {"AUTHORITY_SCOPE_EXPANSION"}
     return set()
 
@@ -597,8 +852,10 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
     claims = {item["claim_id"]: item for item in facts.get("claims", [])}
     cross_sentence_ids: set[str] = set()
     if parsed_terminology is not None:
+        attribution_diagnostics: dict[str, dict[str, Any]] = {}
         context_failures, inherited_attribution = _validate_cross_language_attribution_contexts(
-            draft.sentences, claims, parsed_terminology
+            draft.sentences, claims, parsed_terminology,
+            diagnostics_by_sentence=attribution_diagnostics,
         )
         for sentence in draft.sentences:
             if any(claim_id in cross_language_claim_ids for claim_id in sentence.claim_ids):
@@ -622,21 +879,45 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
                             issues.append(LintIssue(code="CLAIM_NOT_ELIGIBLE", message="bound claim is unavailable",
                                                     sentence_id=sentence.sentence_id))
                         else:
+                            claim_diagnostics: list[dict[str, Any]] = []
                             codes = _cross_language_claim_issues(
                                 sentence.text, claim, parsed_terminology,
                                 attribution_inherited=sentence.sentence_id in inherited_attribution,
+                                diagnostics=claim_diagnostics,
+                                bound_claim_ids=set(sentence.claim_ids),
                             )
-                            issues.extend(LintIssue(code=code, message="translated fact exceeds or misses its approved structured claim scope",
-                                                    sentence_id=sentence.sentence_id)
-                                          for code in sorted(codes))
+                            for code in sorted(codes):
+                                detail = next((row for row in claim_diagnostics if row.get("code") == code), None)
+                                issues.append(LintIssue(
+                                    code=code,
+                                    message="translated fact exceeds or misses its approved structured claim scope",
+                                    sentence_id=sentence.sentence_id,
+                                    diagnostics={key: value for key, value in (detail or {}).items()
+                                                 if key != "code"} | {
+                                                     "sentence_id": sentence.sentence_id,
+                                                     "supporting_claim_ids": [claim_id],
+                                                 },
+                                ))
         for sentence_id, codes in context_failures.items():
-            issues.extend(LintIssue(code=code, message="authority attribution context is missing, stale, or incompatible",
-                                    sentence_id=sentence_id) for code in sorted(codes))
+            for code in sorted(codes):
+                issues.append(LintIssue(
+                    code=code,
+                    message="authority attribution context is missing, stale, or incompatible",
+                    sentence_id=sentence_id,
+                    diagnostics=attribution_diagnostics.get(sentence_id),
+                ))
         if cross_sentence_ids:
-            closing_codes = _cross_language_closing_issues(draft, angle, claims, parsed_terminology)
-            issues.extend(LintIssue(code=code, message="closing must synthesize distinct supported angle dimensions without scope expansion",
-                                    sentence_id=draft.sentences[-1].sentence_id if draft.sentences else None)
-                          for code in sorted(closing_codes))
+            closing_diagnostics: list[dict[str, Any]] = []
+            closing_codes = _cross_language_closing_issues(
+                draft, angle, claims, parsed_terminology, diagnostics=closing_diagnostics,
+            )
+            for code in sorted(closing_codes):
+                issues.append(LintIssue(
+                    code=code,
+                    message="closing must synthesize distinct supported angle dimensions without scope expansion",
+                    sentence_id=draft.sentences[-1].sentence_id if draft.sentences else None,
+                    diagnostics=closing_diagnostics[0] if closing_diagnostics else None,
+                ))
     for sentence in draft.sentences:
         count = _spoken_count(sentence.text)
         if count > 48 or len(re.findall(r"[，；;：:]", sentence.text)) > 3:

@@ -93,6 +93,7 @@ class LintIssue(BaseModel):
     message: str
     sentence_id: str | None = None
     severity: Literal["error", "warning"] = "error"
+    diagnostics: dict[str, Any] | None = None
 
 
 class ScriptLintResult(BaseModel):

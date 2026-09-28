@@ -17,6 +17,8 @@ class ScriptPatch(BaseModel):
     new_sentence_id: str | None = None
     new_sentence_type: Literal["verified_fact", "explanation", "interpretation", "analogy"] | None = None
     new_section: Literal["hook", "phenomenon", "mechanism", "core_judgment"] | None = None
+    clear_attribution_context: bool = False
+    new_claim_ids: list[str] | None = None
 
 
 class ScriptPatchResult(BaseModel):
@@ -27,6 +29,9 @@ class RepairScope(BaseModel):
     editable_sentence_ids: list[str]
     protected_sentence_ids: list[str]
     type_change_sentence_ids: list[str] = Field(default_factory=list)
+    clear_attribution_context_sentence_ids: list[str] = Field(default_factory=list)
+    closing_claim_bind_sentence_ids: list[str] = Field(default_factory=list)
+    allowed_closing_claim_ids: list[str] = Field(default_factory=list)
     allow_additions: bool = False
 
 
@@ -45,11 +50,15 @@ class PatchApplicationResult(BaseModel):
     protected_hashes_unchanged: bool
 
 
-def build_repair_scope(draft: ScriptDraft, issues: list[Any]) -> RepairScope:
+def build_repair_scope(
+    draft: ScriptDraft, issues: list[Any], *, allowed_claim_ids: list[str] | None = None,
+) -> RepairScope:
     """Derive the smallest editable sentence set authorized by current lint issues."""
     by_id = {sentence.sentence_id: sentence for sentence in draft.sentences}
     editable: set[str] = set()
     type_change: set[str] = set()
+    clear_context: set[str] = set()
+    closing_bind: set[str] = set()
     codes = {issue.code for issue in issues}
 
     for issue in issues:
@@ -58,6 +67,20 @@ def build_repair_scope(draft: ScriptDraft, issues: list[Any]) -> RepairScope:
             editable.add(sentence_id)
             if issue.code in {"SENTENCE_TYPE_MISMATCH", "ANALOGY_OVERUSE"}:
                 type_change.add(sentence_id)
+            if issue.code in {
+                "ATTRIBUTION_CONTEXT_INVALID", "ATTRIBUTION_CONTEXT_CONFLICT",
+                "ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED",
+            }:
+                clear_context.add(sentence_id)
+
+    if draft.sentences and any(
+        issue.code == "CORE_JUDGMENT_WEAK"
+        and getattr(issue, "sentence_id", None) == draft.sentences[-1].sentence_id
+        for issue in issues
+    ):
+        final_sentence = draft.sentences[-1]
+        if final_sentence.section == "core_judgment":
+            closing_bind.add(final_sentence.sentence_id)
 
     if "HOOK_INVALID" in codes:
         editable.update(sentence.sentence_id for sentence in draft.sentences if sentence.section == "hook")
@@ -117,6 +140,11 @@ def build_repair_scope(draft: ScriptDraft, issues: list[Any]) -> RepairScope:
         editable_sentence_ids=[sentence_id for sentence_id in ordered_ids if sentence_id in editable],
         protected_sentence_ids=[sentence_id for sentence_id in ordered_ids if sentence_id not in editable],
         type_change_sentence_ids=[sentence_id for sentence_id in ordered_ids if sentence_id in type_change],
+        clear_attribution_context_sentence_ids=[sentence_id for sentence_id in ordered_ids
+                                                if sentence_id in clear_context],
+        closing_claim_bind_sentence_ids=[sentence_id for sentence_id in ordered_ids
+                                         if sentence_id in closing_bind],
+        allowed_closing_claim_ids=list(dict.fromkeys(allowed_claim_ids or [])),
         allow_additions="DURATION_TOO_SHORT" in codes,
     )
 
@@ -165,11 +193,33 @@ def apply_script_patches(
             if next_type != current.sentence_type and patch.sentence_id not in type_change:
                 rejected.append(RejectedPatch(patch=patch, reason="SENTENCE_TYPE_CHANGE_NOT_AUTHORIZED"))
                 continue
+            if (patch.clear_attribution_context
+                    and patch.sentence_id not in scope.clear_attribution_context_sentence_ids):
+                rejected.append(RejectedPatch(patch=patch, reason="ATTRIBUTION_CONTEXT_CLEAR_NOT_AUTHORIZED"))
+                continue
+            if patch.new_claim_ids is not None:
+                allowed_ids = set(scope.allowed_closing_claim_ids)
+                requested_ids = patch.new_claim_ids
+                if patch.sentence_id not in scope.closing_claim_bind_sentence_ids:
+                    rejected.append(RejectedPatch(patch=patch, reason="CLAIM_BINDING_NOT_AUTHORIZED"))
+                    continue
+                if (not requested_ids or len(requested_ids) != len(set(requested_ids))
+                        or not set(requested_ids) <= allowed_ids
+                        or not set(current.claim_ids) <= set(requested_ids)):
+                    rejected.append(RejectedPatch(patch=patch, reason="INVALID_CLOSING_CLAIM_BINDING"))
+                    continue
             updated.sentences[index] = current.model_copy(update={
                 "text": patch.new_text,
                 "sentence_type": next_type,
+                "attribution_context_id": None if patch.clear_attribution_context
+                else current.attribution_context_id,
+                "claim_ids": patch.new_claim_ids if patch.new_claim_ids is not None else current.claim_ids,
             })
             applied.append(patch)
+            continue
+
+        if patch.clear_attribution_context or patch.new_claim_ids is not None:
+            rejected.append(RejectedPatch(patch=patch, reason="REPLACE_ONLY_METADATA_NOT_ALLOWED_ON_ADDITION"))
             continue
 
         if not scope.allow_additions:

@@ -194,6 +194,7 @@ def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
             continue
         code, _, locator = item.code.partition("__")
         sentence_id = item.sentence_id or (locator.lower() if locator else None)
+        diagnostics = item.diagnostics
         issue: RepairIssue | None
         if code in {"DURATION_OUT_OF_RANGE", "UNDECLARED_FACT"}:
             continue
@@ -218,11 +219,23 @@ def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
                                 current_type=sentence.sentence_type if sentence else None,
                                 expected_constraint="obvious analogy markers require sentence_type=analogy")
         else:
-            issue = RepairIssue(code=code, sentence_id=sentence_id)
+            issue = RepairIssue(code=code, sentence_id=sentence_id, diagnostics=diagnostics)
         key = (issue.code, issue.sentence_id, issue.trigger_category)
         if key not in seen:
             seen.add(key)
             result.append(issue)
+        elif diagnostics:
+            existing = next(item for item in result
+                            if (item.code, item.sentence_id, item.trigger_category) == key)
+            if existing.diagnostics is None:
+                existing.diagnostics = diagnostics
+            elif existing.diagnostics != diagnostics:
+                related = existing.diagnostics.setdefault("related_claim_diagnostics", [])
+                if not related:
+                    related.append({key: value for key, value in existing.diagnostics.items()
+                                    if key != "related_claim_diagnostics"})
+                if diagnostics not in related:
+                    related.append(diagnostics)
     return result
 
 
@@ -432,7 +445,8 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
             before_issues = _repair_issues(lint, draft)
             before_codes = _issue_codes(before_issues)
             before_duration = lint.estimated_duration_seconds
-            scope = build_repair_scope(draft, before_issues)
+            scope = build_repair_scope(draft, before_issues,
+                                       allowed_claim_ids=selected.supporting_claim_ids)
             patch_result = repair_method(ScriptRepairInput(
                 run_id=run_id,
                 repair_attempt=attempt,
@@ -447,6 +461,9 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
                 target_duration_seconds=draft.target_duration_seconds,
                 speaking_rate_chars_per_second=speaking_rate,
                 terminology_map=terminology_payload,
+                clear_attribution_context_sentence_ids=scope.clear_attribution_context_sentence_ids,
+                closing_claim_bind_sentence_ids=scope.closing_claim_bind_sentence_ids,
+                allowed_closing_claim_ids=scope.allowed_closing_claim_ids,
             ))
             application = apply_script_patches(draft, scope, patch_result.patches)
             draft = application.draft

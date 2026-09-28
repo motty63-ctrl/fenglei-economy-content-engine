@@ -68,6 +68,7 @@ class RepairIssue(BaseModel):
     current_type: str | None = None
     expected_constraint: str | None = None
     trigger_category: str | None = None
+    diagnostics: dict[str, Any] | None = None
 
 
 class ScriptRepairInput(BaseModel):
@@ -84,6 +85,9 @@ class ScriptRepairInput(BaseModel):
     target_duration_seconds: int = Field(default=75, ge=60, le=90)
     speaking_rate_chars_per_second: float = Field(default=4.0, ge=2.5, le=6.0)
     terminology_map: dict[str, Any] | None = None
+    clear_attribution_context_sentence_ids: list[str] = Field(default_factory=list)
+    closing_claim_bind_sentence_ids: list[str] = Field(default_factory=list)
+    allowed_closing_claim_ids: list[str] = Field(default_factory=list)
 
 
 class ContentPlanningProvider(Protocol):
@@ -176,10 +180,24 @@ class DeepSeekContentPlanningProvider:
                 if key in seen:
                     continue
                 seen.add(key)
-                evidence.append({name: item.get(name) for name in (
+                evidence_row = {name: item.get(name) for name in (
                     "source_id", "evidence_text", "observation", "value", "published_at",
                     "original_url", "document_hash", "json_pointer",
-                ) if item.get(name) is not None})
+                ) if item.get(name) is not None}
+                explicit_values = item.get("explicit_values")
+                if isinstance(explicit_values, list):
+                    evidence_row["explicit_values"] = [
+                        {key: value.get(key) for key in ("value", "unit") if value.get(key) is not None}
+                        for value in explicit_values if isinstance(value, dict)
+                    ]
+                revision_values = item.get("revision_values")
+                if isinstance(revision_values, dict):
+                    evidence_row["revision_values"] = {
+                        key: revision_values[key]
+                        for key in ("previous_value", "revised_value", "revision_amount", "direction")
+                        if revision_values.get(key) is not None
+                    }
+                evidence.append(evidence_row)
             claims.append({
                 "claim_id": claim.claim_id,
                 "claim_text": claim.claim_text,
@@ -356,7 +374,12 @@ class DeepSeekContentPlanningProvider:
         system = (
             "你只生成风雷经济脚本的 sentence-level patches，不得返回、重写或覆盖整篇 script。"
             "本地 lint 和 patch applier 是最终裁判。只能修改 editable_sentence_ids；protected_sentence_ids 禁止修改。"
-            "不得修改 claim 状态、claim_ids、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
+            "不得修改 claim 状态、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
+            "claim_ids 默认不可修改；只有当 repair_permissions 明确列出 closing_claim_bind_sentence_ids，"
+            "且问题为 CORE_JUDGMENT_WEAK 时，才可为对应最后结尾句提交 new_claim_ids；"
+            "new_claim_ids 必须是 selected_angle.supporting_claim_ids 的非空子集并保留已有绑定。"
+            "只有 repair_permissions.clear_attribution_context_sentence_ids 明确授权的句子，"
+            "才能设置 clear_attribution_context=true。"
             "verified_claims_only 仅包含 selected_angle.supporting_claim_ids 对应的事实；不得使用其他记忆或补充事实。"
             "保持选定角度的主题、对象、范围和来源归因，不引入当前输入未提供的案例、机构或指标。"
             "不得新增数字、日期、机构结论、数据口径、历史事件或因果事实。只修 structured_issues 指向的问题，"
@@ -401,7 +424,43 @@ class DeepSeekContentPlanningProvider:
             ),
             "CORE_JUDGMENT_WEAK": (
                 "最后一句必须是清晰陈述句，不能是问句；请回到选定角度的问题收束，"
-                "不要补入输入没有支持的新事实或结论。"
+                "不要补入输入没有支持的新事实或结论。若为跨维度事实综合，必须只绑定覆盖这些维度的选定角度 claims；"
+                "仅在 repair_permissions 授权时使用 new_claim_ids。不得加入因果、预测或政策判断。"
+            ),
+            "AUTHORITY_SCOPE_EXPANSION": (
+                "删除超出绑定证据的因果、动机、预测、市场影响或政策判断；只陈述来源直接支持的范围。"
+            ),
+            "TERMINOLOGY_TERM_MISSING": (
+                "只修复 diagnostics 指出的语义角色：若该概念被句子明确表达，使用该 claim 对应的 approved_target_terms；"
+                "不得跨 metric/unit 等角色借用术语。reporting_scope/source_section 默认是结构性 provenance，"
+                "除非句子明确声称该范围，否则不要强行加入口播。"
+            ),
+            "REVISION_ROLE_MISMATCH": (
+                "按 diagnostics 中的结构化 previous/revised/delta 值逐个保留数值，并用明确的通用修订表达标记每个值的角色；"
+                "不得根据数值顺序猜角色，也不得把修订幅度写成修订后的最终值。"
+            ),
+            "UNSUPPORTED_NUMERIC_FORMAT": (
+                "只使用 facts payload 支持且本地 numeric parser 可精确识别的数字表达；"
+                "避免无法确定数值或单位的中文数字写法，不得新增或近似改写数值。"
+            ),
+            "UNSUPPORTED_NUMERIC_VALUE": (
+                "对照 diagnostics 的 expected_values，仅保留精确支持的数值和单位；不得添加、四舍五入或换算出未列出的值。"
+            ),
+            "UNIT_SCOPE_MISMATCH": (
+                "保留 diagnostics 中的精确数值及 expected_unit，并使用该 claim 已批准的 unit 表达；"
+                "不得把 unit alias 当作 metric alias。"
+            ),
+            "ATTRIBUTION_CONTEXT_INVALID": (
+                "核对 diagnostics 的句子类型和上下文重置原因。claimless 过渡/编辑句必须清除旧 attribution context；"
+                "若该句仍是 authority-backed fact，则保留 claim binding 并使用有效归因锚点。"
+            ),
+            "ATTRIBUTION_CONTEXT_CONFLICT": (
+                "diagnostics 表示当前可见归因与绑定来源冲突。只保留该句 claims 获批的 attribution；"
+                "若句子不再是来源事实，应改写为无事实断言的过渡句并清除获准句子的旧 context。"
+            ),
+            "ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED": (
+                "authority-backed factual sentence 必须显式保留 claim 对应的已批准 attribution；"
+                "若句子转为 claimless transition/editorial/closing，则移除其事实断言并清除归因上下文。"
             ),
             "FORMULAIC_REPETITION": "同一种话语开头最多使用两次；改写成自然口语，避免连续使用‘你可以/你不妨/我的判断是’。",
             "REPORT_STYLE_LANGUAGE": "删掉报告式套话，直接进入问题或答案；不得新增事实。",
@@ -499,11 +558,17 @@ class DeepSeekContentPlanningProvider:
             "editable_sentences": editable_sentences,
             "protected_sentence_ids": request.protected_sentence_ids,
             "allow_additions": request.allow_additions,
+            "repair_permissions": {
+                "clear_attribution_context_sentence_ids": request.clear_attribution_context_sentence_ids,
+                "closing_claim_bind_sentence_ids": request.closing_claim_bind_sentence_ids,
+                "allowed_closing_claim_ids": request.allowed_closing_claim_ids,
+            },
             "verified_claims_only": self._fact_payload(_supporting_claims(
                 request.selected_angle, request.fact_palette)),
             "patch_contract": {
                 "operations": ["replace", "add_after"],
-                "replace_fields": ["sentence_id", "operation", "new_text", "new_sentence_type(optional)"],
+                "replace_fields": ["sentence_id", "operation", "new_text", "new_sentence_type(optional)",
+                                   "clear_attribution_context(optional)", "new_claim_ids(optional)"],
                 "add_after_fields": ["sentence_id", "operation", "new_sentence_id", "new_text",
                                      "new_sentence_type", "new_section"],
             },
