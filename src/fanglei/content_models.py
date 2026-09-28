@@ -69,6 +69,7 @@ class ScriptSentence(BaseModel):
     sentence_type: Literal["verified_fact", "explanation", "interpretation", "analogy"]
     text: str = Field(min_length=1)
     claim_ids: list[str] = Field(default_factory=list)
+    attribution_context_id: str | None = None
 
     @model_validator(mode="after")
     def claims_match_type(self) -> "ScriptSentence":
@@ -83,6 +84,7 @@ class ScriptDraft(BaseModel):
     angle_id: str
     title: str
     target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    target_language: str | None = None
     sentences: list[ScriptSentence]
 
 

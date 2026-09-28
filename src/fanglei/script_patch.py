@@ -78,6 +78,32 @@ def build_repair_scope(draft: ScriptDraft, issues: list[Any]) -> RepairScope:
         ]
         compression_candidates.sort(key=lambda sentence: len(sentence.text), reverse=True)
         editable.update(sentence.sentence_id for sentence in compression_candidates[:3])
+        # A bound factual sentence may be shortened, but its bindings and
+        # attribution metadata remain immutable and every patch is re-linted.
+        editable.update(
+            sentence.sentence_id for sentence in draft.sentences
+            if sentence.claim_ids and sentence.section != "hook"
+        )
+    if "DURATION_TARGET_MISSED" in codes:
+        target_issues = [issue for issue in issues if issue.code == "DURATION_TARGET_MISSED"]
+        current_seconds = max((getattr(issue, "current_seconds", None) or 0 for issue in target_issues), default=0)
+        target_seconds = max((getattr(issue, "target_seconds", None) or draft.target_duration_seconds
+                              for issue in target_issues), default=draft.target_duration_seconds)
+        if current_seconds > target_seconds:
+            editable.update(
+                sentence.sentence_id for sentence in draft.sentences
+                if sentence.claim_ids and sentence.section != "hook"
+            )
+            prose = [sentence for sentence in draft.sentences
+                     if sentence.section == "mechanism" and not sentence.claim_ids
+                     and sentence.sentence_type in {"explanation", "interpretation", "analogy"}]
+            prose.sort(key=lambda sentence: len(sentence.text), reverse=True)
+            editable.update(sentence.sentence_id for sentence in prose[:3])
+        else:
+            prose = [sentence for sentence in draft.sentences
+                     if sentence.section == "mechanism" and not sentence.claim_ids
+                     and sentence.sentence_type in {"explanation", "interpretation"}]
+            editable.update(sentence.sentence_id for sentence in prose[:3])
     if codes & {"JARGON_DENSITY", "FORMULAIC_REPETITION"}:
         editable.update(
             sentence.sentence_id for sentence in draft.sentences

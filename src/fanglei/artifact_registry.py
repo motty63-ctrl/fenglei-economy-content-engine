@@ -107,6 +107,20 @@ def _evidence_target_graph(
     )
     return graph
 
+
+def _script_terminology_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Opt in to a human-reviewed, Facts-bound terminology artifact."""
+    graph = dict(base_graph)
+    graph["script_terminology.json"] = ("script_terminology_review", ("facts.json",))
+    owner, dependencies = graph["script.json"]
+    graph["script.json"] = (
+        owner,
+        tuple(dict.fromkeys((*dependencies, "script_terminology.json"))),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -166,6 +180,7 @@ class ArtifactRegistry:
         research_focus_mode: bool | None = None,
         human_angle_selection_mode: bool = False,
         evidence_targets_mode: bool = False,
+        script_terminology_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -193,6 +208,11 @@ class ArtifactRegistry:
             )
             if target_enabled:
                 self.graph = _evidence_target_graph(self.graph)
+            terminology_enabled = script_terminology_mode or (
+                self.run_dir / "script_terminology.json"
+            ).is_file()
+            if terminology_enabled:
+                self.graph = _script_terminology_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

@@ -9,7 +9,7 @@ from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.cli import app
 from fanglei.content_pipeline import run_content_pipeline, run_legacy_content_pipeline
 from fanglei.errors import ArtifactConflictError
-from fanglei.models import RunManifest
+from fanglei.models import RunManifest, StageState
 from fanglei.providers.content import MockContentPlanningProvider
 
 
@@ -43,6 +43,44 @@ def test_v02_script_entry_requires_human_selection_before_provider_calls(tmp_pat
     assert provider.script_calls == 0
     assert provider.repair_calls == 0
     assert not (run / "script.json").exists()
+
+
+def test_cross_language_authority_script_requires_approved_terminology_before_provider(tmp_path) -> None:
+    from fanglei.content_models import AngleCandidate
+    from fanglei.content_pipeline import record_human_angle_selection
+
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    provider = _ScriptCallTrackingProvider()
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text(encoding="utf-8")))
+    registry = ArtifactRegistry(run, manifest, human_angle_selection_mode=True)
+    angle = AngleCandidate(
+        angle_id="angle_retail", title="A recorded monthly change",
+        hook="What did the record report?", core_question="What changed in March?",
+        core_insight="The record reports one monthly index value.",
+        supporting_claim_ids=["claim_retail_001"], audience_relevance=3, novelty=3,
+        hook_strength=3, visual_potential=3, explainability=4,
+        evidence_strength=2, controversy_risk=0, total_score=50,
+        eligibility="eligible",
+    )
+    registry.write_json("angles.json", {
+        "schema_version": "3.0", "run_id": run.name,
+        "recommended_angle_id": angle.angle_id,
+        "recommendation_status": "system_recommendation_human_selection_pending",
+        "candidates": [angle.model_dump(mode="json")],
+    }, "angle_generation")
+    manifest.stages["angle_generation"] = StageState(status="succeeded", attempts=1)
+    registry.save_manifest()
+    record_human_angle_selection(run.name, tmp_path, angle.angle_id)
+    assert json.loads((run / "run.json").read_text(encoding="utf-8"))["stages"][
+        "angle_generation"
+    ]["status"] == "succeeded"
+
+    with pytest.raises(ArtifactConflictError, match="SCRIPT_TERMINOLOGY_REVIEW_REQUIRED"):
+        run_content_pipeline(run.name, tmp_path, provider)
+
+    assert provider.script_calls == provider.repair_calls == 0
+    assert not (run / "script.json").exists()
+    assert manifest_status(run, "script.json") == "missing"
 
 
 def test_v02_angle_id_argument_is_not_a_human_selection_record(tmp_path) -> None:
@@ -244,7 +282,7 @@ def test_unregistered_selection_file_is_not_silently_overwritten(tmp_path) -> No
     assert (run / "angle_selection.json").read_bytes() == rogue_bytes
 
 
-def _prepared_retail_run(tmp_path):
+def _prepared_retail_run(tmp_path, *, authority_claim: bool = False):
     from fanglei.research_focus import ResearchFocusV1
 
     run = tmp_path / "2026-09-27-001-synthetic-retail-sales"
@@ -263,23 +301,39 @@ def _prepared_retail_run(tmp_path):
     registry.write_json("sources.json", {
         "schema_version": "2.0", "selection_status": "selected", "sources": [],
     }, "source_selection")
+    retail_claim = {
+        "claim_id": "claim_retail_001",
+        "claim_text": "Data Office reports: March retail index: 103.",
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "allowed_downstream": True,
+        "source_ids": ["src_retail_001"],
+        "evidence": [{
+            "source_id": "src_retail_001",
+            "original_url": "https://retail.example.test/march",
+            "evidence_eligible": True,
+            "evidence_text": "March index: 103.",
+            "published_at": "2026-04-15",
+        }],
+    }
+    if authority_claim:
+        retail_claim.update({
+            "verification_basis": "authoritative_primary_attestation",
+            "authority_attestation": {
+                "kind": "document_report",
+                "source_ids": ["src_retail_001"],
+                "attribution": "Data Office reports",
+                "scope": {
+                    "subject": "Retail index", "measure": "index value", "period": "March",
+                    "unit": "index points", "statistic": None, "certainty": "reports",
+                    "reporting_scope": "Retail Survey",
+                },
+            },
+        })
     registry.write_json("facts.json", {
         "run_id": run.name,
-        "claims": [{
-            "claim_id": "claim_retail_001",
-            "claim_text": "March retail index: 103.",
-            "claim_type": "fact",
-            "verification_status": "verified",
-            "allowed_downstream": True,
-            "verification_basis": "independent_corroboration",
-            "source_ids": ["src_retail_001"],
-            "evidence": [{
-                "source_id": "src_retail_001",
-                "original_url": "https://retail.example.test/march",
-                "evidence_eligible": True,
-                "evidence_text": "March index: 103.",
-                "published_at": "2026-04-15",
-            }],
+        "claims": [{**retail_claim, "verification_basis": retail_claim.get(
+            "verification_basis", "independent_corroboration")
         }],
     }, "factcheck")
     registry.write_text("research.md", "The research records [claim_retail_001] from the synthetic March release.",

@@ -12,6 +12,11 @@ from fanglei.errors import ProviderError
 from fanglei.security import REDACTED, safe_error_message
 from fanglei.script_patch import ScriptPatchResult
 
+SCRIPT_MIN_SENTENCE_COUNT = 12
+SCRIPT_MAX_SENTENCE_COUNT = 15
+SCRIPT_HARD_MIN_DURATION_SECONDS = 60
+SCRIPT_HARD_MAX_DURATION_SECONDS = 90
+
 
 class AngleGenerationInput(BaseModel):
     run_id: str
@@ -30,6 +35,10 @@ class ScriptGenerationInput(BaseModel):
     fact_palette: tuple[ScriptReadyClaim, ...]
     research_focus: dict[str, Any] | None = None
     authority_metadata: dict[str, Any] = Field(default_factory=dict)
+    target_language: str | None = None
+    target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    speaking_rate_chars_per_second: float = Field(default=4.0, ge=2.5, le=6.0)
+    terminology_map: dict[str, Any] | None = None
 
 
 def _supporting_claims(
@@ -71,6 +80,10 @@ class ScriptRepairInput(BaseModel):
     allow_additions: bool = False
     fact_palette: tuple[ScriptReadyClaim, ...]
     issues: list[RepairIssue]
+    target_language: str | None = None
+    target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    speaking_rate_chars_per_second: float = Field(default=4.0, ge=2.5, le=6.0)
+    terminology_map: dict[str, Any] | None = None
 
 
 class ContentPlanningProvider(Protocol):
@@ -88,6 +101,7 @@ class DeepSeekContentPlanningProvider:
     endpoint = "https://api.deepseek.com/chat/completions"
     angle_prompt_version = "angles-deepseek-v1"
     script_prompt_version = "script-deepseek-v2"
+    script_target_language = "zh-Hans"
 
     def __init__(self, api_key: str, *, model: str = "deepseek-v4-pro",
                  transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -251,11 +265,15 @@ class DeepSeekContentPlanningProvider:
             "certainty、attribution 和 authority scope 均不得扩大或省略。对权威文件 attestation 必须保留文件归因；"
             "projection 不得改写为承诺、政策决定或现实结果。不得添加输入未支持的 causality、motive 或 market effect。"
             "只在输入 claim 直接支持时解释机制；否则呈现证据边界，不要编造机制。不要把同时发生的变化写成因果关系。"
-            "脚本目标60到90秒，总口播字符控制在240到360个；第一句 hook 最多20个口播字符。"
-            "输出12到15句，每句推动当前问题向答案前进；事实句必须绑定支持它的 claim_ids，纯观点或比喻不得绑定 claim。"
+            f"脚本目标约{request.target_duration_seconds}秒，硬范围{SCRIPT_HARD_MIN_DURATION_SECONDS}到"
+            f"{SCRIPT_HARD_MAX_DURATION_SECONDS}秒；时长是目标优化项，不得为凑时长改变事实。"
+            "第一句 hook 最多20个口播字符。"
+            f"输出{SCRIPT_MIN_SENTENCE_COUNT}到{SCRIPT_MAX_SENTENCE_COUNT}句，每句推动当前问题向答案前进；"
+            "事实句必须绑定支持它的 claim_ids，纯观点或比喻不得绑定 claim。"
             "凡 hook 含有可核验的数字、日期、机构行为或具体事实，也必须绑定相应 claim 并标为 verified_fact。"
             "section 只能使用 hook、phenomenon、mechanism、core_judgment，最后一句必须是 core_judgment。"
             "sentence_type 只能使用 verified_fact、explanation、interpretation、analogy。"
+            "若提供已审核 terminology_map，只能使用其中 approved_target_terms；不得使用 proposed_target_terms。"
             "凡是包含“打个比方、好比、就像、仿佛、这像”的句子，sentence_type 必须是 analogy。"
             + FANGLEI_ECONOMY_STYLE_GUIDE
             + "机制与因果说明必须有 supporting claim 直接支持；风格要求不能覆盖此事实边界。"
@@ -266,6 +284,15 @@ class DeepSeekContentPlanningProvider:
             "research_summary": request.research_md,
             "research_focus": request.research_focus,
             "authority_metadata": request.authority_metadata,
+            "target_language": request.target_language or self.script_target_language,
+            "target_duration_seconds": request.target_duration_seconds,
+            "speaking_rate_chars_per_second": request.speaking_rate_chars_per_second,
+            "duration_character_guidance": {
+                "hard_minimum": round(60 * request.speaking_rate_chars_per_second),
+                "target": round(request.target_duration_seconds * request.speaking_rate_chars_per_second),
+                "hard_maximum": round(90 * request.speaking_rate_chars_per_second),
+            },
+            "approved_terminology_map": request.terminology_map,
             "selected_angle": request.selected_angle.model_dump(mode="json"),
             "selected_supporting_claim_ids": request.selected_angle.supporting_claim_ids,
             "verified_claims_only": facts,
@@ -277,36 +304,52 @@ class DeepSeekContentPlanningProvider:
             ],
             "output_contract": {
                 "schema_version": "3.0",
-                "target_duration_seconds": 75,
-                "minimum_sentence_count": 12,
-                "maximum_sentence_count": 15,
-                "minimum_spoken_character_count": 240,
-                "maximum_spoken_character_count": 360,
+                "minimum_sentence_count": SCRIPT_MIN_SENTENCE_COUNT,
+                "maximum_sentence_count": SCRIPT_MAX_SENTENCE_COUNT,
+                "minimum_spoken_character_count": round(
+                    SCRIPT_HARD_MIN_DURATION_SECONDS * request.speaking_rate_chars_per_second),
+                "maximum_spoken_character_count": round(
+                    SCRIPT_HARD_MAX_DURATION_SECONDS * request.speaking_rate_chars_per_second),
+                "target_duration_seconds": request.target_duration_seconds,
+                "speaking_rate_chars_per_second": request.speaking_rate_chars_per_second,
+                "hard_duration_range_seconds": {
+                    "min": SCRIPT_HARD_MIN_DURATION_SECONDS,
+                    "max": SCRIPT_HARD_MAX_DURATION_SECONDS,
+                },
                 "allowed_sections": ["hook", "phenomenon", "mechanism", "core_judgment"],
                 "allowed_sentence_types": ["verified_fact", "explanation", "interpretation", "analogy"],
             },
             "output_schema": {
                 "angle_id": request.selected_angle.angle_id,
                 "title": request.selected_angle.title,
-                "target_duration_seconds": 75,
+                "target_duration_seconds": request.target_duration_seconds,
                 "sentences": [{
                     "sentence_id": "sentence_001", "section": "hook",
                     "sentence_type": "interpretation", "text": "", "claim_ids": [],
+                    "attribution_context_id": None,
                 }],
             },
         }, ensure_ascii=False)
         raw = self._request_json(system, user, max_tokens=2600, temperature=self.script_temperature)
-        return self._normalize_script(raw)
+        return self._normalize_script(
+            raw,
+            allow_bound_interpretation=request.terminology_map is not None,
+            target_language=request.target_language or self.script_target_language,
+        )
 
     @staticmethod
-    def _normalize_script(raw: dict[str, Any]) -> ScriptDraft:
+    def _normalize_script(raw: dict[str, Any], *, allow_bound_interpretation: bool = False,
+                          target_language: str | None = None) -> ScriptDraft:
         for sentence in raw.get("sentences", []):
             if isinstance(sentence, dict) and sentence.get("section") == "core_insight":
                 sentence["section"] = "core_judgment"
             if isinstance(sentence, dict) and sentence.get("sentence_type") == "core_judgment":
                 sentence["sentence_type"] = "interpretation"
-            if isinstance(sentence, dict) and sentence.get("sentence_type") != "verified_fact":
+            if (isinstance(sentence, dict) and sentence.get("sentence_type") != "verified_fact"
+                    and not (allow_bound_interpretation and sentence.get("section") == "core_judgment")):
                 sentence["claim_ids"] = []
+        if target_language is not None:
+            raw.setdefault("target_language", target_language)
         return ScriptDraft.model_validate(raw)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:
@@ -318,8 +361,9 @@ class DeepSeekContentPlanningProvider:
             "保持选定角度的主题、对象、范围和来源归因，不引入当前输入未提供的案例、机构或指标。"
             "不得新增数字、日期、机构结论、数据口径、历史事件或因果事实。只修 structured_issues 指向的问题，"
             "保持其他内容不变，不重新设计 selected_angle。输出纯 JSON，顶层只能是 patches。"
-            "遇到 DURATION_TOO_SHORT 时，必须按缺口一次提交足够数量、文本互不重复的 add_after patches，"
-            "使完整脚本至少达到240个口播字符；不得靠重复句凑时长。"
+            f"把时长优化到约{request.target_duration_seconds}秒，同时保持60到90秒硬范围；"
+            "不得靠新增或重复事实凑时长。可以压缩事实句的冗余措辞，但必须保留原 claim_ids、来源归因、统计范围和数值语义，"
+            "修订后的全文仍须通过本地 lint。"
             "replace patch 使用 sentence_id、operation=replace、new_text；只有 SENTENCE_TYPE_MISMATCH 或"
             " ANALOGY_OVERUSE 明确授权时"
             "才可附 new_sentence_type。add_after 仅在 allow_additions=true 时使用，并必须附 new_sentence_id、"
@@ -336,8 +380,12 @@ class DeepSeekContentPlanningProvider:
                 "不得修改verified_fact、已通过的hook或结论，不得重复事实或建议凑时长。"
             ),
             "DURATION_TOO_LONG": (
-                "只压缩授权的explanation或analogy句；不得删除核心verified_fact，"
-                "不得修改已通过的hook或结论，也不得破坏现象、机制、判断结构。"
+                "优先压缩授权的事实句及 explanation / analogy 中的冗余措辞；保留事实句 claim_ids、"
+                " attribution_context_id、数字、单位、归因和范围。不得删除核心事实或改变 angle。"
+            ),
+            "DURATION_TARGET_MISSED": (
+                f"将时长向{request.target_duration_seconds}秒目标靠近。可改写授权事实句以删去重复修饰，"
+                "必须保留 claim_ids、归因上下文、范围、数值角色与精确数值；不得改变 angle 或加入新事实。"
             ),
             "COMPLEX_LONG_SENTENCE": "每句不超过48个口播字符，逗号、分号和冒号合计不超过3个。",
             "UNSUPPORTED_FACT": "仅保留一条忠实翻译claim_text的verified_fact并绑定对应claim_id，不扩写；其他句子不绑定claim。",
@@ -437,7 +485,13 @@ class DeepSeekContentPlanningProvider:
             "repair_attempt": request.repair_attempt,
             "current_spoken_character_count": current_spoken_character_count,
             "existing_sentence_texts": [sentence.text for sentence in request.current_script.sentences],
-            "valid_duration_character_range": {"min": 240, "max": 360, "target": 300},
+            "valid_duration_character_range": {
+                "min": round(60 * request.speaking_rate_chars_per_second),
+                "max": round(90 * request.speaking_rate_chars_per_second),
+                "target": round(request.target_duration_seconds * request.speaking_rate_chars_per_second),
+            },
+            "target_language": request.target_language,
+            "approved_terminology_map": request.terminology_map,
             "structured_issues": [issue.model_dump(mode="json", exclude_none=True) for issue in request.issues],
             "rules_for_current_issue_codes": current_rules,
             "selected_angle": request.selected_angle.model_dump(mode="json"),
@@ -473,6 +527,7 @@ class MockContentPlanningProvider:
     model = None
     angle_prompt_version = "offline-generic-angles-v1"
     script_prompt_version = "offline-evidence-script-v3"
+    script_target_language = "zh-Hans"
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
         from fanglei.offline_angle_planner import plan_offline_angles

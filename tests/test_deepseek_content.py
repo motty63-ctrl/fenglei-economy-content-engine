@@ -141,6 +141,7 @@ def test_deepseek_script_prompt_uses_selected_angle_research_and_eligible_facts(
         },
         authority_metadata={"source_policy": {"name": "independent_sources/1.0"}},
         fact_palette=(selected_claim, unselected_claim),
+        speaking_rate_chars_per_second=5,
     ))
     assert result.sentences[1].claim_ids == ["claim_007"]
     system = captured["messages"][0]["content"]
@@ -151,7 +152,11 @@ def test_deepseek_script_prompt_uses_selected_angle_research_and_eligible_facts(
     assert "2.79318715363841" not in system
     user = json.loads(captured["messages"][1]["content"])
     assert user["output_contract"]["minimum_sentence_count"] == 12
-    assert user["output_contract"]["minimum_spoken_character_count"] == 240
+    assert user["output_contract"]["maximum_sentence_count"] == 15
+    assert user["output_contract"]["minimum_spoken_character_count"] == 300
+    assert user["output_contract"]["maximum_spoken_character_count"] == 450
+    assert user["output_contract"]["target_duration_seconds"] == 75
+    assert user["output_contract"]["hard_duration_range_seconds"] == {"min": 60, "max": 90}
     assert user["selected_angle"]["angle_id"] == "angle_retail_001"
     assert user["research_summary"] == "Research summary: compare the two synthetic release periods."
     assert user["research_focus"]["constraints"] == ["Do not infer a cause."]
@@ -342,7 +347,10 @@ def test_deepseek_repair_sends_only_allowlisted_context_and_issue_codes() -> Non
     }
     assert captured["temperature"] == 0.0
     assert "Fenglei Economy Content Engine 内容风格指南" in captured["messages"][0]["content"]
-    assert "按缺口一次提交足够数量" in captured["messages"][0]["content"]
+    assert user_payload["target_language"] is None
+    assert user_payload["approved_terminology_map"] is None
+    assert user_payload["selected_angle"]["angle_id"] == "angle_001"
+    assert [claim["claim_id"] for claim in user_payload["verified_claims_only"]] == ["claim_007"]
     assert "还可以把疑问写成清单" not in captured["messages"][0]["content"]
     assert SENTINEL not in serialized
     assert "Authorization" not in serialized

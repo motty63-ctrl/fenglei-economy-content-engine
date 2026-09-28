@@ -190,7 +190,7 @@ def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
     result: list[RepairIssue] = []
     seen: set[tuple[str, str | None, str | None]] = set()
     for item in lint.issues:
-        if item.severity != "error":
+        if item.severity != "error" and item.code != "DURATION_TARGET_MISSED":
             continue
         code, _, locator = item.code.partition("__")
         sentence_id = item.sentence_id or (locator.lower() if locator else None)
@@ -202,7 +202,11 @@ def _repair_issues(lint, draft: ScriptDraft) -> list[RepairIssue]:
                                 min_seconds=60, target_seconds=75)
         elif code == "DURATION_TOO_LONG":
             issue = RepairIssue(code=code, current_seconds=lint.estimated_duration_seconds,
-                                max_seconds=90, target_seconds=75)
+                                max_seconds=90, target_seconds=draft.target_duration_seconds)
+        elif code == "DURATION_TARGET_MISSED":
+            issue = RepairIssue(code=code, current_seconds=lint.estimated_duration_seconds,
+                                min_seconds=60, max_seconds=90,
+                                target_seconds=draft.target_duration_seconds)
         elif code.startswith("SEMANTIC_FACTUALITY_UNSUPPORTED_"):
             signal = code.removeprefix("SEMANTIC_FACTUALITY_UNSUPPORTED_").lower()
             issue = RepairIssue(code="CLAIM_BINDING_MISSING", sentence_id=sentence_id,
@@ -349,6 +353,44 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         if stop_after == "angle_selection":
             return run_dir
 
+    v02_script_flow = focus is not None or "angle_selection.json" in registry.graph
+    target_language = getattr(provider, "script_target_language", None) if v02_script_flow else None
+    terminology_payload: dict[str, object] | None = None
+    if target_language:
+        from fanglei.script_lint import _is_cross_language_claim
+        from fanglei.script_terminology import validate_script_terminology_map
+
+        claims_by_id = {claim.get("claim_id"): claim for claim in facts.get("claims", [])
+                        if isinstance(claim, dict)}
+        selected_cross_language = [
+            claims_by_id[claim_id] for claim_id in selected.supporting_claim_ids
+            if claim_id in claims_by_id
+            and claims_by_id[claim_id].get("verification_basis") == "authoritative_primary_attestation"
+            and _is_cross_language_claim(claims_by_id[claim_id], target_language)
+        ]
+        if selected_cross_language:
+            terminology_path = run_dir / "script_terminology.json"
+            if not terminology_path.is_file():
+                raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED")
+            case_id = (focus.case_id if focus else
+                       (sources.get("source_policy", {}) or {}).get("case_id"))
+            if not isinstance(case_id, str) or not case_id.strip():
+                raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: case identity missing")
+            try:
+                registry.validate("script_terminology.json")
+                raw_terminology = registry.read_json("script_terminology.json")
+                terminology = validate_script_terminology_map(
+                    raw_terminology, facts, expected_run_id=run_id,
+                    expected_case_id=case_id,
+                    facts_sha256=manifest.artifacts["facts.json"].content_hash,
+                    allowed_claim_ids=set(selected.supporting_claim_ids), require_approved=True,
+                )
+                if terminology.target_language.casefold() != target_language.casefold():
+                    raise ValueError("TARGET_LANGUAGE_MISMATCH")
+                terminology_payload = terminology.model_dump(mode="json")
+            except Exception as error:
+                raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: current map invalid") from error
+
     force_script = force_stage == "script_generation"
     if (run_dir / "script.json").is_file():
         old = registry.read_json("script.json") if manifest.artifacts["script.json"].status == "valid" else {}
@@ -362,16 +404,30 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         draft = provider.generate_script(ScriptGenerationInput(run_id=run_id, selected_angle=selected,
             research_md=research, fact_palette=palette,
             research_focus=focus.model_dump(mode="json") if focus else None,
-            authority_metadata=authority_metadata))
-        initial_draft = draft.model_dump(mode="json")
-        lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
+            authority_metadata=authority_metadata,
+            target_language=target_language,
+            target_duration_seconds=75,
+            speaking_rate_chars_per_second=speaking_rate,
+            terminology_map=terminology_payload))
+        initial_draft = draft.model_dump(mode="json", exclude_none=True)
+        lint_options = {
+            "speaking_rate": speaking_rate,
+            "target_duration_seconds": 75,
+            "target_language": target_language,
+            "terminology_map": terminology_payload,
+            "current_facts_sha256": manifest.artifacts["facts.json"].content_hash,
+            "run_id": run_id,
+            "case_id": focus.case_id if focus else (sources.get("source_policy", {}) or {}).get("case_id"),
+        }
+        lint = lint_script(draft, selected, facts, source_text, **lint_options)
         initial_issues = _repair_issues(lint, draft)
         initial_codes = _issue_codes(initial_issues)
         initial_duration = lint.estimated_duration_seconds
         repairs: list[dict[str, object]] = []
         repair_method = getattr(provider, "repair_script", None)
         for attempt in range(1, 3):
-            if lint.passed or not callable(repair_method):
+            target_warning = any(issue.code == "DURATION_TARGET_MISSED" for issue in lint.issues)
+            if (lint.passed and not target_warning) or not callable(repair_method):
                 break
             before_issues = _repair_issues(lint, draft)
             before_codes = _issue_codes(before_issues)
@@ -387,10 +443,14 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
                 allow_additions=scope.allow_additions,
                 fact_palette=palette,
                 issues=before_issues,
+                target_language=target_language,
+                target_duration_seconds=draft.target_duration_seconds,
+                speaking_rate_chars_per_second=speaking_rate,
+                terminology_map=terminology_payload,
             ))
             application = apply_script_patches(draft, scope, patch_result.patches)
             draft = application.draft
-            lint = lint_script(draft, selected, facts, source_text, speaking_rate=speaking_rate)
+            lint = lint_script(draft, selected, facts, source_text, **lint_options)
             after_issues = _repair_issues(lint, draft)
             after_codes = _issue_codes(after_issues)
             repairs.append({
@@ -449,8 +509,16 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
     def render_script() -> None:
         payload = registry.read_json("script.json")
         draft = ScriptDraft.model_validate(payload)
-        lint = lint_script(draft, selected, facts, source_text,
-                           speaking_rate=payload["speaking_rate_chars_per_second"])
+        lint = lint_script(
+            draft, selected, facts, source_text,
+            speaking_rate=payload["speaking_rate_chars_per_second"],
+            target_duration_seconds=draft.target_duration_seconds,
+            target_language=target_language,
+            terminology_map=terminology_payload,
+            current_facts_sha256=manifest.artifacts["facts.json"].content_hash,
+            run_id=run_id,
+            case_id=focus.case_id if focus else (sources.get("source_policy", {}) or {}).get("case_id"),
+        )
         registry.write_text("script.md", render_script_markdown(draft, lint), "script_render",
                             force=force_stage == "script_render" or manifest.artifacts["script.md"].status == "stale")
     _execute(manifest, registry, "script_render", render_script, force_stage == "script_render")

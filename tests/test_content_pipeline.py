@@ -388,7 +388,11 @@ def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_pat
     assert audit["initial_issue_codes"] == ["HOOK_INVALID"]
     assert [row["attempt_number"] for row in audit["repairs"]] == [1, 2]
     assert audit["repairs"][0]["issue_codes_after"] == ["HOOK_INVALID"]
-    assert audit["repairs"][1]["issue_codes_after"] == []
+    second_repair = audit["repairs"][1]
+    assert second_repair["issue_codes_after"] == ["DURATION_TARGET_MISSED"]
+    assert not any(issue.get("code") in {"DURATION_OUT_OF_RANGE", "DURATION_TOO_SHORT", "DURATION_TOO_LONG"}
+                   for issue in second_repair["issues_after"])
+    assert 60 <= audit["final_estimated_duration_seconds"] <= 90
     assert audit["final_status"] == "passed"
     assert audit["repairs"][0]["issues_before"][0]["code"] == "HOOK_INVALID"
     first = audit["repairs"][0]
