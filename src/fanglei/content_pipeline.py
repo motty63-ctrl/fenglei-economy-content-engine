@@ -4,7 +4,12 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from fanglei.angle_policy import score_angles, select_angle, validate_angle_diversity
+from fanglei.angle_policy import (
+    build_angle_quality_report,
+    score_angles,
+    select_angle,
+    validate_angle_diversity,
+)
 from fanglei.angle_selection import HumanAngleSelectionV1
 from fanglei.content_models import AngleCandidate, ScriptDraft
 from fanglei.content_policy import build_fact_palette
@@ -284,16 +289,17 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         candidates = score_angles(
             proposed.candidates, palette, source_text,
             source_independence_keys=source_independence_keys,
+            quality_metadata=proposed.quality_metadata or None,
         )
         if len([c for c in candidates if c.eligibility == "eligible"]) < 3:
             raise ValueError("AT_LEAST_THREE_DISTINCT_ANGLES_REQUIRED")
         eligible_ids = {candidate.angle_id for candidate in candidates if candidate.eligibility == "eligible"}
         eligible_proposals = [proposal for proposal in proposed.candidates if proposal.angle_id in eligible_ids]
-        diversity = validate_angle_diversity(eligible_proposals)
+        diversity = validate_angle_diversity(eligible_proposals, proposed.quality_metadata or None)
         if not diversity.passed:
             raise ValueError("ANGLE_DIVERSITY_FAILED:" + ",".join(diversity.issue_codes))
         recommended = select_angle(candidates)
-        registry.write_json("angles.json", {"schema_version": "3.0", "run_id": run_id,
+        artifact = {"schema_version": "3.0", "run_id": run_id,
             "provider": {"name": provider.name, "model": provider.model, "prompt_version": provider.angle_prompt_version},
             "planning_context": {
                 "framing_source": "research_focus" if focus else "questions",
@@ -303,7 +309,12 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
             "recommended_angle_id": recommended.angle_id,
             "recommendation_status": "system_recommendation_human_selection_pending",
             "diversity_gate": diversity.model_dump(mode="json"),
-            "candidates": [c.model_dump(mode="json") for c in candidates]},
+            "candidates": [c.model_dump(mode="json") for c in candidates]}
+        if proposed.quality_metadata:
+            artifact["angle_quality"] = build_angle_quality_report(
+                proposed.quality_metadata, proposed.candidates, candidates
+            )
+        registry.write_json("angles.json", artifact,
             "angle_generation", force=force_stage == "angle_generation")
     _execute(manifest, registry, "angle_generation", generate_angles, force_stage == "angle_generation")
     if stop_after == "angle_generation": return run_dir

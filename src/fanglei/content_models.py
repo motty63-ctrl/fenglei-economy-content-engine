@@ -47,6 +47,9 @@ class AngleCandidate(AngleProposal):
 
 class AngleProposalResult(BaseModel):
     candidates: list[AngleProposal]
+    # Optional planning audit metadata is stored beside candidate rows so it
+    # cannot widen the frozen checkpoint AngleCandidate contract.
+    quality_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AngleDiversityResult(BaseModel):
