@@ -273,8 +273,10 @@ class DeepSeekContentPlanningProvider:
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
         supporting_claims = _supporting_claims(request.selected_angle, request.fact_palette)
         facts = self._fact_payload(supporting_claims)
+        target_language = request.target_language or self.script_target_language
         system = (
-            "你是风雷经济的中文短视频编剧。把 selected_angle 作为叙事切入点，并使用 Research / Research Focus"
+            "你是风雷经济的短视频编剧。必须使用本次请求指定的 target_language 生成旁白；该值是唯一的目标语言依据。"
+            "把 selected_angle 作为叙事切入点，并使用 Research / Research Focus"
             "组织表达。事实 whitelist 是 selected_angle.supporting_claim_ids 对应的 verified_claims_only；"
             "Research 只能用于理解问题与结构，不能作为新增事实来源。不得创造输入没有提供的数字、日期、机构行为、"
             "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定直接支持它的 claim_ids；"
@@ -297,12 +299,12 @@ class DeepSeekContentPlanningProvider:
             + "机制与因果说明必须有 supporting claim 直接支持；风格要求不能覆盖此事实边界。"
         )
         user = json.dumps({
-            "task": "根据本次 run 的 Research、选定角度和 supporting facts 生成中文短视频脚本",
+            "task": "根据本次 run 的 Research、选定角度和 supporting facts，以 target_language 指定的语言生成短视频脚本",
             "run_id": request.run_id,
             "research_summary": request.research_md,
             "research_focus": request.research_focus,
             "authority_metadata": request.authority_metadata,
-            "target_language": request.target_language or self.script_target_language,
+            "target_language": target_language,
             "target_duration_seconds": request.target_duration_seconds,
             "speaking_rate_chars_per_second": request.speaking_rate_chars_per_second,
             "duration_character_guidance": {
@@ -322,6 +324,7 @@ class DeepSeekContentPlanningProvider:
             ],
             "output_contract": {
                 "schema_version": "3.0",
+                "target_language": target_language,
                 "minimum_sentence_count": SCRIPT_MIN_SENTENCE_COUNT,
                 "maximum_sentence_count": SCRIPT_MAX_SENTENCE_COUNT,
                 "minimum_spoken_character_count": round(
@@ -352,7 +355,7 @@ class DeepSeekContentPlanningProvider:
         return self._normalize_script(
             raw,
             allow_bound_interpretation=request.terminology_map is not None,
-            target_language=request.target_language or self.script_target_language,
+            target_language=target_language,
         )
 
     @staticmethod
@@ -367,12 +370,18 @@ class DeepSeekContentPlanningProvider:
                     and not (allow_bound_interpretation and sentence.get("section") == "core_judgment")):
                 sentence["claim_ids"] = []
         if target_language is not None:
-            raw.setdefault("target_language", target_language)
+            returned_language = raw.get("target_language")
+            if (returned_language is not None
+                    and (not isinstance(returned_language, str)
+                         or returned_language.casefold() != target_language.casefold())):
+                raise ValueError("SCRIPT_TARGET_LANGUAGE_MISMATCH")
+            raw["target_language"] = target_language
         return ScriptDraft.model_validate(raw)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:
         system = (
             "你只生成风雷经济脚本的 sentence-level patches，不得返回、重写或覆盖整篇 script。"
+            "严格保留本次请求 target_language 指定的目标语言，不得切换为 provider 默认语言。"
             "本地 lint 和 patch applier 是最终裁判。只能修改 editable_sentence_ids；protected_sentence_ids 禁止修改。"
             "不得修改 claim 状态、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
             "claim_ids 默认不可修改；只有当 repair_permissions 明确列出 closing_claim_bind_sentence_ids，"

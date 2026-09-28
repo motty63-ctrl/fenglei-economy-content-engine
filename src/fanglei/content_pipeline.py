@@ -246,7 +246,8 @@ def _issue_codes(issues: list[RepairIssue]) -> list[str]:
 def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningProvider, *,
                          stop_after: str | None = None, force_stage: str | None = None,
                          angle_id: str | None = None, speaking_rate: float = 4.0,
-                         legacy_auto_recommended: bool = False) -> Path:
+                         legacy_auto_recommended: bool = False,
+                         target_language: str | None = None) -> Path:
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
     manifest, registry = _load(
         run_dir, human_angle_selection_mode=not legacy_auto_recommended
@@ -289,6 +290,46 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         "selection_status": sources.get("selection_status"),
         "sources_sha256": manifest.artifacts["sources.json"].content_hash,
     }
+
+    v02_script_flow = focus is not None or "angle_selection.json" in registry.graph
+    explicit_target_language = target_language
+    if explicit_target_language is not None and (
+        not isinstance(explicit_target_language, str) or not explicit_target_language.strip()
+    ):
+        raise ArtifactConflictError("SCRIPT_TARGET_LANGUAGE_INVALID")
+    target_language = explicit_target_language or (
+        getattr(provider, "script_target_language", None) if v02_script_flow else None
+    )
+    terminology_payload: dict[str, object] | None = None
+    terminology = None
+    terminology_path = run_dir / "script_terminology.json"
+    if terminology_path.is_file():
+        from fanglei.script_terminology import validate_script_terminology_map
+
+        case_id = (focus.case_id if focus else
+                   (sources.get("source_policy", {}) or {}).get("case_id"))
+        if not isinstance(case_id, str) or not case_id.strip():
+            raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: case identity missing")
+        try:
+            registry.validate("script_terminology.json")
+            raw_terminology = registry.read_json("script_terminology.json")
+            terminology = validate_script_terminology_map(
+                raw_terminology, facts, expected_run_id=run_id,
+                expected_case_id=case_id,
+                facts_sha256=manifest.artifacts["facts.json"].content_hash,
+                require_approved=True,
+            )
+        except Exception as error:
+            raise ArtifactConflictError(
+                "SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: current map invalid"
+            ) from error
+        if (explicit_target_language is not None
+                and terminology.target_language.casefold() != explicit_target_language.casefold()):
+            raise ArtifactConflictError("SCRIPT_TARGET_LANGUAGE_MISMATCH")
+        # The reviewed spelling is canonical. An explicit caller value is a
+        # constraint on that identity, not a second language authority.
+        target_language = terminology.target_language
+        terminology_payload = terminology.model_dump(mode="json")
 
     def generate_angles() -> None:
         # A deliberate regeneration is a new review event. Invalidate a human
@@ -366,9 +407,6 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
         if stop_after == "angle_selection":
             return run_dir
 
-    v02_script_flow = focus is not None or "angle_selection.json" in registry.graph
-    target_language = getattr(provider, "script_target_language", None) if v02_script_flow else None
-    terminology_payload: dict[str, object] | None = None
     if target_language:
         from fanglei.script_lint import _is_cross_language_claim
         from fanglei.script_terminology import validate_script_terminology_map
@@ -382,24 +420,19 @@ def run_content_pipeline(run_id: str, runs_dir: Path, provider: ContentPlanningP
             and _is_cross_language_claim(claims_by_id[claim_id], target_language)
         ]
         if selected_cross_language:
-            terminology_path = run_dir / "script_terminology.json"
-            if not terminology_path.is_file():
+            if terminology is None:
                 raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED")
             case_id = (focus.case_id if focus else
                        (sources.get("source_policy", {}) or {}).get("case_id"))
             if not isinstance(case_id, str) or not case_id.strip():
                 raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: case identity missing")
             try:
-                registry.validate("script_terminology.json")
-                raw_terminology = registry.read_json("script_terminology.json")
                 terminology = validate_script_terminology_map(
-                    raw_terminology, facts, expected_run_id=run_id,
+                    terminology, facts, expected_run_id=run_id,
                     expected_case_id=case_id,
                     facts_sha256=manifest.artifacts["facts.json"].content_hash,
                     allowed_claim_ids=set(selected.supporting_claim_ids), require_approved=True,
                 )
-                if terminology.target_language.casefold() != target_language.casefold():
-                    raise ValueError("TARGET_LANGUAGE_MISMATCH")
                 terminology_payload = terminology.model_dump(mode="json")
             except Exception as error:
                 raise ArtifactConflictError("SCRIPT_TERMINOLOGY_REVIEW_REQUIRED: current map invalid") from error

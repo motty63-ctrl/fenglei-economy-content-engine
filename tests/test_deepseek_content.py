@@ -169,6 +169,73 @@ def test_deepseek_script_prompt_uses_selected_angle_research_and_eligible_facts(
     assert "GDP calibration text must not be sent" not in serialized_prompts
     assert "causality" in system and "motive" in system and "market effect" in system
     assert "selected_angle.supporting_claim_ids" in system
+    assert user["target_language"] == "zh-Hans"
+
+
+def test_deepseek_generation_uses_explicit_target_language_over_provider_default() -> None:
+    captured = {}
+    response = {"angle_id": "angle_001", "title": "Script", "sentences": [
+        {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
+         "text": "先看这份记录。", "claim_ids": []},
+    ]}
+
+    def transport(payload):
+        captured.update(payload)
+        return _response(response)
+
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=transport)
+    provider.script_target_language = "other-default"
+    result = provider.generate_script(ScriptGenerationInput(
+        run_id="run", selected_angle=_candidate(), research_md="", fact_palette=(_claim(),),
+        target_language="xx-YY",
+    ))
+
+    user = json.loads(captured["messages"][1]["content"])
+    assert user["target_language"] == "xx-YY"
+    assert user["output_contract"]["target_language"] == "xx-YY"
+    assert "target_language" in captured["messages"][0]["content"]
+    assert result.target_language == "xx-YY"
+
+
+def test_deepseek_rejects_provider_output_with_conflicting_language_metadata() -> None:
+    response = {"angle_id": "angle_001", "title": "Script", "target_language": "other-default",
+                "sentences": [{
+                    "sentence_id": "sentence_001", "section": "hook",
+                    "sentence_type": "interpretation", "text": "先看这份记录。", "claim_ids": [],
+                }]}
+    provider = DeepSeekContentPlanningProvider(SENTINEL, transport=lambda _: _response(response))
+    provider.script_target_language = "other-default"
+
+    with pytest.raises(ValueError, match="SCRIPT_TARGET_LANGUAGE_MISMATCH"):
+        provider.generate_script(ScriptGenerationInput(
+            run_id="run", selected_angle=_candidate(), research_md="", fact_palette=(_claim(),),
+            target_language="xx-YY",
+        ))
+
+
+def test_deepseek_repair_prompt_uses_explicit_target_language_over_provider_default() -> None:
+    captured = {}
+    provider = DeepSeekContentPlanningProvider(
+        SENTINEL, transport=lambda payload: (captured.update(payload) or _response({"patches": []})),
+    )
+    provider.script_target_language = "other-default"
+    current = ScriptDraft.model_validate({
+        "angle_id": "angle_001", "title": "Script", "sentences": [
+            {"sentence_id": "sentence_001", "section": "hook", "sentence_type": "interpretation",
+             "text": "先看这份记录。", "claim_ids": []},
+        ],
+    })
+
+    provider.repair_script(ScriptRepairInput(
+        run_id="run", repair_attempt=1, selected_angle=_candidate(), current_script=current,
+        editable_sentence_ids=["sentence_001"], protected_sentence_ids=[],
+        fact_palette=(_claim(),), issues=[RepairIssue(code="HOOK_INVALID")],
+        target_language="xx-YY",
+    ))
+
+    user = json.loads(captured["messages"][1]["content"])
+    assert user["target_language"] == "xx-YY"
+    assert "target_language" in captured["messages"][0]["content"]
 
 
 def test_deepseek_repair_prompt_is_topic_neutral_and_limits_claims_to_selected_angle() -> None:

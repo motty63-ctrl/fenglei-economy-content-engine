@@ -83,6 +83,201 @@ def test_cross_language_authority_script_requires_approved_terminology_before_pr
     assert manifest_status(run, "script.json") == "missing"
 
 
+def _record_approved_retail_terminology(run, target_language="zh-CN"):
+    from fanglei.script_terminology import record_reviewed_script_terminology_map
+
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text(encoding="utf-8")))
+    facts_hash = manifest.artifacts["facts.json"].content_hash
+    entries = [
+        ("subject", "authority_attestation.scope.subject", "Retail index", "零售指数"),
+        ("metric", "authority_attestation.scope.measure", "index value", "指数值"),
+        ("period", "authority_attestation.scope.period", "March", "3月"),
+        ("unit", "authority_attestation.scope.unit", "index points", "指数点"),
+        ("direction", "authority_attestation.scope.certainty", "reports", "报告"),
+        ("source_attribution", "authority_attestation.attribution", "Data Office reports", "数据署报告"),
+    ]
+    payload = {
+        "schema_version": "script-terminology-map/1.0",
+        "case_id": "synthetic-retail-sales",
+        "run_id": run.name,
+        "facts_sha256": facts_hash,
+        "source_language": "en",
+        "target_language": target_language,
+        "review_status": "approved",
+        "reviewer": "test-reviewer",
+        "reviewed_at": "2026-09-28T10:00:00+08:00",
+        "entries": [{
+            "entry_id": f"term_{index:02d}",
+            "claim_ids": ["claim_retail_001"],
+            "source_term": source,
+            "source_field": source_field,
+            "semantic_role": role,
+            "proposed_target_terms": [target],
+            "approved_target_terms": [target],
+            "review_status": "approved",
+        } for index, (role, source_field, source, target) in enumerate(entries, start=1)],
+    }
+    return record_reviewed_script_terminology_map(run, payload)
+
+
+def _prepare_reviewed_retail_run(run, runs_dir, target_language="zh-CN"):
+    from fanglei.content_pipeline import record_human_angle_selection
+    from fanglei.content_models import AngleCandidate
+
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text(encoding="utf-8")))
+    registry = ArtifactRegistry(run, manifest, human_angle_selection_mode=True)
+    angle = AngleCandidate(
+        angle_id="angle_retail_001", title="A recorded monthly change",
+        hook="What changed in the March record?",
+        core_question="What did the synthetic report say about March?",
+        core_insight="Compare the value recorded in the release.",
+        supporting_claim_ids=["claim_retail_001"], audience_relevance=3, novelty=3,
+        hook_strength=3, visual_potential=3, explainability=4,
+        evidence_strength=2, controversy_risk=0, total_score=50,
+        eligibility="eligible",
+    )
+    registry.write_json("angles.json", {
+        "schema_version": "3.0", "run_id": run.name,
+        "recommended_angle_id": angle.angle_id,
+        "recommendation_status": "system_recommendation_human_selection_pending",
+        "candidates": [angle.model_dump(mode="json")],
+    }, "angle_generation")
+    manifest.stages["angle_generation"] = StageState(status="succeeded", attempts=1)
+    registry.save_manifest()
+    record_human_angle_selection(run.name, runs_dir, angle.angle_id)
+    _record_approved_retail_terminology(run, target_language)
+
+
+def _make_angle_generation_due(run):
+    manifest_path = run / "run.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stages"]["angle_generation"]["status"] = "failed"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+class _TargetCapturingProvider(MockContentPlanningProvider):
+    script_target_language = "zh-Hans"
+
+    def __init__(self):
+        self.script_requests = []
+        self.angle_calls = 0
+
+    def generate_angles(self, request):
+        self.angle_calls += 1
+        return super().generate_angles(request)
+
+    def generate_script(self, request):
+        from fanglei.content_models import ScriptDraft, ScriptSentence
+
+        self.script_requests.append(request)
+        return ScriptDraft(
+            angle_id=request.selected_angle.angle_id,
+            title=request.selected_angle.title,
+            target_language=request.target_language,
+            sentences=[
+                ScriptSentence(sentence_id="sentence_001", section="hook",
+                               sentence_type="interpretation", text=request.selected_angle.hook),
+                ScriptSentence(sentence_id="sentence_002", section="core_judgment",
+                               sentence_type="interpretation", text="只呈现记录支持的范围。"),
+            ],
+        )
+
+
+def test_reviewed_terminology_establishes_canonical_language_for_provider_and_lint(tmp_path, monkeypatch) -> None:
+    import fanglei.content_pipeline as content_pipeline
+    from fanglei.content_models import ScriptLintResult
+
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    _prepare_reviewed_retail_run(run, tmp_path, "zh-CN")
+    provider = _TargetCapturingProvider()
+    lint_targets = []
+
+    def passing_lint(_draft, *_args, **kwargs):
+        lint_targets.append(kwargs["target_language"])
+        return ScriptLintResult(
+            passed=True, speaking_rate_chars_per_second=4.0,
+            spoken_character_count=120, estimated_duration_seconds=30.0,
+        )
+
+    monkeypatch.setattr(content_pipeline, "lint_script", passing_lint)
+    run_content_pipeline(run.name, tmp_path, provider)
+
+    assert provider.script_requests[0].target_language == "zh-CN"
+    assert provider.script_requests[0].terminology_map["target_language"] == "zh-CN"
+    assert lint_targets == ["zh-CN", "zh-CN"]
+    assert provider.script_requests[0].target_language != provider.script_target_language
+
+
+def test_case_only_language_tag_difference_uses_reviewed_canonical_spelling(tmp_path, monkeypatch) -> None:
+    import fanglei.content_pipeline as content_pipeline
+    from fanglei.content_models import ScriptLintResult
+
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    _prepare_reviewed_retail_run(run, tmp_path, "zh-CN")
+    provider = _TargetCapturingProvider()
+    monkeypatch.setattr(content_pipeline, "lint_script", lambda *_args, **kwargs: ScriptLintResult(
+        passed=True, speaking_rate_chars_per_second=4.0,
+        spoken_character_count=120, estimated_duration_seconds=30.0,
+    ))
+
+    run_content_pipeline(run.name, tmp_path, provider, target_language="zh-cn")
+
+    assert provider.script_requests[0].target_language == "zh-CN"
+
+
+def test_explicit_language_conflict_fails_before_provider_call(tmp_path) -> None:
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    _prepare_reviewed_retail_run(run, tmp_path, "zh-CN")
+    _make_angle_generation_due(run)
+    provider = _TargetCapturingProvider()
+
+    with pytest.raises(ArtifactConflictError, match="SCRIPT_TARGET_LANGUAGE_MISMATCH"):
+        run_content_pipeline(run.name, tmp_path, provider, target_language="en-US")
+
+    assert provider.script_requests == []
+    assert provider.angle_calls == 0
+
+
+def test_stale_terminology_artifact_fails_before_provider_call(tmp_path) -> None:
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    _prepare_reviewed_retail_run(run, tmp_path, "zh-CN")
+    _make_angle_generation_due(run)
+    terminology_path = run / "script_terminology.json"
+    terminology_path.write_text(terminology_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    provider = _TargetCapturingProvider()
+
+    with pytest.raises(ArtifactConflictError, match="SCRIPT_TERMINOLOGY_REVIEW_REQUIRED"):
+        run_content_pipeline(run.name, tmp_path, provider)
+
+    assert provider.script_requests == []
+    assert provider.angle_calls == 0
+
+
+def test_unapproved_terminology_artifact_fails_before_provider_call(tmp_path) -> None:
+    run = _prepared_retail_run(tmp_path, authority_claim=True)
+    _prepare_reviewed_retail_run(run, tmp_path, "zh-CN")
+    manifest = RunManifest.model_validate(json.loads((run / "run.json").read_text(encoding="utf-8")))
+    registry = ArtifactRegistry(run, manifest, human_angle_selection_mode=True, script_terminology_mode=True)
+    terminology = registry.read_json("script_terminology.json")
+    terminology["review_status"] = "pending"
+    terminology["reviewer"] = None
+    terminology["reviewed_at"] = None
+    for entry in terminology["entries"]:
+        entry["review_status"] = "pending"
+        entry["approved_target_terms"] = []
+    registry.write_json(
+        "script_terminology.json", terminology, "script_terminology_review", force=True
+    )
+    _make_angle_generation_due(run)
+    provider = _TargetCapturingProvider()
+
+    with pytest.raises(ArtifactConflictError, match="SCRIPT_TERMINOLOGY_REVIEW_REQUIRED"):
+        run_content_pipeline(run.name, tmp_path, provider)
+
+    assert provider.script_requests == []
+    assert provider.angle_calls == 0
+
+
 def test_v02_angle_id_argument_is_not_a_human_selection_record(tmp_path) -> None:
     run = _prepared_retail_run(tmp_path)
     run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_generation")
@@ -317,18 +512,30 @@ def _prepared_retail_run(tmp_path, *, authority_claim: bool = False):
         }],
     }
     if authority_claim:
+        from fanglei.evidence_targets import atomic_proposition_spans
+
+        scope = {
+            "subject": "Retail index", "measure": "index value", "period": "March",
+            "unit": "index points", "statistic": None, "certainty": "reports",
+            "reporting_scope": "Retail Survey",
+        }
+        excerpt = "Data Office reports: March retail index: 103."
         retail_claim.update({
             "verification_basis": "authoritative_primary_attestation",
             "authority_attestation": {
                 "kind": "document_report",
                 "source_ids": ["src_retail_001"],
                 "attribution": "Data Office reports",
-                "scope": {
-                    "subject": "Retail index", "measure": "index value", "period": "March",
-                    "unit": "index points", "statistic": None, "certainty": "reports",
-                    "reporting_scope": "Retail Survey",
-                },
+                "scope": scope,
             },
+            "claim_text": excerpt,
+            "evidence": [{
+                "source_id": "src_retail_001", "original_url": "https://retail.example.test/march",
+                "evidence_eligible": True, "evidence_text": excerpt,
+                "published_at": "2026-04-15", "document_hash": "a" * 64,
+                "paragraph_locator": "line:1", "proposition_span": atomic_proposition_spans(excerpt)[0],
+                "evidence_kind": "narrative_sentence", "authority_scope_candidate": scope,
+            }],
         })
     registry.write_json("facts.json", {
         "run_id": run.name,
