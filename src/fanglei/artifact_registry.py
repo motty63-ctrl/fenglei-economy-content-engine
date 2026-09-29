@@ -304,6 +304,79 @@ def _human_visual_asset_recovery_graph(
             )
     return graph
 
+
+def _playback_preview_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Add an immutable playback-recovery branch beside the approved timeline."""
+    graph = dict(base_graph)
+    timeline_dependencies = base_graph.get("timeline.json", ("", ()))[1]
+    visual_bundle = next((
+        name for name in timeline_dependencies
+        if name == "visual_assets" or name.startswith("visual_assets_candidate_")
+    ), None)
+    visual_review = next((
+        name for name in timeline_dependencies
+        if name.startswith("human_visual_asset_review_candidate_")
+    ), None)
+    if visual_bundle is None or visual_review is None:
+        raise ArtifactConflictError("PLAYBACK_PREVIEW_REQUIRES_APPROVED_VISUAL_TIMELINE")
+    graph["human_preview_review_candidate_1.json"] = (
+        "human_preview_review",
+        (
+            "timeline.json", "renderer_project", "render_manifest.json",
+            "human_storyboard_candidate.json", "human_storyboard_approval.json",
+            visual_bundle, visual_review,
+            "angle_selection.json", "facts.json", "script.json",
+            "human_script_approval.json", "audio/narration.wav", "audio/review.json",
+            "alignment.json", "subtitle_track.json",
+        ),
+    )
+    graph["playback_timing_refinement.json"] = (
+        "playback_timing_refinement",
+        (
+            "human_preview_review_candidate_1.json", "narration.json", "audio/narration.wav",
+            "audio/metadata.json", "alignment.json", "script.json",
+            "human_script_approval.json", "audio/review.json",
+        ),
+    )
+    graph["preview_subtitle_track_candidate_2.json"] = (
+        "playback_subtitle_generation",
+        (
+            "subtitle_track.json", "playback_timing_refinement.json", "audio/narration.wav",
+            visual_bundle, visual_review,
+        ),
+    )
+    graph["timeline_candidate_2.json"] = (
+        "playback_timeline_compilation",
+        (
+            "timeline.json", "human_preview_review_candidate_1.json",
+            visual_bundle, visual_review,
+            "audio/narration.wav", "alignment.json", "playback_timing_refinement.json",
+            "subtitle_track.json", "preview_subtitle_track_candidate_2.json",
+            "human_storyboard_candidate.json", "human_storyboard_approval.json",
+            "script.json", "human_script_approval.json", "audio/review.json",
+        ),
+    )
+    graph["renderer_project_candidate_2"] = (
+        "playback_preview_adaptation", ("timeline_candidate_2.json", "human_storyboard_candidate.json"),
+    )
+    graph["render_manifest_candidate_2.json"] = (
+        "playback_preview_adaptation", ("timeline_candidate_2.json", "renderer_project_candidate_2"),
+    )
+    graph["review-preview-candidate-2.mp4"] = (
+        "review_preview_render",
+        ("timeline_candidate_2.json", "renderer_project_candidate_2", "render_manifest_candidate_2.json"),
+    )
+    graph["human_preview_review_candidate_2.json"] = (
+        "human_preview_review",
+        (
+            "review-preview-candidate-2.mp4", "timeline_candidate_2.json",
+            "render_manifest_candidate_2.json",
+        ),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -370,6 +443,7 @@ class ArtifactRegistry:
         human_storyboard_recovery_mode: bool = False,
         human_storyboard_approval_mode: bool = False,
         human_visual_asset_recovery_mode: bool = False,
+        playback_preview_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -377,6 +451,22 @@ class ArtifactRegistry:
         self.imported_checkpoint_mode = bool(
             checkpoint_stage is not None and checkpoint_stage.status == "succeeded"
         )
+        playback_enabled = playback_preview_mode or any(
+            (self.run_dir / name).exists() or name in manifest.artifacts
+            for name in (
+                "human_preview_review_candidate_1.json", "playback_timing_refinement.json",
+                "preview_subtitle_track_candidate_2.json", "timeline_candidate_2.json",
+                "review-preview-candidate-2.mp4",
+            )
+        )
+        if playback_enabled:
+            human_angle_selection_mode = True
+            human_script_recovery_mode = True
+            human_script_approval_mode = True
+            human_storyboard_recovery_mode = True
+            human_storyboard_approval_mode = True
+            human_visual_asset_recovery_mode = True
+            timing_aware_storyboard_mode = True
         if self.imported_checkpoint_mode:
             self.graph = IMPORTED_ARTIFACT_GRAPH
         else:
@@ -471,6 +561,8 @@ class ArtifactRegistry:
                     self.graph,
                     candidate_three_timeline_enabled=candidate_three_timeline_enabled,
                 )
+            if playback_enabled:
+                self.graph = _playback_preview_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
@@ -654,7 +746,10 @@ class ArtifactRegistry:
         text_value: str | None = None
         if path.is_dir():
             actual_hash = _directory_hash(path)
-        elif path.is_file() and name in {"audio/narration.wav", "audio/mastered_narration.wav"}:
+        elif path.is_file() and (
+            name in {"audio/narration.wav", "audio/mastered_narration.wav"}
+            or name.endswith(".mp4")
+        ):
             actual_hash = sha256_bytes(path.read_bytes())
         elif path.is_file():
             text_value = path.read_text(encoding="utf-8")
@@ -687,6 +782,31 @@ class ArtifactRegistry:
                         state.status = "stale"
                         self._invalidate_descendants(name)
                         raise ArtifactConflictError(f"source document changed or missing: {asset.get('path')}")
+        if name.startswith("human_preview_review_candidate_"):
+            try:
+                review = json.loads(text_value or "{}")
+                relative = review.get("preview_path")
+                if (
+                    not isinstance(relative, str) or not relative
+                    or Path(relative).is_absolute() or "\\" in relative
+                    or any(part in {"", ".", ".."} for part in relative.split("/"))
+                ):
+                    raise ValueError("PREVIEW_REVIEW_PATH_INVALID")
+                preview_path = (self.run_dir / Path(*relative.split("/"))).resolve()
+                preview_path.relative_to(self.run_dir.resolve())
+                expected_preview_sha = review.get("preview_sha256")
+                if (
+                    not preview_path.is_file()
+                    or sha256_bytes(preview_path.read_bytes()) != expected_preview_sha
+                ):
+                    raise ValueError("PREVIEW_REVIEW_MEDIA_HASH_MISMATCH")
+            except (OSError, ValueError, TypeError) as error:
+                state.status = "stale"
+                state.updated_at = _now()
+                self._invalidate_descendants(name)
+                raise ArtifactConflictError(
+                    f"Artifact {name} preview media binding is invalid: {error}"
+                ) from error
         for dependency, recorded_hash in state.dependencies.items():
             if dependency in validated:
                 if self._state(dependency).content_hash != recorded_hash:

@@ -15,6 +15,7 @@ from fanglei.v05_models import (
     AudioMetadata,
     TimelineDocument,
 )
+from fanglei.v1b_models import SubtitleLayout, SubtitleRect
 
 
 RUN_ID = "2026-09-29-001-synthetic-retail-run"
@@ -249,6 +250,31 @@ def test_review_preview_uses_exact_approved_svg_and_subtitle_copy_and_is_not_fin
     assert "transform:scale(var(--preview-scale,1))" in preview
     assert 'data-final="false"' in preview
     assert not any(name.endswith("final.mp4") for name in files)
+
+
+def test_review_preview_uses_compact_adaptive_subtitle_layout() -> None:
+    _, _, storyboard, _, _, svg_by_name, _, _ = _inputs()
+    timeline = _compose()
+    layout = SubtitleLayout(
+        reserved_zone=SubtitleRect(x=48, y=1724, width=984, height=120),
+        default_font_size_px=48, minimum_font_size_px=40, line_height=1.08,
+        horizontal_padding_px=14, vertical_padding_px=8,
+    )
+    composition = timeline.composition.model_copy(update={"subtitle_layout": layout})
+    timeline = timeline.model_copy(update={"composition": composition})
+
+    files, _ = build_nikola_project(
+        storyboard, timeline, AUDIO_BYTES, visual_asset_files=svg_by_name,
+    )
+    preview = files["review-preview.html"]
+
+    assert "height:auto;" in preview
+    assert "width:max-content;max-width:984px" in preview
+    assert "padding:8px 14px" in preview
+    assert "line-height:1.08" in preview
+    assert "rgba(247,242,232,.88)" in preview
+    assert "minHeight" in preview
+    assert 'data-final="false"' in preview
 
 
 def test_review_preview_requires_the_exact_approved_asset_set() -> None:

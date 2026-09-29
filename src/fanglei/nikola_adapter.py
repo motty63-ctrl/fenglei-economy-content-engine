@@ -310,8 +310,16 @@ def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[st
     layout = composition.subtitle_layout.model_dump(mode="json")
     zone = layout["reserved_zone"]
     max_lines = layout.get("maximum_lines", 2)
+    horizontal_padding = layout.get("horizontal_padding_px", 36)
+    vertical_padding = layout.get("vertical_padding_px", 24)
+    line_height = layout.get("line_height", 1.28)
     if any(len(row["lines"]) > max_lines for row in subtitle_data):
         raise ValueError("REVIEW_PREVIEW_SUBTITLE_LAYOUT_INVALID")
+    timing_status = (
+        "本地暂停点细化的句级字幕时间；仍不是词级对齐"
+        if composition.alignment_method == "pause_refined_from_proportional"
+        else "字幕时间来自句级估算对齐"
+    )
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -327,10 +335,12 @@ def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[st
         'padding:12px 18px;background:#8d2118;color:white;font-weight:800;font-size:24px;letter-spacing:.04em}'
         '#review-required{position:absolute;z-index:20;right:20px;top:24px;padding:10px 14px;'
         'background:#20211d;color:white;font-weight:700;font-size:18px}#subtitle-layer{position:absolute;z-index:30;'
-        f'left:{zone["x"]}px;top:{zone["y"]}px;width:{zone["width"]}px;height:{zone["height"]}px;'
-        'padding:24px 36px;display:flex;align-items:center;justify-content:center;text-align:center;'
-        'background:rgba(247,242,232,.9);color:#1E1E1E;border-radius:24px;overflow:hidden;white-space:pre-line;'
-        'font-weight:700;line-height:1.28}audio{width:min(96vw,720px)}#status{font-size:14px;color:#ddd}'
+        f'left:50%;top:{zone["y"]}px;width:max-content;max-width:{zone["width"]}px;height:auto;'
+        f'min-height:0;max-height:{zone["height"]}px;transform:translateX(-50%);'
+        f'padding:{vertical_padding}px {horizontal_padding}px;display:none;align-items:center;'
+        'justify-content:center;text-align:center;'
+        'background:rgba(247,242,232,.88);color:#1E1E1E;border-radius:18px;overflow:hidden;white-space:pre-line;'
+        f'font-weight:700;line-height:{line_height}}}audio{{width:min(96vw,720px)}}#status{{font-size:14px;color:#ddd}}'
         '@media(prefers-reduced-motion:reduce){.visual-scene{transition:none}}'
         '</style></head><body><main id="stage" data-preview="true" data-final="false"><div id="canvas">'
         + "".join(scene_markup)
@@ -338,7 +348,7 @@ def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[st
         + '<div id="review-required">HUMAN REVIEW REQUIRED</div>'
         + '<div id="subtitle-layer" aria-live="off"></div></div></main>'
         + '<audio id="narration" controls preload="metadata" src="assets/narration.wav"></audio>'
-        + '<div id="status">本地审阅预览 · 字幕时间来自估算对齐</div>'
+        + f'<div id="status">本地审阅预览 · {timing_status}</div>'
         + f'<script type="application/json" id="preview-data">{scripts_json}</script>'
         + '<script>(()=>{const data=JSON.parse(document.getElementById("preview-data").textContent);'
         + 'const audio=document.getElementById("narration"),subtitle=document.getElementById("subtitle-layer");'
@@ -350,7 +360,8 @@ def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[st
         + 'if(!on)return;for(const cue of s.motion){const node=[...s.node.querySelectorAll("[data-object-id]")].find(x=>x.dataset.objectId===cue.object_id);'
         + 'if(node){node.style.transition=`opacity ${cue.duration_ms}ms ease-out`;node.style.opacity=t>=s.start_ms+cue.delay_ms?"1":"0";}}});'
         + 'const cue=data.subtitles.find(c=>t>=c.start_ms&&t<c.end_ms);subtitle.textContent=cue?cue.lines.join("\\n"):"";'
-        + 'subtitle.style.fontSize=cue?`${cue.font_size_px}px`:"52px";};'
+        + 'subtitle.style.display=cue?"flex":"none";subtitle.style.fontSize=cue?`${cue.font_size_px}px`:"48px";'
+        + f'if(cue)subtitle.style.minHeight=`${{Math.ceil(cue.lines.length*cue.font_size_px*{line_height}+2*{vertical_padding})}}px`;}};'
         + 'document.querySelectorAll("[data-object-id]").forEach(x=>x.style.opacity="0");'
         + 'audio.addEventListener("timeupdate",update);audio.addEventListener("seeked",update);'
         + 'audio.addEventListener("loadedmetadata",()=>{const requested=Number(new URLSearchParams(location.search).get("time"));'
@@ -530,6 +541,8 @@ def build_nikola_project(
             "visual_bundle_sha256": timeline.composition.visual_bundle_sha256,
             "visual_review_sha256": timeline.composition.visual_review_sha256,
             "subtitle_sha256": timeline.composition.subtitle_sha256,
+            "timing_method": timeline.composition.alignment_method,
+            "timing_quality": timeline.composition.timing_quality,
             "full_render_requested": False,
         })
     return files, manifest
