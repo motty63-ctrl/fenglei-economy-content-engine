@@ -160,6 +160,24 @@ def _human_script_approval_graph(
     )
     return graph
 
+
+def _timing_aware_visual_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Opt V0.2 media runs into approved-audio/alignment/subtitle storyboard inputs."""
+    graph = dict(base_graph)
+    visual_inputs = (
+        "angle_selection.json", "human_script_approval.json", "narration.json",
+        "audio/narration.wav", "audio/metadata.json", "audio/quality.json", "audio/review.json",
+        "alignment.json", "subtitle_track.json",
+    )
+    for name in ("visual_beats.json", "storyboard.json"):
+        owner, dependencies = graph[name]
+        graph[name] = (owner, tuple(dict.fromkeys((*dependencies, *(
+            dep for dep in visual_inputs if dep in graph
+        )))))
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -222,6 +240,7 @@ class ArtifactRegistry:
         script_terminology_mode: bool = False,
         human_script_recovery_mode: bool = False,
         human_script_approval_mode: bool = False,
+        timing_aware_storyboard_mode: bool | None = None,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -264,6 +283,24 @@ class ArtifactRegistry:
             ).is_file() or "human_script_approval.json" in manifest.artifacts
             if approval_enabled:
                 self.graph = _human_script_approval_graph(self.graph)
+            timing_artifacts = (
+                "audio/narration.wav", "audio/metadata.json", "audio/quality.json",
+                "audio/review.json", "alignment.json", "subtitle_track.json",
+            )
+            timing_present = any(
+                (self.run_dir / name).is_file()
+                or (name in manifest.artifacts and manifest.artifacts[name].status != "missing")
+                for name in timing_artifacts
+            )
+            timing_enabled = timing_aware_storyboard_mode if timing_aware_storyboard_mode is not None else (
+                selection_enabled and timing_present
+            )
+            if timing_enabled:
+                if not approval_enabled:
+                    self.graph = _human_script_approval_graph(self.graph)
+                if not selection_enabled:
+                    raise ArtifactConflictError("TIMING_AWARE_STORYBOARD_REQUIRES_HUMAN_ANGLE_SELECTION")
+                self.graph = _timing_aware_visual_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
@@ -275,6 +312,14 @@ class ArtifactRegistry:
             if state.status == "missing":
                 state.owner = owner
                 state.dependencies = {dep: "" for dep in dependencies}
+        if not self.imported_checkpoint_mode and timing_enabled:
+            for name in ("visual_beats.json", "storyboard.json"):
+                state = self.manifest.artifacts[name]
+                expected_dependencies = set(self.graph[name][1])
+                if state.status == "valid" and not expected_dependencies.issubset(state.dependencies):
+                    state.status = "stale"
+                    state.updated_at = _now()
+                    self._invalidate_descendants(name)
 
     def _state(self, name: str) -> ArtifactState:
         if name not in self.graph:

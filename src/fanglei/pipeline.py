@@ -58,6 +58,7 @@ def _load(
     *,
     human_angle_selection_mode: bool = False,
     evidence_targets_mode: bool = False,
+    timing_aware_storyboard_mode: bool | None = None,
 ) -> tuple[RunManifest, ArtifactRegistry]:
     manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
     registry = ArtifactRegistry(
@@ -65,6 +66,7 @@ def _load(
         manifest,
         human_angle_selection_mode=human_angle_selection_mode,
         evidence_targets_mode=evidence_targets_mode,
+        timing_aware_storyboard_mode=timing_aware_storyboard_mode,
     )
     for name, owner in (("source.md", "ingest"), ("questions.json", "analyze")):
         path = run_dir / name

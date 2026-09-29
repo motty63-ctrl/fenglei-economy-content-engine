@@ -3,17 +3,40 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fanglei.visual_models import VisualBeat, VisualBeatPlan
+from fanglei.visual_models import TimingAwareVisualContext, VisualBeat, VisualBeatPlan
 from fanglei.visual_semantics import extract_numeric_comparison, is_numeric_comparison
 
 
 class VisualPlanningRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     run_id: str
     script: dict[str, Any]
     allowed_claim_ids: set[str] = Field(default_factory=set)
+    timing_context: TimingAwareVisualContext | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def timing_context_matches_script(self) -> "VisualPlanningRequest":
+        if self.timing_context is None:
+            return self
+        context = self.timing_context
+        if (context.run_id != self.run_id
+                or context.script_id != self.script.get("script_id")):
+            raise ValueError("VISUAL_TIMING_IDENTITY_MISMATCH")
+        sentences = self.script.get("sentences", [])
+        if [row.get("sentence_id") for row in sentences] != [row.sentence_id for row in context.segments]:
+            raise ValueError("VISUAL_TIMING_SEGMENT_COVERAGE_MISMATCH")
+        for sentence, segment in zip(sentences, context.segments, strict=True):
+            if sentence.get("text") != segment.display_text:
+                raise ValueError("VISUAL_TIMING_DISPLAY_TEXT_MISMATCH")
+            if not set(sentence.get("claim_ids", [])) <= set(context.allowed_claim_ids):
+                raise ValueError("VISUAL_TIMING_SCRIPT_CLAIM_NOT_ALLOWED")
+        if self.allowed_claim_ids != set(context.allowed_claim_ids):
+            raise ValueError("VISUAL_TIMING_ALLOWLIST_MISMATCH")
+        return self
 
 
 class VisualPlanningProvider(Protocol):
