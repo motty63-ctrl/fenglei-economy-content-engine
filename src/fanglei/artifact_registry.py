@@ -233,6 +233,8 @@ def _human_storyboard_approval_graph(
 
 def _human_visual_asset_recovery_graph(
     base_graph: dict[str, tuple[str, tuple[str, ...]]],
+    *,
+    candidate_three_timeline_enabled: bool = False,
 ) -> dict[str, tuple[str, tuple[str, ...]]]:
     """Keep each reviewed visual candidate immutable and recover into a new artifact."""
     graph = dict(base_graph)
@@ -276,6 +278,30 @@ def _human_visual_asset_recovery_graph(
             "visual_assets_candidate_2",
         ),
     )
+    graph["human_visual_asset_review_candidate_3.json"] = (
+        "human_visual_asset_review_candidate_3",
+        (
+            "visual_assets_candidate_3", "visual_asset_recovery_candidate_3.json",
+            "human_visual_asset_review_candidate_2.json", "human_storyboard_approval.json",
+            "human_storyboard_candidate.json", "angle_selection.json", "facts.json",
+            "script.json", "human_script_approval.json", "audio/narration.wav",
+            "audio/review.json", "alignment.json", "subtitle_track.json",
+        ),
+    )
+    if "timeline.json" in graph:
+        if candidate_three_timeline_enabled:
+            owner, dependencies = graph["timeline.json"]
+            graph["timeline.json"] = (
+                owner,
+                tuple(dict.fromkeys((
+                    *dependencies,
+                    "angle_selection.json", "facts.json", "script.json",
+                    "human_script_approval.json", "audio/narration.wav", "audio/review.json",
+                    "alignment.json", "subtitle_track.json", "human_storyboard_approval.json",
+                    "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
+                    "human_visual_asset_review_candidate_3.json",
+                ))),
+            )
     return graph
 
 # The focus profile is opt-in. Research and content planning both track the
@@ -427,12 +453,24 @@ class ArtifactRegistry:
                     "human_visual_asset_review_candidate_1.json", "visual_asset_recovery.json",
                     "visual_assets_candidate_2", "human_visual_asset_review_candidate_2.json",
                     "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
+                    "human_visual_asset_review_candidate_3.json",
                 )
             )
             if visual_asset_recovery_enabled:
                 if not storyboard_approval_enabled:
                     raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_REQUIRES_STORYBOARD_APPROVAL")
-                self.graph = _human_visual_asset_recovery_graph(self.graph)
+                candidate_three_review_state = manifest.artifacts.get(
+                    "human_visual_asset_review_candidate_3.json"
+                )
+                candidate_three_timeline_enabled = (
+                    (self.run_dir / "human_visual_asset_review_candidate_3.json").is_file()
+                    or (candidate_three_review_state is not None
+                        and candidate_three_review_state.status != "missing")
+                )
+                self.graph = _human_visual_asset_recovery_graph(
+                    self.graph,
+                    candidate_three_timeline_enabled=candidate_three_timeline_enabled,
+                )
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

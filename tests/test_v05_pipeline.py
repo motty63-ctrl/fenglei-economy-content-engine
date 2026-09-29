@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 from fanglei.artifact_registry import ArtifactRegistry
@@ -8,7 +9,8 @@ from fanglei.providers.alignment import FakeAlignmentProvider
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
 from fanglei.v05_pipeline import (
-    run_narration_generation, run_nikola_adaptation, run_timeline_compilation, run_v05_pipeline,
+    _current_timeline_dependency_hashes, run_narration_generation, run_nikola_adaptation,
+    run_timeline_compilation, run_v05_pipeline,
 )
 from fanglei.v05_pipeline import (
     approve_voice_run, record_voice_review_run, run_voice_generation,
@@ -27,6 +29,56 @@ def _ready(tmp_path):
 
 def _manifest(run):
     return json.loads((run / "run.json").read_text(encoding="utf-8"))
+
+
+def test_timeline_dependency_hashes_include_visual_review_transitive_bindings():
+    direct = ("timeline-direct.json", "human_visual_asset_review_candidate_3.json")
+    review_dependencies = ("facts.json", "human_storyboard_candidate.json")
+    names = (*direct, *review_dependencies)
+    manifest = SimpleNamespace(artifacts={
+        name: SimpleNamespace(status="valid", content_hash=f"{index:064x}")
+        for index, name in enumerate(names, start=1)
+    })
+
+    class Registry:
+        graph = {name: ("owner", ()) for name in names}
+
+        def __init__(self):
+            self.validated = []
+
+        def validate(self, name):
+            self.validated.append(name)
+
+    registry = Registry()
+    hashes = _current_timeline_dependency_hashes(
+        registry, manifest, direct, review_dependencies,
+    )
+
+    assert set(hashes) == set(names)
+    assert set(registry.validated) == set(names)
+    assert hashes["facts.json"] == manifest.artifacts["facts.json"].content_hash
+
+
+def test_timeline_dependency_hashes_fail_closed_when_review_binding_is_stale():
+    direct = ("timeline-direct.json",)
+    review_dependencies = ("facts.json",)
+    names = (*direct, *review_dependencies)
+    manifest = SimpleNamespace(artifacts={
+        "timeline-direct.json": SimpleNamespace(status="valid", content_hash="a" * 64),
+        "facts.json": SimpleNamespace(status="stale", content_hash="b" * 64),
+    })
+
+    class Registry:
+        graph = {name: ("owner", ()) for name in names}
+
+        def validate(self, name):
+            if name == "facts.json":
+                raise ValueError("stale dependency")
+
+    with pytest.raises(ValueError, match="stale dependency"):
+        _current_timeline_dependency_hashes(
+            Registry(), manifest, direct, review_dependencies,
+        )
 
 
 def test_fake_pipeline_writes_every_v05_artifact_and_no_final_mp4(tmp_path) -> None:

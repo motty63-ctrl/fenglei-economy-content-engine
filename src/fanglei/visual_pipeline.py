@@ -43,7 +43,7 @@ VISUAL_STAGES = {
     "human_storyboard_review", "human_storyboard_recovery", "human_storyboard_approval",
     "visual_asset_generation", "human_visual_asset_review",
     "human_visual_asset_review_candidate_2", "visual_asset_recovery",
-    "visual_asset_recovery_candidate_3",
+    "visual_asset_recovery_candidate_3", "human_visual_asset_review_candidate_3",
 }
 
 
@@ -333,8 +333,8 @@ def record_human_visual_asset_review(
     candidate_id: int = 1,
 ) -> Path:
     """Record a human decision for one immutable visual candidate."""
-    if decision != "changes_required":
-        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_DECISION_NOT_SUPPORTED_IN_RECOVERY")
+    if decision not in {"changes_required", "approved_for_timeline"}:
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_DECISION_INVALID")
     if candidate_id < 1:
         raise ArtifactConflictError("VISUAL_ASSET_REVIEW_CANDIDATE_ID_INVALID")
     run_dir, manifest, registry = _load_storyboard_approval_registry(
@@ -381,7 +381,7 @@ def record_human_visual_asset_review(
     review = HumanVisualAssetReviewV1.model_validate({
         "schema_version": "human-visual-asset-review/1.0",
         "candidate_id": candidate_id,
-        "decision": "changes_required",
+        "decision": decision,
         "run_id": run_id,
         "case_id": approval.case_id,
         "reviewer": reviewer,

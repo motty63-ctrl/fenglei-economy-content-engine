@@ -4,6 +4,10 @@ from __future__ import annotations
 import json
 import math
 from html import escape
+import hashlib
+import re
+import xml.etree.ElementTree as ET
+from pathlib import PurePosixPath
 
 from fanglei.artifacts import sha256_bytes, sha256_text
 from fanglei.v05_models import TimelineDocument
@@ -230,8 +234,138 @@ def _full_composition_html(project_scenes: list[dict], duration_ms: int, fps: in
     )
 
 
-def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
-                         narration_audio: bytes) -> tuple[dict[str, str | bytes], dict]:
+def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[str, bytes]) -> str:
+    composition = timeline.composition
+    if composition is None:
+        raise ValueError("REVIEW_PREVIEW_REQUIRES_COMPOSED_TIMELINE")
+    expected_paths = {row.asset_path for row in composition.scene_visuals}
+    if set(visual_asset_files) != expected_paths:
+        raise ValueError("REVIEW_PREVIEW_ASSET_SET_MISMATCH")
+
+    scene_markup: list[str] = []
+    scene_schedule: list[dict[str, object]] = []
+    for scene in composition.scene_visuals:
+        payload = visual_asset_files.get(scene.asset_path)
+        if payload is None or hashlib.sha256(payload).hexdigest() != scene.asset_sha256:
+            raise ValueError("REVIEW_PREVIEW_ASSET_HASH_MISMATCH")
+        try:
+            root = ET.fromstring(payload)
+            svg_markup = payload.decode("utf-8")
+        except (ET.ParseError, UnicodeDecodeError) as error:
+            raise ValueError("REVIEW_PREVIEW_SVG_INVALID") from error
+        if root.tag.rsplit("}", 1)[-1].lower() != "svg":
+            raise ValueError("REVIEW_PREVIEW_SVG_INVALID")
+        for node in root.iter():
+            local_name = node.tag.rsplit("}", 1)[-1].lower()
+            if local_name in {
+                "script", "foreignobject", "iframe", "object", "embed",
+                "animate", "animatemotion", "animatetransform", "set",
+            }:
+                raise ValueError("REVIEW_PREVIEW_ACTIVE_SVG_CONTENT_REJECTED")
+            if local_name == "style" and (
+                "@import" in (node.text or "").lower()
+                or re.search(r"url\(\s*['\"]?(?!#)[^)]", node.text or "", flags=re.IGNORECASE)
+            ):
+                raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+            for key, value in node.attrib.items():
+                if key.rsplit("}", 1)[-1].lower().startswith("on"):
+                    raise ValueError("REVIEW_PREVIEW_ACTIVE_SVG_CONTENT_REJECTED")
+                if key.lower() == "{http://www.w3.org/XML/1998/namespace}base":
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+                if key.rsplit("}", 1)[-1].lower() in {"href", "src"} and not value.startswith("#"):
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+                if "@import" in value.lower() or re.search(
+                    r"url\(\s*['\"]?(?!#)[^)]", value, flags=re.IGNORECASE
+                ):
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+        actual_ids = {
+            node.attrib["data-object-id"] for node in root.iter()
+            if "data-object-id" in node.attrib
+        }
+        if actual_ids != set(scene.object_ids):
+            raise ValueError("REVIEW_PREVIEW_OBJECT_MAPPING_MISMATCH")
+        scene_markup.append(
+            f'<section class="visual-scene" id="{escape(scene.scene_id, quote=True)}" '
+            f'data-scene-id="{escape(scene.scene_id, quote=True)}" '
+            f'data-start-ms="{scene.start_ms}" data-end-ms="{scene.end_ms}">{svg_markup}</section>'
+        )
+        scene_schedule.append({
+            "scene_id": scene.scene_id,
+            "start_ms": scene.start_ms,
+            "end_ms": scene.end_ms,
+            "motion": [row.model_dump(mode="json") for row in scene.motion],
+        })
+
+    subtitle_data = [{
+        "cue_id": cue.cue_id, "sentence_id": cue.sentence_id,
+        "text": cue.text, "lines": cue.lines,
+        "start_ms": cue.start_ms, "end_ms": cue.end_ms,
+        "font_size_px": cue.font_size_px,
+    } for cue in composition.subtitle_cues]
+    scripts_json = json.dumps(
+        {"scenes": scene_schedule, "subtitles": subtitle_data,
+         "duration_ms": timeline.audio["duration_ms"]},
+        ensure_ascii=False, separators=(",", ":"),
+    ).replace("</", "<\\/")
+    layout = composition.subtitle_layout.model_dump(mode="json")
+    zone = layout["reserved_zone"]
+    max_lines = layout.get("maximum_lines", 2)
+    if any(len(row["lines"]) > max_lines for row in subtitle_data):
+        raise ValueError("REVIEW_PREVIEW_SUBTITLE_LAYOUT_INVALID")
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Local Preview — Human Review Required</title><style>'
+        '*{box-sizing:border-box}body{margin:0;background:#171717;color:#fff;'
+        'font-family:Arial,"Microsoft YaHei",sans-serif;display:flex;flex-direction:column;'
+        'align-items:center;gap:12px;padding:12px}#stage{position:relative;width:min(96vw,calc((100vh - 100px)*.5625));'
+        'aspect-ratio:9/16;background:#F7F2E8;overflow:hidden}#canvas{position:absolute;inset:0 auto auto 0;'
+        'width:1080px;height:1920px;transform-origin:top left;transform:scale(var(--preview-scale,1))}'
+        '#canvas svg{width:100%;height:100%;display:block}'
+        '.visual-scene{position:absolute;inset:0;visibility:hidden;opacity:0;transition:opacity 220ms ease-out}'
+        '.visual-scene.active{visibility:visible;opacity:1}.preview-label{position:absolute;z-index:20;left:24px;top:24px;'
+        'padding:12px 18px;background:#8d2118;color:white;font-weight:800;font-size:24px;letter-spacing:.04em}'
+        '#review-required{position:absolute;z-index:20;right:20px;top:24px;padding:10px 14px;'
+        'background:#20211d;color:white;font-weight:700;font-size:18px}#subtitle-layer{position:absolute;z-index:30;'
+        f'left:{zone["x"]}px;top:{zone["y"]}px;width:{zone["width"]}px;height:{zone["height"]}px;'
+        'padding:24px 36px;display:flex;align-items:center;justify-content:center;text-align:center;'
+        'background:rgba(247,242,232,.9);color:#1E1E1E;border-radius:24px;overflow:hidden;white-space:pre-line;'
+        'font-weight:700;line-height:1.28}audio{width:min(96vw,720px)}#status{font-size:14px;color:#ddd}'
+        '@media(prefers-reduced-motion:reduce){.visual-scene{transition:none}}'
+        '</style></head><body><main id="stage" data-preview="true" data-final="false"><div id="canvas">'
+        + "".join(scene_markup)
+        + '<div class="preview-label">PREVIEW · NOT FINAL</div>'
+        + '<div id="review-required">HUMAN REVIEW REQUIRED</div>'
+        + '<div id="subtitle-layer" aria-live="off"></div></div></main>'
+        + '<audio id="narration" controls preload="metadata" src="assets/narration.wav"></audio>'
+        + '<div id="status">本地审阅预览 · 字幕时间来自估算对齐</div>'
+        + f'<script type="application/json" id="preview-data">{scripts_json}</script>'
+        + '<script>(()=>{const data=JSON.parse(document.getElementById("preview-data").textContent);'
+        + 'const audio=document.getElementById("narration"),subtitle=document.getElementById("subtitle-layer");'
+        + 'const stage=document.getElementById("stage"),scenes=data.scenes.map(row=>({...row,node:document.getElementById(row.scene_id)}));'
+        + 'const resize=()=>stage.style.setProperty("--preview-scale",String(stage.clientWidth/1080));resize();'
+        + 'window.addEventListener("resize",resize);'
+        + 'const update=()=>{const t=audio.currentTime*1000;let active=scenes.find((s,i)=>t>=s.start_ms&&(t<s.end_ms||(i===scenes.length-1&&t<=s.end_ms)));'
+        + 'scenes.forEach(s=>{const on=s===active;s.node.classList.toggle("active",on);'
+        + 'if(!on)return;for(const cue of s.motion){const node=[...s.node.querySelectorAll("[data-object-id]")].find(x=>x.dataset.objectId===cue.object_id);'
+        + 'if(node){node.style.transition=`opacity ${cue.duration_ms}ms ease-out`;node.style.opacity=t>=s.start_ms+cue.delay_ms?"1":"0";}}});'
+        + 'const cue=data.subtitles.find(c=>t>=c.start_ms&&t<c.end_ms);subtitle.textContent=cue?cue.lines.join("\\n"):"";'
+        + 'subtitle.style.fontSize=cue?`${cue.font_size_px}px`:"52px";};'
+        + 'document.querySelectorAll("[data-object-id]").forEach(x=>x.style.opacity="0");'
+        + 'audio.addEventListener("timeupdate",update);audio.addEventListener("seeked",update);'
+        + 'audio.addEventListener("loadedmetadata",()=>{const requested=Number(new URLSearchParams(location.search).get("time"));'
+        + 'if(Number.isFinite(requested)&&requested>=0)audio.currentTime=Math.min(requested,data.duration_ms)/1000;update();});'
+        + 'update();window.fengleiPreviewUpdate=update;})();</script></body></html>\n'
+    )
+
+
+def build_nikola_project(
+    storyboard: dict,
+    timeline: TimelineDocument,
+    narration_audio: bytes,
+    *,
+    visual_asset_files: dict[str, bytes] | None = None,
+) -> tuple[dict[str, str | bytes], dict]:
     gate = storyboard.get("quality_gate") or {}
     if gate.get("passed") is not True:
         raise ValueError("NIKOLA_STORYBOARD_INVALID")
@@ -239,6 +373,10 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
         raise ValueError("NIKOLA_TIMELINE_INVALID")
     if sha256_bytes(narration_audio) != timeline.audio.get("sha256"):
         raise ValueError("NIKOLA_AUDIO_HASH_MISMATCH")
+    if timeline.composition is not None and visual_asset_files is None:
+        raise ValueError("REVIEW_PREVIEW_APPROVED_VISUAL_ASSETS_REQUIRED")
+    if timeline.composition is None and visual_asset_files is not None:
+        raise ValueError("REVIEW_PREVIEW_TIMELINE_COMPOSITION_REQUIRED")
     time_by_scene = {row.scene_id: row for row in timeline.scenes}
     project_scenes: list[dict] = []
     factual_count = 0
@@ -372,4 +510,26 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
             "JSON.parse(fs.readFileSync('project-manifest.json','utf8'));\n"
         ),
     }
+    if timeline.composition is not None and visual_asset_files is not None:
+        files["review-preview.html"] = _review_preview_html(timeline, visual_asset_files)
+        for asset_path, payload in visual_asset_files.items():
+            safe_path = PurePosixPath(asset_path) if isinstance(asset_path, str) else None
+            if (
+                safe_path is None or safe_path.is_absolute() or "\\" in asset_path
+                or any(part in {"", ".", ".."} for part in safe_path.parts)
+            ):
+                raise ValueError("REVIEW_PREVIEW_ASSET_PATH_INVALID")
+            files[f"assets/visual/{safe_path.as_posix()}"] = payload
+        manifest["renderer"].update({
+            "preview_only": True,
+            "preview_entry": "review-preview.html",
+            "preview_review_status": "pending_human_preview_review",
+            "timeline_composition_sha256": sha256_text(_canonical_json(
+                timeline.composition.model_dump(mode="json")
+            )),
+            "visual_bundle_sha256": timeline.composition.visual_bundle_sha256,
+            "visual_review_sha256": timeline.composition.visual_review_sha256,
+            "subtitle_sha256": timeline.composition.subtitle_sha256,
+            "full_render_requested": False,
+        })
     return files, manifest

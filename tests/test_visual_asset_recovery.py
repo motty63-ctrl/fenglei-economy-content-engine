@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -14,9 +15,11 @@ from fanglei.human_visual_asset_recovery import (
     validate_visual_asset_recovery_plan,
 )
 from fanglei.artifact_registry import _human_visual_asset_recovery_graph
+from fanglei.artifacts import sha256_bytes
 from fanglei.pipeline import STAGE_ARTIFACT, STAGE_ARTIFACTS
 from fanglei.visual_assets import build_visual_asset_bundle
 from fanglei.visual_pipeline import _now
+from fanglei import visual_pipeline
 from fanglei.visual_models import (
     Placement,
     RendererDirectives,
@@ -55,6 +58,81 @@ def test_visual_review_owner_timestamp_is_timezone_aware() -> None:
     timestamp = datetime.fromisoformat(_now())
     assert timestamp.tzinfo is not None
     assert timestamp.utcoffset() is not None
+
+
+def test_visual_review_owner_persists_the_explicit_human_decision(tmp_path, monkeypatch) -> None:
+    from fanglei.human_storyboard_approval import HumanStoryboardApprovalV1
+
+    storyboard = _storyboard()
+    storyboard_path = tmp_path / "human_storyboard_candidate.json"
+    storyboard_path.write_text(storyboard.model_dump_json(), encoding="utf-8")
+    storyboard_hash = sha256_bytes(storyboard_path.read_bytes())
+    approval = _approval_for_candidate(storyboard).model_dump(mode="json")
+    approval["candidate_artifact_sha256"] = storyboard_hash
+    approval["dependency_hashes"]["human_storyboard_candidate.json"] = storyboard_hash
+    approval_model = HumanStoryboardApprovalV1.model_validate(approval)
+
+    output_name = "human_visual_asset_review_candidate_3.json"
+    dependencies = (
+        "visual_assets_candidate_3", "visual_asset_recovery_candidate_3.json",
+        "human_visual_asset_review_candidate_2.json", "human_storyboard_approval.json",
+        "human_storyboard_candidate.json", "angle_selection.json", "facts.json",
+        "script.json", "human_script_approval.json", "audio/narration.wav",
+        "audio/review.json", "alignment.json", "subtitle_track.json",
+    )
+    hashes = {name: HASHES[name] for name in dependencies}
+    hashes["human_storyboard_candidate.json"] = storyboard_hash
+
+    class Registry:
+        imported_checkpoint_mode = False
+        graph = {output_name: ("human_visual_asset_review_candidate_3", dependencies)}
+
+        def __init__(self):
+            self.written = None
+
+        def validate(self, name):
+            assert name == output_name or name in dependencies
+
+        def read_json(self, name):
+            if name == "human_storyboard_candidate.json":
+                return storyboard.model_dump(mode="json")
+            if name == "human_storyboard_approval.json":
+                return approval_model.model_dump(mode="json")
+            raise AssertionError(name)
+
+        def write_json(self, name, payload, owner):
+            assert name == output_name
+            assert owner == "human_visual_asset_review_candidate_3"
+            self.written = payload
+            (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
+
+    registry = Registry()
+    artifacts = {
+        name: SimpleNamespace(content_hash=digest, status="valid")
+        for name, digest in hashes.items()
+    }
+    artifacts[output_name] = SimpleNamespace(content_hash=None, status="missing", owner="human_visual_asset_review_candidate_3")
+    manifest = SimpleNamespace(
+        run_id=RUN_ID,
+        artifacts=artifacts,
+    )
+    monkeypatch.setattr(
+        visual_pipeline, "_load_storyboard_approval_registry",
+        lambda *args, **kwargs: (tmp_path, manifest, registry),
+    )
+    monkeypatch.setattr(visual_pipeline, "_execute", lambda manifest, registry, stage, action, force=False: action())
+
+    result = visual_pipeline.record_human_visual_asset_review(
+        RUN_ID, tmp_path,
+        expected_storyboard_sha256=canonical_json_sha256(storyboard),
+        expected_visual_bundle_sha256=HASHES["visual_assets_candidate_3"],
+        reviewer="reviewer", decision="approved_for_timeline",
+        reason_code="APPROVED_FOR_TIMELINE", rationale="Approved candidate 3 for timeline.",
+        findings=["Visual review approved."], candidate_id=3,
+    )
+
+    assert result == tmp_path / output_name
+    assert registry.written["decision"] == "approved_for_timeline"
 
 
 def _storyboard() -> Storyboard:
@@ -416,6 +494,27 @@ def test_recovery_registers_new_candidate_without_approving_timeline() -> None:
     assert STAGE_ARTIFACTS["visual_asset_recovery_candidate_3"] == (
         "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
     )
+
+
+def test_candidate_three_timeline_graph_binds_complete_approval_chain() -> None:
+    base_graph = {
+        "visual_assets": ("visual_asset_generation", ("human_storyboard_approval.json", "human_storyboard_candidate.json")),
+        "timeline.json": ("timeline_compilation", ("storyboard.json", "visual_beats.json", "audio/metadata.json")),
+    }
+    graph = _human_visual_asset_recovery_graph(
+        base_graph, candidate_three_timeline_enabled=True,
+    )
+
+    assert graph["timeline.json"][1] != base_graph["timeline.json"][1]
+    review_dependencies = set(graph["human_visual_asset_review_candidate_3.json"][1])
+    timeline_dependencies = set(graph["timeline.json"][1])
+    required = {
+        "angle_selection.json", "facts.json", "script.json", "human_script_approval.json",
+        "audio/narration.wav", "audio/review.json", "alignment.json", "subtitle_track.json",
+    }
+    assert required <= review_dependencies
+    assert required <= timeline_dependencies
+    assert "human_visual_asset_review_candidate_3.json" in timeline_dependencies
 
 
 def test_candidate_three_binds_candidate_two_review_and_does_not_approve_timeline() -> None:

@@ -119,6 +119,7 @@ STAGE_ARTIFACT = {
     "human_storyboard_approval": "human_storyboard_approval.json",
     "human_visual_asset_review": "human_visual_asset_review_candidate_1.json",
     "human_visual_asset_review_candidate_2": "human_visual_asset_review_candidate_2.json",
+    "human_visual_asset_review_candidate_3": "human_visual_asset_review_candidate_3.json",
     "visual_asset_recovery": "visual_asset_recovery.json",
     "visual_asset_recovery_candidate_3": "visual_asset_recovery_candidate_3.json",
     "visual_asset_generation": "visual_assets",
