@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3C.3 technical Storyboard preparation is complete; `HUMAN STORYBOARD REVIEW = PENDING`.** The existing timing-aware Storyboard is current and its automated quality gate passed. Visual asset production, Timeline, and MP4 rendering have not started.
+- Status: **Phase 3C.3D human Storyboard recovery is complete; the recovered candidate passed automated validation and `HUMAN STORYBOARD REVIEW = PENDING`.** The original Storyboard remains preserved with its historical `CHANGES_REQUIRED` decision. Visual asset production, Timeline, and MP4 rendering have not started.
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment, subtitles, and the 9-scene timing-aware Storyboard exist and are current; see [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md). Visual assets, Timeline, and video do not exist.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; a separate human-edited 9-scene candidate now awaits review in [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md). Visual assets, Timeline, and video do not exist.
 
 ## Locked research question
 
@@ -133,12 +133,20 @@ At that historical checkpoint, status was `PHASE_3C3_BLOCKED_GENERALIZATION_GAP`
 
 That checkpoint's next action was to generalize the Storyboard request/owner and artifact dependencies. It is superseded by the current state below.
 
-## Current Phase 3C.3C — timing-aware Storyboard ready for human review
+## Historical Phase 3C.3C — original timing-aware Storyboard and renderer correction
 
 The generic `render_visual_plan()` renderer now branches on Storyboard timing semantics. Legacy schema 4.0 / `estimated_speech` output retains its original no-audio-timestamp explanation. Alignment-derived Storyboard output shows its timing basis, source, method, estimated quality, audio binding, and scene `start_ms` / `end_ms` / duration directly from the Storyboard, with an explicit precision caveat. The existing Storyboard was not regenerated: its SHA-256 remains `a649b81656193ffbac7898361d9c6b7227b9bd2411cf1208756c1b1e6b85e9e6`; it remains schema 5.0 with 9 scenes, all 12 narration segments, `0–58,679 ms`, and automated quality gate passed.
 
 The corrected `visual_plan.md` is rendered through the `visual_plan_render` ArtifactRegistry owner from the existing Storyboard. Planner/storyboard stage attempt counts remain unchanged; no provider or network was called. Focused visual/rendering tests passed 38; the safe non-integration regression passed 879. The generic renderer fix is committed at `356a0c3` (`fix: render timing-aware visual plan provenance`).
 
-The complete, Chinese-first [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md) packet lists all 9 scenes and the exact ownership of all 12 segments, plus coverage and factual-safety review notes. The renderer correction and automated Storyboard gate do not grant human approval. **Current gate: `HUMAN STORYBOARD REVIEW = PENDING`.** No visual asset production, Timeline, or MP4 rendering has started.
+The original review packet recorded the first candidate and its automated checks. Human review later returned `CHANGES_REQUIRED / VISUAL_DIFFERENTIATION_AND_HIERARCHY`; that packet is superseded by the current Phase 3C.3D review packet below. No visual asset production, Timeline, or MP4 rendering started in Phase 3C.3C.
 
-**Exact next action: human review of `STORYBOARD_REVIEW.md` and the current Storyboard/visual plan.** Review pacing, visual density, numbers, survey boundaries, revision semantics, partial industry coverage, source attribution, transitions, and overall coherence. Do not generate visual assets or Timeline until the human Storyboard review is separately completed.
+## Current Phase 3C.3D — human-edited Storyboard candidate
+
+The original Storyboard SHA-256 `a649b81656193ffbac7898361d9c6b7227b9bd2411cf1208756c1b1e6b85e9e6` remains preserved with the registered human decision `CHANGES_REQUIRED`, reason `VISUAL_DIFFERENTIATION_AND_HIERARCHY`. No generic human Storyboard recovery mechanism existed before this phase. A generic recovery owner now records a human visual edit and a separate candidate, validates visual-only changes against the frozen scene/timing/claim contract, and renders `visual_plan.md` from that candidate.
+
+The edit is recorded at `runs/2026-09-27-001-bls-august-2026-employment-situation/human_storyboard_edit.json` (SHA-256 `134150cab8ef623d28fc41427f1566755b5caf157f87cf39a6a67ee2906f8313`); its pending candidate's canonical Storyboard SHA-256 is `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded`, and candidate file/registry SHA-256 is `920299f4a2e483c5a6aeaeb2afaaa884cdd1a3c04b9c0b1c8d5bd3ca2cc5e7f3`. The separate original-review record SHA-256 is `4440e5aafda16c36b4217795a07abdb651c36901c2df006dfe183d4bb2ebfe6b`. Reviewer `motty63-ctrl` submitted the edit at `2026-09-29T15:42:57+08:00`; the candidate remains `pending_human_review`.
+
+All 9 original scene IDs, scene order, exact timing (`0–58,679 ms`), and 12/12 narration segment ownership remain unchanged. The common recovery validator and Storyboard quality gate pass. Timing remains alignment-derived, `proportional_by_normalized_char_count`, quality `estimated`; it is not word-level acoustic alignment. Facts, Research, angle, Script, audio, alignment, and subtitles were not changed. Focused recovery tests: 13 passed; focused recovery/visual pipeline/renderer/model suite: 24 passed; safe non-integration regression: 892 passed. No external provider was called.
+
+**Current gate: `HUMAN STORYBOARD REVIEW = PENDING`. Exact next action: review the recovered candidate and complete checklist in [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md).** Do not generate visual assets or Timeline until a separate human approval is recorded. No assets, Timeline, or MP4 exist.
