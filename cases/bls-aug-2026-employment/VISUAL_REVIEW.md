@@ -1,61 +1,91 @@
 # BLS August 2026 — Visual Review
 
-**Decision required:** `HUMAN VISUAL REVIEW = PENDING`
+**Current gate: `HUMAN VISUAL REVIEW = PENDING`**
 
-This packet is for review of the generated visual assets only. The recovered Storyboard was approved for visual generation; that approval does not approve a Timeline, final subtitle burn-in, or MP4 export.
+Review Visual Candidate 2 only. Candidate 1 is preserved as `CHANGES_REQUIRED`; its decision does not approve Candidate 2. This review authorizes no Timeline, subtitle burn-in, or MP4 export.
 
 ## Local preview
 
-Open the contact sheet:
+Open the Candidate 2 contact sheet:
 
-`runs/2026-09-27-001-bls-august-2026-employment-situation/visual_assets/index.html`
+`runs/2026-09-27-001-bls-august-2026-employment-situation/visual_assets_candidate_2/index.html`
 
-It links to the nine individual SVGs in the same directory. Run artifacts are local and git-ignored, so the preview is available in the working checkout that contains this run.
+The page labels Candidate 1 `CHANGES_REQUIRED`, Candidate 2 `PENDING HUMAN VISUAL REVIEW`, and shows the nine Candidate 2 SVGs in scene order. Candidate 1 remains separately available at `runs/2026-09-27-001-bls-august-2026-employment-situation/visual_assets/index.html`.
 
-## Bound inputs
+## Candidate 1 — formal review record
+
+- Decision: `CHANGES_REQUIRED`
+- Reason: `VISUAL_POLISH_AND_MOBILE_HIERARCHY`
+- Reviewer: `motty63-ctrl`
+- Reviewed at: `2026-09-29T17:51:15+08:00`
+- Review artifact SHA-256: `4a326d5ccd1b1614f2e9689fcd789d7033c2219260b65ba66f09ba2691074744`
+- Original visual bundle SHA-256: `c42d2e93bce4698cacbc1c53a8b8980e61cbd37505c90a87108d9e9373a38b83`
+
+Human findings: the nine assets were factually and structurally correct, and the dark visual system was acceptable, but the sequence felt too much like data slides. Several scenes needed stronger mobile hierarchy, larger primary values, and more intentional use of space. Scenes 5–6 should form a clearer revision climax; Scene 7 should express magnitude and direction; Scenes 8–9 should feel less like consecutive report pages. The BLS footer should remain small and consistent. No upstream factual or content change was requested.
+
+## Candidate 2 — pending human review
 
 | Item | SHA-256 / identity |
 |---|---|
-| Run | `2026-09-27-001-bls-august-2026-employment-situation` |
-| Case | `bls-aug-2026-employment` |
-| Recovered candidate canonical Storyboard | `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded` |
-| Candidate file / registry artifact | `920299f4a2e483c5a6aeaeb2afaaa884cdd1a3c04b9c0b1c8d5bd3ca2cc5e7f3` |
-| Human approval artifact | `6da7aa4e6628023d97054104972b62759ff79dc8d4764ef5212333a8efd76f05` |
-| Visual asset directory artifact | `c42d2e93bce4698cacbc1c53a8b8980e61cbd37505c90a87108d9e9373a38b83` |
+| Run / case | `2026-09-27-001-bls-august-2026-employment-situation` / `bls-aug-2026-employment` |
+| Candidate | `2`; manifest status `pending_human_visual_review` |
+| Recovery-plan registry artifact | `ca122df2b49aa41c7edce6944278d49d208da2ab4d662244f54c249cad94e3f1` |
+| Canonical recovery-plan digest | `8f9c8f0764a129ebbefeb1d44eafee65e1b688710b404675cd0c989db32c080a` |
+| Candidate 2 visual bundle | `2b8034e9dfcaaf1330077e1a3403442cdca7232242dc9518214bde6dbfa35d2c` |
+| Candidate 1 review bound into recovery | `4a326d5ccd1b1614f2e9689fcd789d7033c2219260b65ba66f09ba2691074744` |
+| Recovered Storyboard canonical SHA-256 | `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded` |
+| Storyboard approval SHA-256 | `6da7aa4e6628023d97054104972b62759ff79dc8d4764ef5212333a8efd76f05` |
+| Script SHA-256 | `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305` |
+| Approved audio Candidate 2 SHA-256 | `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183` |
+| Alignment SHA-256 | `66744f918fe01dd2e726858ee132eca81701f56f55a404124deb85068d641306` |
+| Subtitle track SHA-256 | `58107e68f9f726e2bb0d3812a0db2b0f58240a07c656fc1c015aecfcd652ed46` |
 
-Approval reviewer: `motty63-ctrl`
-Approval time: `2026-09-29T16:43:49+08:00`
-Approval scope: generate visuals from the recovered Storyboard while preserving its scene structure, timing, narration segments, supporting claims, and approved display copy.
+The Storyboard SHA, nine scene IDs and order, exact `0–58,679 ms` timing, 12/12 narration-segment ownership, supporting claims, and approved display copy are unchanged. Candidate 2 changes visual composition only. It contains nine SVGs plus a manifest and local contact sheet. The source footer is `Source: BLS` from Scene 2 onward; Scene 1 omits it.
 
-## Scene inventory
+The alignment remains `proportional_by_normalized_char_count` with estimated quality, not word-level acoustic alignment. Candidate 2 is a static visual-asset review set, not a Timeline or video.
 
-| Scene | Time range | Narration segments | Supporting claims |
-|---|---:|---|---|
-| `scene_001` | 0–3,848 ms | `sentence_001` | — |
-| `scene_002` | 3,848–11,543 ms | `sentence_002`, `sentence_003` | `claim_063`, `claim_064` |
-| `scene_003` | 11,543–18,469 ms | `sentence_004` | `claim_065` |
-| `scene_004` | 18,469–24,434 ms | `sentence_005` | `claim_066` |
-| `scene_005` | 24,434–30,398 ms | `sentence_006` | `claim_067` |
-| `scene_006` | 30,398–35,977 ms | `sentence_007` | `claim_068` |
-| `scene_007` | 35,977–45,596 ms | `sentence_008`–`sentence_010` | `claim_069`–`claim_071` |
-| `scene_008` | 45,596–53,484 ms | `sentence_011a` | `claim_063`–`claim_066` |
-| `scene_009` | 53,484–58,679 ms | `sentence_011b` | `claim_067`–`claim_071` |
+## Candidate 2 scene treatment
 
-The visual manifest and SVG hashes were checked against the current candidate. All 9 scene IDs, order, time ranges, narration bindings, claim bindings, and object text match exactly. The SVG bundle is a static typographic treatment of Storyboard objects; it does not add factual copy, claims, causal interpretation, subtitles, or timing behavior.
+| Scene | Visual treatment to review |
+|---|---|
+| `scene_001` | Opening hook `别只盯一个数字` as the focal point, with six lower-hierarchy report dimensions arranged around it. |
+| `scene_002` | Two separated metric cards for nonfarm payroll and unemployment, with values prominent and the unchanged status subordinate. |
+| `scene_003` | Earnings metric card dominated by `37.75美元`, with `+10美分` and `+0.3%` as secondary chips and private nonfarm scope subordinate. |
+| `scene_004` | Workweek value `34.4小时` with `+0.1小时`; a simple clock/tick geometry differentiates it from the earnings scene. |
+| `scene_005` | June revision shown as prior `+2万` to revised `+3.1万`; `上修 +1.1万` is visually separate from the revised value. |
+| `scene_006` | July revision shown as `−2.3万` to `+2.1万`, emphasizing the sign change; `上修 +4.4万` remains a separate revision badge. |
+| `scene_007` | `部分行业变化` with diverging magnitude bars for two positive movements and one negative movement, without ranking or implying an exhaustive list. |
+| `scene_008` | A four-tile structural recap grouping August's current payroll, unemployment, earnings, and workweek measures without repeating values. |
+| `scene_009` | Closing phrase `这些信息需要分开看` with three organized categories: August current indicators, June/July revisions, and selected industry changes. |
 
-The displayed scene ranges are inherited from the alignment-derived Storyboard. Its sentence timings use `proportional_by_normalized_char_count` with estimated quality; they are not word-level acoustic alignment.
+## Static QA note for reviewer
+
+The SVGs and manifest passed structural/hash validation, and all displayed strings remain bound to the approved visual objects. A static SVG text-line inspection found that the renderer wrapped some numeric strings at arbitrary character boundaries: `+16.2万` in Scene 2 and several revision magnitudes in Scenes 5–7 split the number from `万`. Some longer labels also wrap. No text or value was changed, and this was not raster/browser visual QA. Please inspect these wraps at phone size and decide whether they are readable enough for this candidate. **Do not treat static/hash validation as proof of visual readability.** If the wrapping is not acceptable, record `CHANGES_REQUIRED`; do not approve Candidate 2 or proceed downstream.
 
 ## Human review checklist
 
-- Confirm each scene communicates the approved Storyboard layout and hierarchy.
-- Check text readability, wrapping, spacing, contrast, and screen-edge safety.
-- Confirm all figures, signs, labels, and units match the approved display copy.
-- Confirm the scene sequence remains coherent across the full contact sheet.
-- Flag any visual treatment that could imply an unsupported relationship or conclusion.
+1. Hook hierarchy in Scene 1.
+2. Numeric prominence in Scene 2.
+3. Earnings-value readability in Scene 3.
+4. Workweek differentiation in Scene 4.
+5. June revision clarity in Scene 5.
+6. July sign-flip clarity in Scene 6.
+7. Industry magnitude visualization in Scene 7.
+8. Structural recap in Scene 8.
+9. Final-card quality in Scene 9.
+10. Consistency of the source footer.
+11. Font size and readability on a mobile screen.
+12. Safe distance from screen edges and player controls.
+13. Whether empty space feels intentional.
+14. Visual rhythm across all nine scenes.
+15. Whether the sequence still feels like slides rather than video keyframes.
 
-## Human decision
+## Human decision — Candidate 2
 
 Decision: `PENDING`
+
 Reviewer:
+
 Reviewed at (timezone-aware ISO-8601):
+
 Rationale / findings:
