@@ -140,6 +140,26 @@ def _human_script_recovery_graph(
     )
     return graph
 
+
+def _human_script_approval_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Opt in to a hash-bound human approval required before narration."""
+    graph = dict(base_graph)
+    dependencies = tuple(
+        name for name in (
+            "research_focus.json", "facts.json", "angles.json", "angle_selection.json",
+            "script_terminology.json", "human_script_edit.json", "script.json",
+        ) if name in graph
+    )
+    graph["human_script_approval.json"] = ("human_script_approval", dependencies)
+    owner, narration_dependencies = graph["narration.json"]
+    graph["narration.json"] = (
+        owner,
+        tuple(dict.fromkeys((*narration_dependencies, "human_script_approval.json"))),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -201,6 +221,7 @@ class ArtifactRegistry:
         evidence_targets_mode: bool = False,
         script_terminology_mode: bool = False,
         human_script_recovery_mode: bool = False,
+        human_script_approval_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -238,10 +259,22 @@ class ArtifactRegistry:
             ).is_file() or "human_script_edit.json" in manifest.artifacts
             if recovery_enabled:
                 self.graph = _human_script_recovery_graph(self.graph)
+            approval_enabled = human_script_approval_mode or (
+                self.run_dir / "human_script_approval.json"
+            ).is_file() or "human_script_approval.json" in manifest.artifacts
+            if approval_enabled:
+                self.graph = _human_script_approval_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
-            self.manifest.artifacts.setdefault(
+            state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
             )
+            # Opt-in graphs may add dependencies to artifacts that an older
+            # manifest already knows about. Refresh only missing states; a
+            # materialized artifact keeps the dependency hashes recorded when
+            # its owner last wrote it, so stale data is never blessed here.
+            if state.status == "missing":
+                state.owner = owner
+                state.dependencies = {dep: "" for dep in dependencies}
 
     def _state(self, name: str) -> ArtifactState:
         if name not in self.graph:

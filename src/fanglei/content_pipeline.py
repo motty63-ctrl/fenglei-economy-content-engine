@@ -224,6 +224,162 @@ def submit_human_script_recovery(
     return run_dir / "human_script_edit.json"
 
 
+def approve_human_script_for_tts(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    reviewer: str,
+    rationale: str,
+) -> Path:
+    """Record explicit approval for this exact recovered Script to enter TTS."""
+    from fanglei.human_script_approval import HumanScriptApprovalV1
+    from fanglei.human_script_recovery import HumanScriptEditV1
+
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
+    if manifest.run_id != run_id:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_RUN_ID_MISMATCH")
+    registry = ArtifactRegistry(
+        run_dir,
+        manifest,
+        research_focus_mode=True,
+        human_angle_selection_mode=True,
+        evidence_targets_mode=True,
+        script_terminology_mode=True,
+        human_script_recovery_mode=True,
+        human_script_approval_mode=True,
+    )
+    if registry.imported_checkpoint_mode:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
+
+    required_artifacts = (
+        "source_documents/index.json", "sources.json", "facts.json", "research_focus.json",
+        "research.md", "angles.json", "angle_selection.json", "angle.md",
+        "script_terminology.json", "human_script_edit.json", "script.json",
+    )
+    try:
+        for name in required_artifacts:
+            registry.validate(name)
+    except Exception as error:
+        raise ArtifactConflictError(f"SCRIPT_APPROVAL_UPSTREAM_NOT_CURRENT: {error}") from error
+
+    try:
+        focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+        selection = HumanAngleSelectionV1.model_validate(registry.read_json("angle_selection.json"))
+        edit = HumanScriptEditV1.model_validate(registry.read_json("human_script_edit.json"))
+        facts = registry.read_json("facts.json")
+        angles = registry.read_json("angles.json")
+        script = registry.read_json("script.json")
+    except Exception as error:
+        raise ArtifactConflictError(f"SCRIPT_APPROVAL_CONTRACT_INVALID: {error}") from error
+
+    if focus.run_id != run_id or not focus.case_id.strip():
+        raise ArtifactConflictError("SCRIPT_APPROVAL_CASE_IDENTITY_INVALID")
+    if facts.get("run_id") != run_id or angles.get("run_id") != run_id:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_RUN_IDENTITY_INVALID")
+    if (edit.run_id != run_id or edit.case_id != focus.case_id
+            or selection.run_id != run_id or edit.angle_id != selection.selected_angle_id):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_IDENTITY_MISMATCH")
+
+    current_hashes = {
+        "facts_sha256": manifest.artifacts["facts.json"].content_hash,
+        "angles_sha256": manifest.artifacts["angles.json"].content_hash,
+        "angle_selection_sha256": manifest.artifacts["angle_selection.json"].content_hash,
+        "terminology_sha256": manifest.artifacts["script_terminology.json"].content_hash,
+        "human_script_edit_sha256": manifest.artifacts["human_script_edit.json"].content_hash,
+        "script_sha256": manifest.artifacts["script.json"].content_hash,
+    }
+    if any(not isinstance(value, str) or not value for value in current_hashes.values()):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_REQUIRED_HASH_MISSING")
+    if (edit.facts_sha256 != current_hashes["facts_sha256"]
+            or edit.angles_sha256 != current_hashes["angles_sha256"]
+            or edit.angle_selection_sha256 != current_hashes["angle_selection_sha256"]
+            or edit.terminology_sha256 != current_hashes["terminology_sha256"]):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_EDIT_BINDING_STALE")
+    if (selection.angles_sha256 != current_hashes["angles_sha256"]
+            or selection.facts_sha256 != current_hashes["facts_sha256"]):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SELECTION_BINDING_STALE")
+
+    candidates = [
+        row for row in angles.get("candidates", [])
+        if isinstance(row, dict) and row.get("angle_id") == selection.selected_angle_id
+    ]
+    if len(candidates) != 1:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SELECTED_ANGLE_INVALID")
+    try:
+        selected = AngleCandidate.model_validate(candidates[0])
+    except Exception as error:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SELECTED_ANGLE_INVALID") from error
+    if selected.eligibility != "eligible":
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SELECTED_ANGLE_INELIGIBLE")
+    eligible_claim_ids = {claim.claim_id for claim in build_fact_palette(facts)}
+    if not set(selected.supporting_claim_ids) <= eligible_claim_ids:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SELECTED_ANGLE_HAS_INELIGIBLE_CLAIMS")
+
+    if (script.get("authoring_method") != "human_edit"
+            or script.get("human_review_status") != "pending"
+            or script.get("human_script_edit_sha256") != current_hashes["human_script_edit_sha256"]
+            or script.get("angle_id") != selection.selected_angle_id
+            or script.get("target_language") != edit.target_language
+            or script.get("script_lint", {}).get("status") != "passed"):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_CANONICAL_SCRIPT_INVALID")
+    try:
+        script_draft = ScriptDraft.model_validate(script)
+    except Exception as error:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_CANONICAL_SCRIPT_INVALID") from error
+    if script_draft.model_dump(mode="json", exclude_none=True) != edit.draft.model_dump(
+        mode="json", exclude_none=True,
+    ):
+        raise ArtifactConflictError("SCRIPT_APPROVAL_SCRIPT_EDIT_MISMATCH")
+
+    from fanglei.script_terminology import validate_script_terminology_map
+
+    try:
+        terminology = validate_script_terminology_map(
+            registry.read_json("script_terminology.json"), facts,
+            expected_run_id=run_id,
+            expected_case_id=focus.case_id,
+            facts_sha256=current_hashes["facts_sha256"],
+            allowed_claim_ids=set(selected.supporting_claim_ids),
+            require_approved=True,
+        )
+        if terminology.target_language.casefold() != edit.target_language.casefold():
+            raise ValueError("script target language does not match approved terminology")
+    except Exception as error:
+        raise ArtifactConflictError("SCRIPT_APPROVAL_TERMINOLOGY_INVALID") from error
+
+    output_path = run_dir / "human_script_approval.json"
+    approval_state = manifest.artifacts["human_script_approval.json"]
+    if output_path.exists() or approval_state.status != "missing":
+        raise ArtifactConflictError("SCRIPT_APPROVAL_ALREADY_EXISTS")
+    approval = HumanScriptApprovalV1(
+        schema_version="human-script-approval/1.0",
+        status="approved_for_tts",
+        run_id=run_id,
+        case_id=focus.case_id,
+        angle_id=selection.selected_angle_id,
+        facts_sha256=current_hashes["facts_sha256"],
+        angles_sha256=current_hashes["angles_sha256"],
+        angle_selection_sha256=current_hashes["angle_selection_sha256"],
+        terminology_sha256=current_hashes["terminology_sha256"],
+        human_script_edit_sha256=current_hashes["human_script_edit_sha256"],
+        script_sha256=current_hashes["script_sha256"],
+        target_language=edit.target_language,
+        reviewer=reviewer,
+        approved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        rationale=rationale,
+    )
+
+    def write_approval() -> None:
+        registry.write_json(
+            "human_script_approval.json", approval.model_dump(mode="json"),
+            "human_script_approval",
+        )
+
+    _execute(manifest, registry, "human_script_approval", write_approval)
+    return output_path
+
+
 def _selection_failure(code: str, detail: str) -> ArtifactConflictError:
     return ArtifactConflictError(f"{code}: {detail}")
 
