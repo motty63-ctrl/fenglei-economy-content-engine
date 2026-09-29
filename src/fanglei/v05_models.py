@@ -1,6 +1,8 @@
 """Typed V0.5 narration, alignment, timeline, and renderer contracts."""
 from __future__ import annotations
 
+from datetime import datetime
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,9 +26,15 @@ class NarrationSentence(StrictModel):
     sentence_id: str
     original_text: str
     narration_text: str
+    tts_spoken_text: str | None = None
     normalization_reason: str
     normalizations: list[NarrationNormalization] = Field(default_factory=list)
     pause_after_ms: int = Field(default=0, ge=0)
+
+    @property
+    def spoken_text(self) -> str:
+        """Return provider-bound speech text, falling back for legacy 5.0 artifacts."""
+        return self.tts_spoken_text if self.tts_spoken_text is not None else self.narration_text
 
 
 class SemanticValidation(StrictModel):
@@ -37,12 +45,21 @@ class SemanticValidation(StrictModel):
 
 
 class NarrationDocument(StrictModel):
-    schema_version: Literal["5.0"] = "5.0"
+    schema_version: Literal["5.0", "5.1"] = "5.0"
     run_id: str
     script_id: str
     language: str = "zh-CN"
     sentences: list[NarrationSentence] = Field(min_length=1)
     semantic_validation: SemanticValidation
+
+    @model_validator(mode="after")
+    def require_explicit_spoken_text_in_v51(self) -> "NarrationDocument":
+        if self.schema_version == "5.1" and any(
+            row.tts_spoken_text is None or row.narration_text != row.original_text
+            for row in self.sentences
+        ):
+            raise ValueError("NARRATION_V51_REQUIRES_DISPLAY_AND_TTS_TEXT")
+        return self
 
 
 ProviderType = Literal["fake", "real"]
@@ -122,16 +139,49 @@ class AudioQualityDocument(StrictModel):
 
 
 class VoiceReviewDocument(StrictModel):
-    schema_version: Literal["5.1"] = "5.1"
+    schema_version: Literal["5.1", "5.2"] = "5.1"
     run_id: str
     audio_sha256: str
-    status: Literal["approved", "test_only"]
+    script_sha256: str | None = None
+    status: Literal["approved", "test_only", "changes_required"]
     reviewer: str
     reviewed_at: str
     voice_approved: bool
     rate_approved: bool
     pauses_approved: bool
     number_pronunciation_approved: bool
+    reason_code: str | None = None
+    findings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_v52_human_review(self) -> "VoiceReviewDocument":
+        if self.schema_version == "5.1" and self.status == "changes_required":
+            raise ValueError("CHANGES_REQUIRED_REVIEW_REQUIRES_SCHEMA_5_2")
+        if self.schema_version == "5.2":
+            if not self.script_sha256 or not re.fullmatch(r"[0-9a-f]{64}", self.script_sha256):
+                raise ValueError("VOICE_REVIEW_SCRIPT_HASH_REQUIRED")
+            if not self.reviewer.strip():
+                raise ValueError("VOICE_REVIEWER_REQUIRED")
+            try:
+                reviewed = datetime.fromisoformat(self.reviewed_at)
+            except ValueError as error:
+                raise ValueError("VOICE_REVIEW_TIMESTAMP_INVALID") from error
+            if reviewed.tzinfo is None or reviewed.utcoffset() is None:
+                raise ValueError("VOICE_REVIEW_TIMESTAMP_MUST_BE_TIMEZONE_AWARE")
+            if self.status == "changes_required":
+                if not self.reason_code or not self.reason_code.strip():
+                    raise ValueError("VOICE_REVIEW_REASON_REQUIRED")
+                if not self.findings or any(not item.strip() for item in self.findings):
+                    raise ValueError("VOICE_REVIEW_FINDINGS_REQUIRED")
+                if all((self.voice_approved, self.rate_approved, self.pauses_approved,
+                        self.number_pronunciation_approved)):
+                    raise ValueError("CHANGES_REQUIRED_REVIEW_MUST_REJECT_A_CHECK")
+            elif self.status == "approved" and not all((
+                self.voice_approved, self.rate_approved, self.pauses_approved,
+                self.number_pronunciation_approved,
+            )):
+                raise ValueError("VOICE_REVIEW_CHECKS_INCOMPLETE")
+        return self
 
 
 class AlignedSentence(StrictModel):

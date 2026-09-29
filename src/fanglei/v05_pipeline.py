@@ -5,10 +5,14 @@ from pathlib import Path
 
 from fanglei.audio_alignment import align_audio
 from fanglei.audio_generation import generate_audio
-from fanglei.narration_normalization import normalize_script, render_narration_text
+from fanglei.narration_normalization import (
+    normalize_script,
+    render_tts_text,
+)
 from fanglei.nikola_adapter import build_nikola_project
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
+from fanglei.artifacts import sha256_bytes
 from fanglei.providers.alignment import AlignmentProvider
 from fanglei.providers.narration import NarrationProvider
 from fanglei.render_preflight import RendererProbe, run_render_preflight
@@ -17,13 +21,37 @@ from fanglei.v05_models import (
     AlignmentDocument, AudioMetadata, NarrationDocument, NarrationSynthesisConfig,
     TimelineDocument, VoiceReviewDocument,
 )
-from fanglei.voice_review import approve_voice
+from fanglei.voice_review import approve_voice, record_voice_review
 
 
 V05_STAGES = (
     "narration_generation", "audio_generation", "audio_alignment", "timeline_compilation",
     "nikola_adaptation", "render_preflight",
 )
+
+
+def _write_narration_artifacts(run_id: str, registry, *, force: bool) -> None:
+    registry.validate("script.json")
+    script = registry.read_json("script.json")
+    document = normalize_script(
+        script, run_id, language=script.get("target_language") or "zh-CN",
+    )
+    registry.write_json("narration.json", document.model_dump(mode="json"),
+                        "narration_generation", force=force)
+    registry.write_text("narration.txt", render_tts_text(document),
+                        "narration_generation", force=force)
+
+
+def run_narration_generation(run_id: str, runs_dir: Path, *, force: bool = False) -> Path:
+    """Run only the formal narration owner, without requiring visual/downstream artifacts."""
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+
+    def stage() -> None:
+        _write_narration_artifacts(run_id, registry, force=force)
+
+    _execute(manifest, registry, "narration_generation", stage, force)
+    return run_dir / "narration.json"
 
 
 def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationProvider,
@@ -43,11 +71,9 @@ def run_v05_pipeline(run_id: str, runs_dir: Path, narration_provider: NarrationP
     registry.validate("storyboard.json")
 
     def narration_stage() -> None:
-        document = normalize_script(registry.read_json("script.json"), run_id)
-        registry.write_json("narration.json", document.model_dump(mode="json"),
-                            "narration_generation", force=force_stage == "narration_generation")
-        registry.write_text("narration.txt", render_narration_text(document),
-                            "narration_generation", force=force_stage == "narration_generation")
+        _write_narration_artifacts(
+            run_id, registry, force=force_stage == "narration_generation",
+        )
 
     _execute(manifest, registry, "narration_generation", narration_stage,
              force_stage == "narration_generation")
@@ -263,6 +289,7 @@ def approve_voice_run(run_id: str, runs_dir: Path, *, reviewer: str,
     """Persist human approval for the current real, quality-passing audio hash."""
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
     manifest, registry = _load(run_dir)
+    registry.validate("script.json")
     registry.validate("audio/narration.wav")
     audio = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
     quality = registry.read_json("audio/quality.json")
@@ -272,9 +299,57 @@ def approve_voice_run(run_id: str, runs_dir: Path, *, reviewer: str,
         raise ValueError("AUDIO_QUALITY_HASH_MISMATCH")
     review = approve_voice(run_id, audio.sha256, reviewer=reviewer, voice=voice,
                            rate=rate, pauses=pauses,
-                           number_pronunciation=number_pronunciation)
+                           number_pronunciation=number_pronunciation,
+                           script_sha256=manifest.artifacts["script.json"].content_hash)
     registry.write_json("audio/review.json", review.model_dump(mode="json"),
                         "voice_review", force=True)
     manifest.status = "voice_approved"
     registry.save_manifest()
     return run_dir
+
+
+def record_voice_review_run(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    reviewer: str,
+    status: str,
+    reason_code: str | None = None,
+    findings: list[str] | None = None,
+    voice: bool,
+    rate: bool,
+    pauses: bool,
+    number_pronunciation: bool,
+) -> Path:
+    """Persist a human audio decision through the registered voice-review owner."""
+    if status not in {"approved", "changes_required"}:
+        raise ValueError("VOICE_REVIEW_STATUS_INVALID")
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest, registry = _load(run_dir)
+    registry.validate("script.json")
+    registry.validate("audio/narration.wav")
+    audio = AudioMetadata.model_validate(registry.read_json("audio/metadata.json"))
+    quality = registry.read_json("audio/quality.json")
+    actual_sha = sha256_bytes((run_dir / audio.path).read_bytes())
+    if actual_sha != audio.sha256:
+        raise ValueError("AUDIO_METADATA_HASH_MISMATCH")
+    if audio.provider_type != "real" or not quality.get("production_eligible"):
+        raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
+    if quality.get("audio_sha256") != actual_sha:
+        raise ValueError("AUDIO_QUALITY_HASH_MISMATCH")
+    script_sha = manifest.artifacts["script.json"].content_hash
+    if not script_sha:
+        raise ValueError("SCRIPT_HASH_REQUIRED_FOR_AUDIO_REVIEW")
+    review = record_voice_review(
+        run_id, actual_sha, reviewer=reviewer, status=status,
+        script_sha256=script_sha, voice=voice, rate=rate, pauses=pauses,
+        number_pronunciation=number_pronunciation, reason_code=reason_code,
+        findings=findings,
+    )
+    registry.write_json("audio/review.json", review.model_dump(mode="json"),
+                        "voice_review", force=True)
+    manifest.status = (
+        "voice_approved" if status == "approved" else "voice_review_changes_required"
+    )
+    registry.save_manifest()
+    return run_dir / "audio" / "review.json"

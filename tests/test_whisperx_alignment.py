@@ -58,7 +58,7 @@ def test_candidate_keeps_reference_text_and_measured_boundary(tmp_path) -> None:
         model_revision="fixture-r1",
     ).align(request)
     assert [row.sentence_id for row in result.sentences] == ["sentence_001", "sentence_002"]
-    assert result.sentences[0].text == request.narration.sentences[0].narration_text
+    assert result.sentences[0].text == request.narration.sentences[0].spoken_text
     assert (result.sentences[0].start_ms, result.sentences[0].end_ms) == (120, 3180)
     assert result.sentences[0].confidence_source == "ctc_acoustic_score"
     assert result.sentences[0].audio_sha256 == "a" * 64

@@ -8,9 +8,11 @@ from fanglei.providers.alignment import FakeAlignmentProvider
 from fanglei.providers.narration import FakeNarrationProvider
 from fanglei.render_preflight import FakeRendererProbe
 from fanglei.v05_pipeline import (
-    run_nikola_adaptation, run_timeline_compilation, run_v05_pipeline,
+    run_narration_generation, run_nikola_adaptation, run_timeline_compilation, run_v05_pipeline,
 )
-from fanglei.v05_pipeline import run_voice_generation, approve_voice_run
+from fanglei.v05_pipeline import (
+    approve_voice_run, record_voice_review_run, run_voice_generation,
+)
 from fanglei.v05_models import NarrationSynthesisConfig
 from tests.test_visual_pipeline import _visual_ready_run
 from fanglei.providers.visual import DeterministicVisualPlanningProvider
@@ -47,6 +49,20 @@ def test_fake_pipeline_writes_every_v05_artifact_and_no_final_mp4(tmp_path) -> N
     audio = json.loads((run / "audio" / "metadata.json").read_text(encoding="utf-8"))
     assert timeline["audio"]["duration_ms"] == audio["duration_ms"]
     assert timeline["validation"]["forced_to_estimate"] is False
+
+
+def test_narration_owner_can_rebuild_without_storyboard_or_downstream_stages(tmp_path) -> None:
+    run = _visual_ready_run(tmp_path)
+    assert not (run / "storyboard.json").exists()
+
+    narration_path = run_narration_generation(run.name, tmp_path)
+
+    assert narration_path == run / "narration.json"
+    assert (run / "narration.json").is_file()
+    assert (run / "narration.txt").is_file()
+    assert not (run / "storyboard.json").exists()
+    assert not (run / "audio" / "narration.wav").exists()
+    assert _manifest(run)["artifacts"]["narration.json"]["status"] == "valid"
 
 
 def test_pipeline_reuses_valid_stages_by_default(tmp_path) -> None:
@@ -269,3 +285,59 @@ def test_audio_regeneration_invalidates_approved_hash(tmp_path) -> None:
     after = _manifest(run)
     assert after["artifacts"]["audio/review.json"]["status"] == "stale"
     assert after["status"] == "voice_review_pending"
+
+
+def test_changes_required_audio_review_is_formally_recorded_and_not_approved(tmp_path):
+    import io
+    import struct
+    import wave
+    from fanglei.artifacts import sha256_bytes
+    from fanglei.providers.narration import NarrationAudioResult
+    from fanglei.voice_review import validate_voice_approval
+    from fanglei.v05_models import AudioMetadata, VoiceReviewDocument
+    from fanglei.audio_alignment import run_proportional_sentence_timing
+
+    class RealMock(FakeNarrationProvider):
+        name = "real_mock"
+        model = "mock"
+        provider_type = "real"
+
+        def synthesize(self, request, config):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as stream:
+                stream.setnchannels(1)
+                stream.setsampwidth(2)
+                stream.setframerate(24000)
+                stream.writeframes(struct.pack("<h", 7000) * 24000)
+            return NarrationAudioResult(audio_bytes=output.getvalue())
+
+    run = _ready(tmp_path)
+    run_v05_pipeline(run.name, tmp_path, FakeNarrationProvider(), FakeAlignmentProvider(),
+                     FakeRendererProbe(), stop_after="narration_generation")
+    run_voice_generation(run.name, tmp_path, RealMock(),
+                         NarrationSynthesisConfig(voice_id="voice"))
+    script_sha = _manifest(run)["artifacts"]["script.json"]["content_hash"]
+
+    review_path = record_voice_review_run(
+        run.name, tmp_path, reviewer="motty63-ctrl", status="changes_required",
+        reason_code="numeric_pronunciation",
+        findings=["16.2万 was spoken digit by digit"],
+        voice=True, rate=True, pauses=True, number_pronunciation=False,
+    )
+
+    manifest = _manifest(run)
+    review = VoiceReviewDocument.model_validate_json(review_path.read_text(encoding="utf-8"))
+    audio = AudioMetadata.model_validate_json(
+        (run / "audio" / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert review_path == run / "audio" / "review.json"
+    assert review.status == "changes_required"
+    assert review.script_sha256 == script_sha
+    assert review.audio_sha256 == audio.sha256 == sha256_bytes((run / audio.path).read_bytes())
+    assert manifest["artifacts"]["audio/review.json"]["status"] == "valid"
+    assert manifest["status"] == "voice_review_changes_required"
+    with pytest.raises(ValueError, match="VOICE_APPROVAL_STALE"):
+        validate_voice_approval(review, audio.sha256)
+    with pytest.raises(ValueError, match="VOICE_APPROVAL_STALE"):
+        run_proportional_sentence_timing(run.name, tmp_path)
+    assert not (run / "alignment.json").exists()

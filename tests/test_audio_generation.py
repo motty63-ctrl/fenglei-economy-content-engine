@@ -4,7 +4,7 @@ import wave
 import pytest
 
 from fanglei.audio_generation import generate_audio
-from fanglei.narration_normalization import normalize_script
+from fanglei.narration_normalization import normalize_script, render_tts_payload
 from fanglei.providers.narration import (
     FakeNarrationProvider,
     NarrationAudioResult,
@@ -33,6 +33,26 @@ def test_fake_provider_produces_canonical_audio_and_complete_metadata() -> None:
     assert metadata.sha256
     assert metadata.provider == "fake"
     assert metadata.voice_id == "fake-voice"
+
+
+def test_provider_receives_tts_spoken_form_not_display_text() -> None:
+    class CaptureProvider(FakeNarrationProvider):
+        def synthesize(self, request, config=None):
+            self.request = request
+            return super().synthesize(request, config)
+
+    document = normalize_script({
+        "script_id": "script_002",
+        "sentences": [{"sentence_id": "sentence_001", "text": "就业增加16.2万。"}],
+    }, "run", language="zh-CN")
+    provider = CaptureProvider()
+
+    generate_audio(document, provider, "fake-voice")
+
+    assert provider.request.narration_text == "就业增加十六点二万。"
+    assert provider.request.narration_text == render_tts_payload(document)
+    assert provider.request.sentences[0].original_text == "就业增加16.2万。"
+    assert provider.request.sentences[0].tts_spoken_text == "就业增加十六点二万。"
 
 
 class StereoProvider(FakeNarrationProvider):
