@@ -1,8 +1,8 @@
 # BLS Case 2 — Audio Review
 
-**CURRENT AUDIO CANDIDATE 2 — HUMAN AUDIO REVIEW = PENDING**
+**CURRENT AUDIO CANDIDATE 2 — HUMAN AUDIO REVIEW = APPROVED_FOR_STORYBOARD**
 
-Candidate 2 由原获批 Script 经通用 zh-CN spoken-number normalization 后生成。规范化只改变发给 TTS 的读音文本；Script、事实和屏幕显示文本均保持原样。技术 QA 通过不等于人工音频批准。当前唯一下一步是人工试听 Candidate 2 并明确记录决定。
+Candidate 2 由原获批 Script 经通用 zh-CN spoken-number normalization 后生成。规范化只改变发给 TTS 的读音文本；Script、事实和屏幕显示文本均保持原样。Reviewer `motty63-ctrl` 已明确批准当前 Candidate 2 进入 alignment、subtitle 和 Storyboard 阶段。该批准不授权最终视觉生成、Timeline 或 MP4。
 
 ## Current candidate — Audio Candidate 2
 
@@ -18,7 +18,10 @@ Candidate 2 由原获批 Script 经通用 zh-CN spoken-number normalization 后�
 - SHA-256：`36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`
 - Size / duration：2,816,628 bytes / 58.679 s (1,408,292 frames; 58.678833 s)
 - Format：WAV, signed 16-bit PCM, mono, 24,000 Hz
-- Run status：`voice_review_pending`; Candidate 2 has no approval artifact. `audio/review.json` is stale and refers to Candidate 1 only.
+- Run status：`voice_approved`; current `audio/review.json` is the registered Candidate 2 human review.
+- Human Audio Review：`approved_for_storyboard`; reviewer `motty63-ctrl`; reviewed at `2026-09-29T12:45:14+08:00`.
+- Human Audio Review artifact：`runs/2026-09-27-001-bls-august-2026-employment-situation/audio/review.json`, SHA-256 `32b319d02b77a1953feff58ff23084e81c18667575196e1ad5b4e023252bff1f`.
+- Approval binds Script SHA-256 `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305` and Candidate 2 audio SHA-256 `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`; the registered dependency chain also binds the approved narration and its language/provider metadata.
 
 ### Display text → exact TTS spoken text
 
@@ -51,11 +54,11 @@ These text pairs document the synthesis input; they do not prove acoustic pronun
 | Clipping | **PASS** — no samples at signed PCM extrema |
 | Silence diagnostic | Longest run below `-45 dBFS` was 440 ms using 20 ms frames; this is only a signal diagnostic, not a listening judgment. |
 | Script coverage / ordering | 12 sentences were submitted in order as one text payload; no per-sentence acoustic coverage proof or timing is available. |
-| Human listening | **PENDING** |
+| Human listening | **APPROVED_FOR_STORYBOARD** — reviewer confirmed the pronunciation, revisions, industry names, rate, pauses, and ending rhythm. |
 
-### Candidate 2 listening checklist
+### Human listening review — approved for Storyboard
 
-Please listen to the local Candidate 2 WAV and specifically check:
+The reviewer listened to the local Candidate 2 WAV and confirmed:
 
 1. `16.2万` sounds like **十六点二万**.
 2. `10美分` sounds like **十美分**.
@@ -67,7 +70,7 @@ Please listen to the local Candidate 2 WAV and specifically check:
 8. Industry values **五点九万、四点二万、二点三万** are accurate and clear.
 9. Overall voice, speed, pauses, industry names, ending rhythm, completeness at the beginning/end, and whether articulation sounds robotic or swallows words.
 
-Do not start alignment, subtitles, Storyboard, visuals, Timeline, or rendering until an explicit human audio decision is recorded.
+Alignment and subtitle preparation are complete. Storyboard generation is blocked because the current generic Storyboard owner does not consume approved audio, alignment, or subtitle artifacts; see [CASE_STATE.md](CASE_STATE.md). Human Storyboard Review remains a separate required gate. No final visual, Timeline, or MP4 work is authorized by the audio decision.
 
 ## Historical record — Audio Candidate 1 (CHANGES_REQUIRED)
 

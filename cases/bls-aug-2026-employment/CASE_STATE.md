@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3C.2B complete; Candidate 1 rejected for numeric pronunciation; Candidate 2 technical QA passed; HUMAN AUDIO REVIEW = PENDING for Candidate 2.**
+- Status: **Phase 3C.3 blocked at generic Storyboard input/timing contract. Candidate 2 is human-approved for Storyboard; proportional alignment and subtitles are current. No Storyboard has been generated.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 uses generic zh-CN spoken-number normalization and awaits human listening review. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). No alignment, subtitles, Storyboard, Timeline, or video has been generated for this BLS run.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles exist; Storyboard, Timeline, final visuals, and video do not.
 
 ## Locked research question
 
@@ -117,10 +117,18 @@ The combined audio is `runs/2026-09-27-001-bls-august-2026-employment-situation/
 
 [AUDIO_REVIEW.md](AUDIO_REVIEW.md) retains the first candidate's request details. Human review later recorded `CHANGES_REQUIRED / NUMERIC_PRONUNCIATION`; its WAV, metadata, quality, and formal review are preserved under `runs/2026-09-27-001-bls-august-2026-employment-situation/artifacts/audit/audio-candidate-1/`. Candidate 1 is not approved for downstream use.
 
-## Current Phase 3C.2B — Audio Candidate 2 awaiting human review
+## Historical Phase 3C.2B — Audio Candidate 2 generated
 
 The generic zh-CN spoken-number normalization implementation is committed at `8563f280581b548596126bff41507c65c685be3c`. It keeps Script/display text unchanged and creates auditable provider-bound spoken text; the code contains no BLS- or value-specific production branch. Focused tests passed **97**; safe non-integration regression passed **858**.
 
-One authorized Volcengine `volcengine-v3-sse` request generated the current canonical WAV with the same approved Script, voice, language, rate, pitch, and volume. Candidate 2 SHA-256 is `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`; it is mono PCM16 WAV at 24 kHz, 2,816,628 bytes, duration 58.679 seconds. Registry/hash validation and the existing production audio-quality gate pass. The Script SHA (`450c61b…d84305`) and Human Script Approval SHA (`86534156…e3c59f`) are unchanged. Run status is `voice_review_pending`; `audio/review.json` is stale and remains bound to Candidate 1, not Candidate 2.
+One authorized Volcengine `volcengine-v3-sse` request generated the canonical WAV with the same approved Script, voice, language, rate, pitch, and volume. Candidate 2 SHA-256 is `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`; it is mono PCM16 WAV at 24 kHz, 2,816,628 bytes, duration 58.679 seconds. Registry/hash validation and the existing production audio-quality gate pass. The Script SHA (`450c61b…d84305`) and Human Script Approval SHA (`86534156…e3c59f`) were unchanged. This section records the state before the subsequent human approval.
 
-**Exact next action: human listening review of Candidate 2 using [AUDIO_REVIEW.md](AUDIO_REVIEW.md).** No Candidate 2 audio approval exists. Alignment, subtitles, Storyboard, visual planning, Timeline, and MP4 remain unstarted for this BLS run. Do not proceed until the human review is explicit.
+## Current Phase 3C.3 — audio approved; Storyboard blocked
+
+Reviewer `motty63-ctrl` approved Candidate 2 for Storyboard at `2026-09-29T12:45:14+08:00`. The formal registered review is `runs/2026-09-27-001-bls-august-2026-employment-situation/audio/review.json` (SHA-256 `32b319d02b77a1953feff58ff23084e81c18667575196e1ad5b4e023252bff1f`) and is bound to the current Script SHA `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305` and Candidate 2 audio SHA `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`.
+
+The existing local `run_proportional_sentence_timing(...)` owner produced `alignment.json` (SHA-256 `66744f918fe01dd2e726858ee132eca81701f56f55a404124deb85068d641306`). It covers all 12 canonical narration segments from 0 to 58,679 ms using proportional character-count estimates, with no missing IDs, overlap, or out-of-bounds timing. This is estimated sentence timing, not acoustic alignment. The existing subtitle owner produced `subtitle_track.json` (SHA-256 `58107e68f9f726e2bb0d3812a0db2b0f58240a07c656fc1c015aecfcd652ed46`) with 12 cues whose text matches the canonical Script/display text; TTS spoken-normalized text is excluded. Both artifacts and their dependency hashes are current.
+
+**Blocked status: `PHASE_3C3_BLOCKED_GENERALIZATION_GAP`.** The generic Storyboard path cannot consume the approved audio, alignment, or subtitle artifacts. `run_visual_pipeline()` sends only run ID, Script, and allowed claim IDs to the beat planner; its registered Storyboard dependencies are `visual_beats.json`, `script.json`, and `facts.json`. The current schema records estimated speech duration and relative scene windows, not audio-bound scene timing or subtitle links. It also does not pass the selected-angle and approved research-framing artifacts as Storyboard inputs. Generating through that path would not satisfy the approved Phase 3C.3 input contract.
+
+Exact next action: generalize the Storyboard request/owner and artifact dependencies to accept current approved Script, selected angle, eligible facts/research framing, approved audio identity, alignment, and subtitle cues; produce scene windows traceable to those timings; then add focused contract tests and rerun validation. Keep the change topic-neutral. No Storyboard, visual assets, Timeline, or MP4 has been created for this BLS run. Human Storyboard Review has not started.
