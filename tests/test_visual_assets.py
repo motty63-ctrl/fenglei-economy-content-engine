@@ -130,6 +130,8 @@ def test_visual_asset_bundle_preserves_scene_order_timing_claims_and_exact_copy(
 
     assert set(files) == {"manifest.json", "index.html", "scene_001.svg", "scene_002.svg"}
     manifest = json.loads(files["manifest.json"])
+    assert manifest["schema_version"] == "visual-assets/1.0"
+    assert "layout_profile" not in manifest["scenes"][0]
     assert manifest["run_id"] == RUN_ID
     assert manifest["case_id"] == "synthetic-retail-case"
     assert manifest["scene_count"] == 2
@@ -140,6 +142,7 @@ def test_visual_asset_bundle_preserves_scene_order_timing_claims_and_exact_copy(
     assert manifest["scenes"][1]["sentence_ids"] == ["retail_002"]
     assert manifest["scenes"][1]["claim_ids"] == ["claim_retail"]
     svg_root = ET.fromstring(files["scene_001.svg"])
+    assert "data-visual-profile" not in svg_root.attrib
     rendered_text = "".join(
         node.text or "" for node in svg_root.iter()
         if node.tag.endswith("text") or node.tag.endswith("tspan")

@@ -19,6 +19,11 @@ from fanglei.human_storyboard_recovery import (
     canonical_json_sha256,
     validate_human_storyboard_candidate,
 )
+from fanglei.human_visual_asset_recovery import (
+    HumanVisualAssetReviewV1,
+    VisualAssetRecoveryPlanV1,
+    validate_visual_asset_recovery_plan,
+)
 from fanglei.models import RunManifest
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
@@ -36,8 +41,13 @@ from fanglei.visual_timing import apply_alignment_derived_timing, build_timing_a
 VISUAL_STAGES = {
     "visual_planning", "storyboard_generation", "visual_plan_render",
     "human_storyboard_review", "human_storyboard_recovery", "human_storyboard_approval",
-    "visual_asset_generation",
+    "visual_asset_generation", "human_visual_asset_review", "visual_asset_recovery",
 }
+
+
+def _now() -> str:
+    """Return an ISO-8601 timestamp with the machine's current timezone."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _validate_storyboard_run_identity(
@@ -50,7 +60,12 @@ def _validate_storyboard_run_identity(
         raise ArtifactConflictError(f"STORYBOARD_RECOVERY_RUN_ID_MISMATCH:{artifact_name}")
 
 
-def _load_storyboard_approval_registry(run_id: str, runs_dir: Path):
+def _load_storyboard_approval_registry(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    visual_asset_recovery_mode: bool = False,
+):
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
     manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
     if manifest.run_id != run_id:
@@ -60,6 +75,7 @@ def _load_storyboard_approval_registry(run_id: str, runs_dir: Path):
         script_terminology_mode=True, human_script_recovery_mode=True,
         human_script_approval_mode=True, timing_aware_storyboard_mode=True,
         human_storyboard_recovery_mode=True, human_storyboard_approval_mode=True,
+        human_visual_asset_recovery_mode=visual_asset_recovery_mode,
     )
     if registry.imported_checkpoint_mode:
         raise ArtifactConflictError("STORYBOARD_APPROVAL_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
@@ -298,6 +314,169 @@ def generate_storyboard_visual_assets(run_id: str, runs_dir: Path) -> Path:
 
     _execute(manifest, registry, "visual_asset_generation", write_assets)
     registry.validate("visual_assets")
+    return target
+
+
+def record_human_visual_asset_review(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    expected_storyboard_sha256: str,
+    expected_visual_bundle_sha256: str,
+    reviewer: str,
+    decision: str,
+    reason_code: str,
+    rationale: str,
+    findings: list[str],
+) -> Path:
+    """Record the first human visual decision without replacing its reviewed bundle."""
+    if decision != "changes_required":
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_DECISION_NOT_SUPPORTED_IN_RECOVERY")
+    run_dir, manifest, registry = _load_storyboard_approval_registry(
+        run_id, runs_dir, visual_asset_recovery_mode=True,
+    )
+    if registry.imported_checkpoint_mode:
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
+    output_name = "human_visual_asset_review_candidate_1.json"
+    output_path = run_dir / output_name
+    output_state = manifest.artifacts[output_name]
+    if output_path.exists() or output_state.status != "missing":
+        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_1_REVIEW_ALREADY_EXISTS")
+
+    dependency_names = registry.graph[output_name][1]
+    try:
+        for name in dependency_names:
+            registry.validate(name)
+    except Exception as error:
+        raise ArtifactConflictError(f"VISUAL_ASSET_REVIEW_UPSTREAM_NOT_CURRENT:{error}") from error
+    candidate = Storyboard.model_validate(registry.read_json("human_storyboard_candidate.json"))
+    approval = HumanStoryboardApprovalV1.model_validate(
+        registry.read_json("human_storyboard_approval.json")
+    )
+    candidate_path = run_dir / "human_storyboard_candidate.json"
+    candidate_artifact_hash = sha256_bytes(candidate_path.read_bytes())
+    visual_bundle_hash = manifest.artifacts["visual_assets"].content_hash or ""
+    if (
+        candidate.run_id != run_id
+        or not approval.case_id.strip()
+        or candidate_artifact_hash != approval.candidate_artifact_sha256
+        or canonical_json_sha256(candidate) != approval.candidate_storyboard_sha256
+        or expected_storyboard_sha256 != canonical_json_sha256(candidate)
+        or expected_visual_bundle_sha256 != visual_bundle_hash
+        or approval.run_id != run_id
+    ):
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_EXPECTED_HASH_MISMATCH")
+    dependency_hashes = {
+        name: manifest.artifacts[name].content_hash or ""
+        for name in dependency_names
+    }
+    review = HumanVisualAssetReviewV1.model_validate({
+        "schema_version": "human-visual-asset-review/1.0",
+        "candidate_id": 1,
+        "decision": "changes_required",
+        "run_id": run_id,
+        "case_id": approval.case_id,
+        "reviewer": reviewer,
+        "reviewed_at": _now(),
+        "reason_code": reason_code,
+        "rationale": rationale,
+        "findings": findings,
+        "storyboard_sha256": canonical_json_sha256(candidate),
+        "storyboard_artifact_sha256": candidate_artifact_hash,
+        "storyboard_approval_sha256": manifest.artifacts["human_storyboard_approval.json"].content_hash,
+        "visual_bundle_sha256": visual_bundle_hash,
+        "dependency_hashes": dependency_hashes,
+    })
+
+    def write_review() -> None:
+        registry.write_json(output_name, review.model_dump(mode="json"), "human_visual_asset_review")
+
+    _execute(manifest, registry, "human_visual_asset_review", write_review)
+    registry.validate(output_name)
+    return output_path
+
+
+def recover_visual_asset_candidate(
+    run_id: str,
+    runs_dir: Path,
+    plan: VisualAssetRecoveryPlanV1,
+) -> Path:
+    """Write a new, pending-review visual candidate using presentation-only edits."""
+    run_dir, manifest, registry = _load_storyboard_approval_registry(
+        run_id, runs_dir, visual_asset_recovery_mode=True,
+    )
+    if registry.imported_checkpoint_mode:
+        raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
+    plan_path = run_dir / "visual_asset_recovery.json"
+    target = run_dir / "visual_assets_candidate_2"
+    if (
+        plan_path.exists() or target.exists()
+        or manifest.artifacts["visual_asset_recovery.json"].status != "missing"
+        or manifest.artifacts["visual_assets_candidate_2"].status != "missing"
+    ):
+        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_2_ALREADY_EXISTS")
+
+    dependency_names = registry.graph["visual_asset_recovery.json"][1]
+    try:
+        for name in dependency_names:
+            registry.validate(name)
+        registry.validate("sources.json")
+    except Exception as error:
+        raise ArtifactConflictError(f"VISUAL_ASSET_RECOVERY_UPSTREAM_NOT_CURRENT:{error}") from error
+    candidate = Storyboard.model_validate(registry.read_json("human_storyboard_candidate.json"))
+    approval = HumanStoryboardApprovalV1.model_validate(
+        registry.read_json("human_storyboard_approval.json")
+    )
+    review = HumanVisualAssetReviewV1.model_validate(
+        registry.read_json("human_visual_asset_review_candidate_1.json")
+    )
+    candidate_file_hash = sha256_bytes((run_dir / "human_storyboard_candidate.json").read_bytes())
+    if candidate_file_hash != approval.candidate_artifact_sha256:
+        raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_CANDIDATE_FILE_HASH_MISMATCH")
+    if (
+        canonical_json_sha256(candidate) != approval.candidate_storyboard_sha256
+        or candidate.run_id != run_id
+        or review.storyboard_approval_sha256 != manifest.artifacts["human_storyboard_approval.json"].content_hash
+    ):
+        raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_APPROVAL_BINDING_INVALID")
+    current_dependencies = {
+        name: manifest.artifacts[name].content_hash or ""
+        for name in dependency_names
+    }
+    sources = registry.read_json("sources.json")
+    approved_source_ids = {
+        row["source_id"] for row in sources.get("sources", [])
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    validate_visual_asset_recovery_plan(
+        candidate,
+        review,
+        plan,
+        current_visual_bundle_sha256=manifest.artifacts["visual_assets"].content_hash or "",
+        current_dependency_hashes=current_dependencies,
+        approved_source_ids=approved_source_ids,
+    )
+    if plan.storyboard_artifact_sha256 != candidate_file_hash:
+        raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_CANDIDATE_ARTIFACT_HASH_MISMATCH")
+    files = build_visual_asset_bundle(
+        candidate,
+        approval,
+        approval_artifact_sha256=manifest.artifacts["human_storyboard_approval.json"].content_hash or "",
+        recovery_plan=plan,
+    )
+
+    def write_recovery() -> None:
+        registry.write_json(
+            "visual_asset_recovery.json", plan.model_dump(mode="json"), "visual_asset_recovery",
+        )
+        registry.write_directory(
+            "visual_assets_candidate_2", files, "visual_asset_recovery",
+        )
+
+    _execute(manifest, registry, "visual_asset_recovery", write_recovery)
+    registry.validate("visual_assets")
+    registry.validate("visual_asset_recovery.json")
+    registry.validate("visual_assets_candidate_2")
     return target
 
 

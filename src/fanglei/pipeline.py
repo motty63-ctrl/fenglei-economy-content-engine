@@ -117,6 +117,8 @@ STAGE_ARTIFACT = {
     "human_storyboard_review": "storyboard_review.json",
     "human_storyboard_recovery": "human_storyboard_candidate.json",
     "human_storyboard_approval": "human_storyboard_approval.json",
+    "human_visual_asset_review": "human_visual_asset_review_candidate_1.json",
+    "visual_asset_recovery": "visual_asset_recovery.json",
     "visual_asset_generation": "visual_assets",
     "human_script_approval": "human_script_approval.json",
     "script_generation": "script.json",
@@ -137,6 +139,7 @@ STAGE_ARTIFACT = {
 
 STAGE_ARTIFACTS = {
     "human_storyboard_recovery": ("human_storyboard_edit.json", "human_storyboard_candidate.json"),
+    "visual_asset_recovery": ("visual_asset_recovery.json", "visual_assets_candidate_2"),
     "narration_generation": ("narration.json", "narration.txt"),
     "audio_generation": ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"),
     "voice_review": ("audio/review.json",),

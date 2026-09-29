@@ -230,6 +230,31 @@ def _human_storyboard_approval_graph(
     )
     return graph
 
+
+def _human_visual_asset_recovery_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Keep each reviewed visual candidate immutable and recover into a new artifact."""
+    graph = dict(base_graph)
+    review_dependencies = (
+        "visual_assets", "human_storyboard_approval.json", "human_storyboard_candidate.json",
+    )
+    graph["human_visual_asset_review_candidate_1.json"] = (
+        "human_visual_asset_review", review_dependencies,
+    )
+    recovery_dependencies = (
+        "human_visual_asset_review_candidate_1.json", "visual_assets",
+        "human_storyboard_approval.json", "human_storyboard_candidate.json",
+    )
+    graph["visual_asset_recovery.json"] = (
+        "visual_asset_recovery", recovery_dependencies,
+    )
+    graph["visual_assets_candidate_2"] = (
+        "visual_asset_recovery",
+        ("visual_asset_recovery.json", "human_visual_asset_review_candidate_1.json", "visual_assets"),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -295,6 +320,7 @@ class ArtifactRegistry:
         timing_aware_storyboard_mode: bool | None = None,
         human_storyboard_recovery_mode: bool = False,
         human_storyboard_approval_mode: bool = False,
+        human_visual_asset_recovery_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -372,6 +398,17 @@ class ArtifactRegistry:
                 self.graph = _human_storyboard_approval_graph(self.graph)
             elif storyboard_approval_enabled:
                 raise ArtifactConflictError("STORYBOARD_APPROVAL_REQUIRES_RECOVERED_CANDIDATE")
+            visual_asset_recovery_enabled = human_visual_asset_recovery_mode or any(
+                (self.run_dir / name).exists() or name in manifest.artifacts
+                for name in (
+                    "human_visual_asset_review_candidate_1.json", "visual_asset_recovery.json",
+                    "visual_assets_candidate_2",
+                )
+            )
+            if visual_asset_recovery_enabled:
+                if not storyboard_approval_enabled:
+                    raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_REQUIRES_STORYBOARD_APPROVAL")
+                self.graph = _human_visual_asset_recovery_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
