@@ -178,6 +178,42 @@ def _timing_aware_visual_graph(
         )))))
     return graph
 
+
+def _human_storyboard_recovery_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Register a pending human-edited candidate while preserving storyboard.json."""
+    graph = dict(base_graph)
+    storyboard_inputs = tuple(dict.fromkeys((
+        "storyboard.json", *graph["storyboard.json"][1],
+    )))
+    review_dependencies = tuple(
+        name for name in storyboard_inputs if name in graph
+    )
+    graph["storyboard_review.json"] = ("human_storyboard_review", review_dependencies)
+    graph["human_storyboard_edit.json"] = (
+        "human_storyboard_recovery",
+        tuple(dict.fromkeys(("storyboard_review.json", *review_dependencies))),
+    )
+    graph["human_storyboard_candidate.json"] = (
+        "human_storyboard_recovery",
+        tuple(dict.fromkeys((
+            "storyboard.json", "storyboard_review.json", "human_storyboard_edit.json",
+            *graph["storyboard.json"][1],
+        ))),
+    )
+
+    graph["visual_plan.md"] = ("visual_plan_render", ("human_storyboard_candidate.json",))
+    for name in ("timeline.json", "renderer_project", "render_manifest.json", "renderer_project_v1b"):
+        if name in graph:
+            owner, dependencies = graph[name]
+            graph[name] = (
+                owner,
+                tuple("human_storyboard_candidate.json" if dep == "storyboard.json" else dep
+                      for dep in dependencies),
+            )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -241,6 +277,7 @@ class ArtifactRegistry:
         human_script_recovery_mode: bool = False,
         human_script_approval_mode: bool = False,
         timing_aware_storyboard_mode: bool | None = None,
+        human_storyboard_recovery_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -301,6 +338,15 @@ class ArtifactRegistry:
                 if not selection_enabled:
                     raise ArtifactConflictError("TIMING_AWARE_STORYBOARD_REQUIRES_HUMAN_ANGLE_SELECTION")
                 self.graph = _timing_aware_visual_graph(self.graph)
+            storyboard_recovery_enabled = human_storyboard_recovery_mode or any(
+                (self.run_dir / name).is_file() or name in manifest.artifacts
+                for name in (
+                    "storyboard_review.json", "human_storyboard_edit.json",
+                    "human_storyboard_candidate.json",
+                )
+            )
+            if storyboard_recovery_enabled:
+                self.graph = _human_storyboard_recovery_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
@@ -317,6 +363,19 @@ class ArtifactRegistry:
                 state = self.manifest.artifacts[name]
                 expected_dependencies = set(self.graph[name][1])
                 if state.status == "valid" and not expected_dependencies.issubset(state.dependencies):
+                    state.status = "stale"
+                    state.updated_at = _now()
+                    self._invalidate_descendants(name)
+        if not self.imported_checkpoint_mode and storyboard_recovery_enabled:
+            for name in (
+                "visual_plan.md", "timeline.json", "renderer_project", "render_manifest.json",
+                "renderer_project_v1b", "render_manifest_v1b.json",
+            ):
+                state = self.manifest.artifacts.get(name)
+                if state is None or state.status != "valid" or name not in self.graph:
+                    continue
+                expected_dependencies = set(self.graph[name][1])
+                if not expected_dependencies.issubset(state.dependencies):
                     state.status = "stale"
                     state.updated_at = _now()
                     self._invalidate_descendants(name)
@@ -455,6 +514,15 @@ class ArtifactRegistry:
         return read_json(path)
 
     def validate(self, name: str) -> None:
+        """Validate an artifact and its dependency DAG without repeated traversal."""
+        self._validate_recursive(name, validated=set(), visiting=set())
+
+    def _validate_recursive(self, name: str, *, validated: set[str], visiting: set[str]) -> None:
+        if name in validated:
+            return
+        if name in visiting:
+            raise ArtifactConflictError(f"Artifact dependency cycle detected: {name}")
+        visiting.add(name)
         state = self._state(name)
         if state.status != "valid":
             raise ArtifactConflictError(f"Artifact {name} is {state.status}")
@@ -496,8 +564,14 @@ class ArtifactRegistry:
                         self._invalidate_descendants(name)
                         raise ArtifactConflictError(f"source document changed or missing: {asset.get('path')}")
         for dependency, recorded_hash in state.dependencies.items():
+            if dependency in validated:
+                if self._state(dependency).content_hash != recorded_hash:
+                    state.status = "stale"
+                    self._invalidate_descendants(name)
+                    raise ArtifactConflictError(f"Artifact {name} dependency hash changed: {dependency}")
+                continue
             try:
-                self.validate(dependency)
+                self._validate_recursive(dependency, validated=validated, visiting=visiting)
             except ArtifactConflictError as error:
                 state.status = "stale"
                 self._invalidate_descendants(name)
@@ -506,6 +580,8 @@ class ArtifactRegistry:
                 state.status = "stale"
                 self._invalidate_descendants(name)
                 raise ArtifactConflictError(f"Artifact {name} dependency hash changed: {dependency}")
+        visiting.remove(name)
+        validated.add(name)
 
     def save_manifest(self) -> None:
         self.manifest.updated_at = _now()

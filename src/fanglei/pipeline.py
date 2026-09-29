@@ -114,6 +114,8 @@ STAGE_ARTIFACT = {
     "angle_selection": "angle.md",
     "human_angle_selection": "angle_selection.json",
     "human_script_recovery": "human_script_edit.json",
+    "human_storyboard_review": "storyboard_review.json",
+    "human_storyboard_recovery": "human_storyboard_candidate.json",
     "human_script_approval": "human_script_approval.json",
     "script_generation": "script.json",
     "script_render": "script.md",
@@ -132,6 +134,7 @@ STAGE_ARTIFACT = {
 }
 
 STAGE_ARTIFACTS = {
+    "human_storyboard_recovery": ("human_storyboard_edit.json", "human_storyboard_candidate.json"),
     "narration_generation": ("narration.json", "narration.txt"),
     "audio_generation": ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"),
     "voice_review": ("audio/review.json",),
