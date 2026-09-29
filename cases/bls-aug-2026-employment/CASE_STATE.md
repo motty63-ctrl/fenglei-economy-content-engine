@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3A human review approved for Angle Planning only; five eligible Phase 3B.2 candidates generated; `angle_001` explicitly selected; Phase 3C.1.3 terminology decisions recorded (40 approved, 6 numeric entries rejected as non-terminology, 0 pending); the formal map is current; a human-edited Script candidate passed formal lint and is waiting for separate human Script review.**
+- Status: **Phase 3C.2A TTS generated; technical audio QA passed; HUMAN AUDIO REVIEW = PENDING.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates have been generated and `angle_001` was human-selected. The formal terminology map is current. A valid, lint-passed human-edited Script candidate is registered; no audio, storyboard, timeline, or video has been generated for this run.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS. The canonical narration and Volcengine audio are current; see [AUDIO_REVIEW.md](AUDIO_REVIEW.md). No alignment, subtitles, Storyboard, Timeline, or video has been generated for this BLS run.
 
 ## Locked research question
 
@@ -100,10 +100,19 @@ The 46-entry review in [TERMINOLOGY_REVIEW.md](TERMINOLOGY_REVIEW.md) records **
 
 At that checkpoint, terminology/selection/script-quality focused validation passed **103 tests** and the safe non-integration regression passed **796 tests**. The checks used offline/local fixtures. The next action recorded then was superseded by the human-script recovery below.
 
-## Current Phase 3C.1.5 — human-edited Script candidate awaiting review
+## Historical Phase 3C.1.5 — human-edited Script candidate before approval
 
 The formal `submit_human_script_recovery(...)` owner accepted the exact human-provided Chinese candidate, after only structurally splitting its final long sentence into two adjacent segments whose concatenation preserves the supplied wording. The owner validated upstream artifact freshness, selected-angle identity, approved terminology, claim bindings, and the full script lint before writing any output. The edit is recorded in `runs/2026-09-27-001-bls-august-2026-employment-situation/human_script_edit.json`; rendered artifacts are `script.json` and `script.md`. No Facts, Research, angle, source package, or terminology decision was changed, and no provider was called.
 
 The candidate references `claim_063`–`claim_071`, passes script lint, and has an estimated duration of **65.0 seconds** against a 75-second editorial target. The only lint finding is the non-blocking `DURATION_TARGET_MISSED` warning; the estimate remains within the configured 60–90 second hard range. The candidate's canonical draft SHA-256 is `2d27970c364bf2066896973b6e6322d89b4c35c55bbface7cd23dc78ba47aa75`; `script.json` SHA-256 is `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305`. The review packet is [SCRIPT_REVIEW.md](SCRIPT_REVIEW.md).
 
 The human edit and rendered Script are registered/current against the existing Facts, Research, angle selection, and terminology artifacts. `script.json` records `human_review_status=pending`; lint success is not script approval. **Exact next action: human review of `SCRIPT_REVIEW.md` and the candidate Script.** Do not call TTS, create audio approval, storyboard, timeline, or video until a separate explicit authorization is provided.
+
+
+## Current Phase 3C.2A — generated audio awaiting human review
+
+The human-approved Script remains unchanged at SHA-256 `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305`; its formal `approved_for_tts` record is SHA-256 `8653415689546d56295f857722840de61f14d26515d836f077a1a13818e3c59f`. The canonical `narration.json` and `narration.txt` remain current and unchanged. One production TTS request to the configured Volcengine endpoint succeeded after the prior local Windows socket-permission failure was diagnosed; no provider request ID was returned or recorded.
+
+The combined audio is `runs/2026-09-27-001-bls-august-2026-employment-situation/audio/narration.wav`, SHA-256 `54b112a49a3e9d8dba484067ee2deaffa3aa043cb20ea0c9e58546a0b0a9af6a`, 2,949,538 bytes, mono PCM 16-bit WAV at 24 kHz, measured duration 61.448 seconds. The technical quality artifact passed its existing checks. The narration contains 12 canonical segments submitted in order in one combined request; the provider supplied no per-segment timing. The duration is about 3.552 seconds shorter than the Script estimate of 65.0 seconds. This is a listening caution, not a reason to edit or time-stretch the approved Script/audio.
+
+[AUDIO_REVIEW.md](AUDIO_REVIEW.md) contains the segment-by-segment text and required listening checklist. **HUMAN AUDIO REVIEW = PENDING.** The WAV remains human-reviewable at the local run path. No alignment, subtitles, Storyboard, visual planning, Timeline, MP4, or audio approval artifact has been created. Do not begin those stages before the audio decision.
