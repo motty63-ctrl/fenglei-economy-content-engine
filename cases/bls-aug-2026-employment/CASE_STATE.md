@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3C.2A TTS generated; technical audio QA passed; HUMAN AUDIO REVIEW = PENDING.**
+- Status: **Phase 3C.2B complete; Candidate 1 rejected for numeric pronunciation; Candidate 2 technical QA passed; HUMAN AUDIO REVIEW = PENDING for Candidate 2.**
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS. The canonical narration and Volcengine audio are current; see [AUDIO_REVIEW.md](AUDIO_REVIEW.md). No alignment, subtitles, Storyboard, Timeline, or video has been generated for this BLS run.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 uses generic zh-CN spoken-number normalization and awaits human listening review. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). No alignment, subtitles, Storyboard, Timeline, or video has been generated for this BLS run.
 
 ## Locked research question
 
@@ -109,10 +109,18 @@ The candidate references `claim_063`–`claim_071`, passes script lint, and has 
 The human edit and rendered Script are registered/current against the existing Facts, Research, angle selection, and terminology artifacts. `script.json` records `human_review_status=pending`; lint success is not script approval. **Exact next action: human review of `SCRIPT_REVIEW.md` and the candidate Script.** Do not call TTS, create audio approval, storyboard, timeline, or video until a separate explicit authorization is provided.
 
 
-## Current Phase 3C.2A — generated audio awaiting human review
+## Historical Phase 3C.2A — Audio Candidate 1
 
 The human-approved Script remains unchanged at SHA-256 `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305`; its formal `approved_for_tts` record is SHA-256 `8653415689546d56295f857722840de61f14d26515d836f077a1a13818e3c59f`. The canonical `narration.json` and `narration.txt` remain current and unchanged. One production TTS request to the configured Volcengine endpoint succeeded after the prior local Windows socket-permission failure was diagnosed; no provider request ID was returned or recorded.
 
 The combined audio is `runs/2026-09-27-001-bls-august-2026-employment-situation/audio/narration.wav`, SHA-256 `54b112a49a3e9d8dba484067ee2deaffa3aa043cb20ea0c9e58546a0b0a9af6a`, 2,949,538 bytes, mono PCM 16-bit WAV at 24 kHz, measured duration 61.448 seconds. The technical quality artifact passed its existing checks. The narration contains 12 canonical segments submitted in order in one combined request; the provider supplied no per-segment timing. The duration is about 3.552 seconds shorter than the Script estimate of 65.0 seconds. This is a listening caution, not a reason to edit or time-stretch the approved Script/audio.
 
-[AUDIO_REVIEW.md](AUDIO_REVIEW.md) contains the segment-by-segment text and required listening checklist. **HUMAN AUDIO REVIEW = PENDING.** The WAV remains human-reviewable at the local run path. No alignment, subtitles, Storyboard, visual planning, Timeline, MP4, or audio approval artifact has been created. Do not begin those stages before the audio decision.
+[AUDIO_REVIEW.md](AUDIO_REVIEW.md) retains the first candidate's request details. Human review later recorded `CHANGES_REQUIRED / NUMERIC_PRONUNCIATION`; its WAV, metadata, quality, and formal review are preserved under `runs/2026-09-27-001-bls-august-2026-employment-situation/artifacts/audit/audio-candidate-1/`. Candidate 1 is not approved for downstream use.
+
+## Current Phase 3C.2B — Audio Candidate 2 awaiting human review
+
+The generic zh-CN spoken-number normalization implementation is committed at `8563f280581b548596126bff41507c65c685be3c`. It keeps Script/display text unchanged and creates auditable provider-bound spoken text; the code contains no BLS- or value-specific production branch. Focused tests passed **97**; safe non-integration regression passed **858**.
+
+One authorized Volcengine `volcengine-v3-sse` request generated the current canonical WAV with the same approved Script, voice, language, rate, pitch, and volume. Candidate 2 SHA-256 is `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`; it is mono PCM16 WAV at 24 kHz, 2,816,628 bytes, duration 58.679 seconds. Registry/hash validation and the existing production audio-quality gate pass. The Script SHA (`450c61b…d84305`) and Human Script Approval SHA (`86534156…e3c59f`) are unchanged. Run status is `voice_review_pending`; `audio/review.json` is stale and remains bound to Candidate 1, not Candidate 2.
+
+**Exact next action: human listening review of Candidate 2 using [AUDIO_REVIEW.md](AUDIO_REVIEW.md).** No Candidate 2 audio approval exists. Alignment, subtitles, Storyboard, visual planning, Timeline, and MP4 remain unstarted for this BLS run. Do not proceed until the human review is explicit.

@@ -5,9 +5,10 @@
 - V0.1.0 remains frozen and publicly available. Its Release and Fed Case 2 video are unchanged.
 - V0.2 development continues on `v0.2/generalize-video-workflow`.
 - Phases 1A, 1B, 1C, 2A, 2B, 3A.1, 3A.2, 3B.1, 3B.2, and 3C.1.2–3C.1.5 are complete. Phase 3C.1 / 3C.1.1 remain historical blocked checkpoints; subsequent generic validation work addressed those gaps.
-- For BLS Case 2, the user approved the current Script for TTS through the formal hash-bound approval. Phase 3C.2A used the existing canonical narration and made one successful Volcengine production request. The WAV and technical audio QA artifacts are registered and current; quality checks passed. No content artifact or narration text changed in this retry.
-- **Current state: waiting for human listening review of the generated audio.** The run remains `voice_review_pending`; no `audio/review.json` exists. Alignment, subtitles, Storyboard, visual planning, Timeline, and video rendering have not started for this BLS run.
-- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Exact next action and review packet: [cases/bls-aug-2026-employment/AUDIO_REVIEW.md](../cases/bls-aug-2026-employment/AUDIO_REVIEW.md). Do not approve audio or start downstream media without an explicit human review decision.
+- For BLS Case 2, the approved Script and hash-bound `approved_for_tts` record remain current and unchanged. Candidate 1 received the formal human decision `changes_required / NUMERIC_PRONUNCIATION`; its WAV, metadata, quality record, and review are preserved under the run's `artifacts/audit/audio-candidate-1/`.
+- Phase 3C.2B added generic deterministic zh-CN spoken-number normalization while preserving Script/display text, then made one Volcengine regeneration request using the same voice and settings. Candidate 2 is registered/current and its WAV, metadata, and technical quality gate pass. Run status is `voice_review_pending`; `audio/review.json` is stale and remains bound to Candidate 1.
+- **Current state: Candidate 2 awaits human listening review.** No Candidate 2 approval exists. Alignment, subtitles, Storyboard, visual planning, Timeline, and video rendering have not started for this BLS run.
+- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md). Exact next action and listening checklist: [cases/bls-aug-2026-employment/AUDIO_REVIEW.md](../cases/bls-aug-2026-employment/AUDIO_REVIEW.md). Do not approve audio or start downstream media without an explicit human review decision.
 
 Phase 1C keeps the generic default free of Fed/SEP/GDP values and source identities. Numeric-comparison grouping is presentation-only: typed labels and values are emitted only from supported deterministic parses of the script sentence, remain bound to that sentence and its claims, and the exact source sentence remains visible. Unsupported formats fall back to an exact-sentence fact scene. Historical GDP calibration remains available only through `LegacyGDPCalibrationVisualPlanningProvider`, `build_legacy_gdp_calibration_storyboard`, and `lint_legacy_gdp_calibration_storyboard`; `run_visual_pipeline()` uses the generic path. Phase 1C did not change the Fed run, renderer, audio, alignment, or V0.1.0 release.
 
@@ -29,7 +30,7 @@ The native pipeline is artifact-first:
 
 Research is divided into search, source fetch, source selection, factcheck, and research synthesis. Content planning creates and selects angles and validates a structured script against verified facts. Visual planning checks sentence coverage and storyboard quality. The artifact registry enforces stage ownership and hashes; changing an upstream artifact marks dependent artifacts stale.
 
-The ordinary artifact dependency graph is `ARTIFACT_GRAPH` in `src/fanglei/artifact_registry.py`. Run status values currently include `created`, `analyzed`, `scripted`, `visual_planned`, `voice_review_pending`, `voice_approved`, `renderer_ready`, and `failed`.
+The ordinary artifact dependency graph is `ARTIFACT_GRAPH` in `src/fanglei/artifact_registry.py`. Run status values currently include `created`, `analyzed`, `scripted`, `visual_planned`, `voice_review_pending`, `voice_review_changes_required`, `voice_approved`, `renderer_ready`, and `failed`.
 
 ## Approved-checkpoint authoring and import
 

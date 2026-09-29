@@ -1,8 +1,83 @@
 # BLS Case 2 — Audio Review
 
-**HUMAN AUDIO REVIEW = PENDING**
+**CURRENT AUDIO CANDIDATE 2 — HUMAN AUDIO REVIEW = PENDING**
 
-本文件记录本次获批 Script 的 TTS 产物和技术检查结果，供人工实际试听。技术 QA 通过不等于声音质量获批；请完成文末清单后再由正式 owner 记录决定。
+Candidate 2 由原获批 Script 经通用 zh-CN spoken-number normalization 后生成。规范化只改变发给 TTS 的读音文本；Script、事实和屏幕显示文本均保持原样。技术 QA 通过不等于人工音频批准。当前唯一下一步是人工试听 Candidate 2 并明确记录决定。
+
+## Current candidate — Audio Candidate 2
+
+- Case / run：`bls-aug-2026-employment` / `2026-09-27-001-bls-august-2026-employment-situation`
+- Selected angle：`angle_001`
+- Script SHA-256：`450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305`
+- Human Script Approval SHA-256：`8653415689546d56295f857722840de61f14d26515d836f077a1a13818e3c59f` (`approved_for_tts`, current)
+- Provider / model / adapter / voice：Volcengine / `volcengine-v3-sse` / `volcengine-v3-sse` / `zh_male_liufei_uranus_bigtts`
+- Language and synthesis settings：`zh-CN`; rate `1.0`; pitch `0`; volume gain `0`; PCM 24 kHz
+- Production request：1 combined request containing 12 ordered narration sentences; provider request ID is not exposed by the saved metadata.
+- Generated：`2026-09-29T12:11:22+08:00`
+- Canonical file：`runs/2026-09-27-001-bls-august-2026-employment-situation/audio/narration.wav`
+- SHA-256：`36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`
+- Size / duration：2,816,628 bytes / 58.679 s (1,408,292 frames; 58.678833 s)
+- Format：WAV, signed 16-bit PCM, mono, 24,000 Hz
+- Run status：`voice_review_pending`; Candidate 2 has no approval artifact. `audio/review.json` is stale and refers to Candidate 1 only.
+
+### Display text → exact TTS spoken text
+
+Display/script wording stays unchanged. The following are deterministic provider-bound readings from the current `narration.json`:
+
+| Display text | TTS spoken text |
+|---|---|
+| `16.2万` | `十六点二万` |
+| `10美分` | `十美分` |
+| `37.75美元` | `三十七点七五美元` |
+| `34.4小时` | `三十四点四小时` |
+| `4.1%` | `百分之四点一` |
+| `0.3%` | `百分之零点三` |
+| `0.1小时` | `零点一小时` |
+| June revision: `上修1.1万，从增加2万修正为增加3.1万` | `上修一点一万，从增加二万修正为增加三点一万` |
+| July revision: `上修4.4万，从减少2.3万修正为增加2.1万` | `上修四点四万，从减少二点三万修正为增加二点一万` |
+| Industry values: `5.9万 / 4.2万 / 2.3万` | `五点九万 / 四点二万 / 二点三万` |
+| Month expressions: `6月 / 7月 / 8月` | `六月 / 七月 / 八月` |
+
+These text pairs document the synthesis input; they do not prove acoustic pronunciation. The WAV is one combined file with no native sentence timestamps or separate segment files. Input order is preserved, but coverage and pronunciation still require listening; no ASR or forced alignment was run.
+
+### Technical QA
+
+| Check | Result |
+|---|---|
+| File exists, non-empty, fully decodes | **PASS** |
+| WAV / PCM16 / mono / 24 kHz | **PASS** |
+| WAV SHA matches metadata and ArtifactRegistry | **PASS** — `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183` |
+| Existing signal-quality gate | **PASS** — `production_eligible=true`, peak `-6.77 dBFS`, RMS `-21.70 dBFS`, voiced ratio `84.1%` |
+| Clipping | **PASS** — no samples at signed PCM extrema |
+| Silence diagnostic | Longest run below `-45 dBFS` was 440 ms using 20 ms frames; this is only a signal diagnostic, not a listening judgment. |
+| Script coverage / ordering | 12 sentences were submitted in order as one text payload; no per-sentence acoustic coverage proof or timing is available. |
+| Human listening | **PENDING** |
+
+### Candidate 2 listening checklist
+
+Please listen to the local Candidate 2 WAV and specifically check:
+
+1. `16.2万` sounds like **十六点二万**.
+2. `10美分` sounds like **十美分**.
+3. `37.75美元` sounds like **三十七点七五美元**.
+4. `34.4小时` sounds like **三十四点四小时**.
+5. Percentages are read as **百分之四点一** and **百分之零点三**; `0.1小时` as **零点一小时**.
+6. June: **上修一点一万，从增加二万修正为增加三点一万**.
+7. July: **上修四点四万，从减少二点三万修正为增加二点一万**.
+8. Industry values **五点九万、四点二万、二点三万** are accurate and clear.
+9. Overall voice, speed, pauses, industry names, ending rhythm, completeness at the beginning/end, and whether articulation sounds robotic or swallows words.
+
+Do not start alignment, subtitles, Storyboard, visuals, Timeline, or rendering until an explicit human audio decision is recorded.
+
+## Historical record — Audio Candidate 1 (CHANGES_REQUIRED)
+
+Reviewer `motty63-ctrl` recorded `changes_required` at `2026-09-29T12:08:55+08:00`, reason `NUMERIC_PRONUNCIATION`. Voice, general rate, June/July revision comprehensibility, industry names, and ending rhythm were accepted. Numeric pronunciation was rejected: `16.2万` sounded digit-by-digit (`一六点二万`), `10美分` as `一零美分`, `37.75美元` as `三七点七五美元`, and `34.4小时` as `三四点四小时`.
+
+Candidate 1 SHA-256: `54b112a49a3e9d8dba484067ee2deaffa3aa043cb20ea0c9e58546a0b0a9af6a`; duration `61.448 s`. Its WAV, metadata, quality record, and formal review are preserved under `runs/2026-09-27-001-bls-august-2026-employment-situation/artifacts/audit/audio-candidate-1/`. Candidate 2 uses the same canonical audio path and a different SHA; the Candidate 1 review remains historical and is not approval for Candidate 2.
+
+---
+
+The following sections retain the earlier Candidate 1 request and technical record for audit context.
 
 ## A. 审批链
 
@@ -73,11 +148,11 @@
 | Duration | **CAUTION** | 61.448 s，比 Script 的 65.0 s 估计短 3.552 s；未自动 time-stretch。 |
 | Artifact registry | **OK** | audio WAV、metadata、quality 与当前 Script/narration dependency hashes 注册为 valid/current。 |
 
-现有 QA 的 `production_eligible=true`、`passed=true`、`gate_reasons=[]`。没有 `audio/review.json`；人工审听仍未完成。
+在 Candidate 1 首次生成后的这份 QA 快照中，`production_eligible=true`、`passed=true`、`gate_reasons=[]`；当时尚无 `audio/review.json`。之后人工审核已正式要求修订，详见上方 Candidate 1 决定与归档记录。
 
-## F. 人工试听清单
+## F. Candidate 1 初次生成时的历史试听清单（已由上方 Candidate 2 清单替代）
 
-请用播放器实际聆听：`D:\Projects\fanglei-economy-content-engine\runs\2026-09-27-001-bls-august-2026-employment-situation\audio\narration.wav`。逐项确认并记录任何时间点或问题：
+以下是 Candidate 1 当时使用的清单，仅供历史参考。Candidate 1 WAV 已归档于 `runs/2026-09-27-001-bls-august-2026-employment-situation/artifacts/audit/audio-candidate-1/narration.wav`；当前 canonical `audio/narration.wav` 是 Candidate 2。当前审核请使用上方 Candidate 2 清单。
 
 1. 整体音色是否自然、易懂。
 2. 语速是否适合短视频，尤其密集数据段。
@@ -95,12 +170,12 @@
 
 另请留意规范化文本中的高风险读法：`16.2万`、`4.1%`、`10美分`、`0.3%`、`37.75美元`、`0.1小时`、`34.4小时`、June/July revision 数字和行业数值。此处只提示核听，不代表已判定读音正确。
 
-## G. 人工决定
+## G. Candidate 1 人工决定（历史记录）
 
-**HUMAN AUDIO REVIEW = PENDING**
+**Audio Candidate 1 = CHANGES_REQUIRED / NUMERIC_PRONUNCIATION**
 
-本报告不批准音频。完成试听后，由人工明确选择批准或要求修订；任何 Script 修改都必须重新经过对应的 Script review/approval 与 TTS 流程。
+该决定仅绑定 Candidate 1 的 audio SHA。Candidate 2 的人工审核仍待完成；任何 Script 修改都必须重新经过对应的 Script review/approval 与 TTS 流程。
 
 ## 阶段边界
 
-本阶段没有运行 alignment、subtitle timing、Storyboard、visual planning、Timeline 或 MP4 renderer；没有生成视频，也没有音频人工批准 artifact。
+本次 Candidate 2 阶段没有运行 alignment、subtitle timing、Storyboard、visual planning、Timeline 或 MP4 renderer，也没有生成视频。Candidate 1 有正式 `changes_required` review；Candidate 2 尚无人工审核或批准 artifact。
