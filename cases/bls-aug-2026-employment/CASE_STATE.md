@@ -4,10 +4,10 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **Phase 3C.3 blocked at generic Storyboard input/timing contract. Candidate 2 is human-approved for Storyboard; proportional alignment and subtitles are current. No Storyboard has been generated.**
+- Status: **Phase 3C.3 technical Storyboard preparation is complete; `HUMAN STORYBOARD REVIEW = PENDING`.** The existing timing-aware Storyboard is current and its automated quality gate passed. Visual asset production, Timeline, and MP4 rendering have not started.
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles exist; Storyboard, Timeline, final visuals, and video do not.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Candidate 1's formal rejection and media are archived; Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment, subtitles, and the 9-scene timing-aware Storyboard exist and are current; see [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md). Visual assets, Timeline, and video do not exist.
 
 ## Locked research question
 
@@ -123,12 +123,22 @@ The generic zh-CN spoken-number normalization implementation is committed at `85
 
 One authorized Volcengine `volcengine-v3-sse` request generated the canonical WAV with the same approved Script, voice, language, rate, pitch, and volume. Candidate 2 SHA-256 is `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`; it is mono PCM16 WAV at 24 kHz, 2,816,628 bytes, duration 58.679 seconds. Registry/hash validation and the existing production audio-quality gate pass. The Script SHA (`450c61b…d84305`) and Human Script Approval SHA (`86534156…e3c59f`) were unchanged. This section records the state before the subsequent human approval.
 
-## Current Phase 3C.3 — audio approved; Storyboard blocked
+## Historical Phase 3C.3 — audio approved; initial Storyboard contract blocked
 
 Reviewer `motty63-ctrl` approved Candidate 2 for Storyboard at `2026-09-29T12:45:14+08:00`. The formal registered review is `runs/2026-09-27-001-bls-august-2026-employment-situation/audio/review.json` (SHA-256 `32b319d02b77a1953feff58ff23084e81c18667575196e1ad5b4e023252bff1f`) and is bound to the current Script SHA `450c61b2799ef9efb85b7b71fa4d191936b51c14815410477cd69aa949d84305` and Candidate 2 audio SHA `36c09d917fed2c58ae2231b4ff4d5e9b8660320c84f8d85074f651830f1c0183`.
 
 The existing local `run_proportional_sentence_timing(...)` owner produced `alignment.json` (SHA-256 `66744f918fe01dd2e726858ee132eca81701f56f55a404124deb85068d641306`). It covers all 12 canonical narration segments from 0 to 58,679 ms using proportional character-count estimates, with no missing IDs, overlap, or out-of-bounds timing. This is estimated sentence timing, not acoustic alignment. The existing subtitle owner produced `subtitle_track.json` (SHA-256 `58107e68f9f726e2bb0d3812a0db2b0f58240a07c656fc1c015aecfcd652ed46`) with 12 cues whose text matches the canonical Script/display text; TTS spoken-normalized text is excluded. Both artifacts and their dependency hashes are current.
 
-**Blocked status: `PHASE_3C3_BLOCKED_GENERALIZATION_GAP`.** The generic Storyboard path cannot consume the approved audio, alignment, or subtitle artifacts. `run_visual_pipeline()` sends only run ID, Script, and allowed claim IDs to the beat planner; its registered Storyboard dependencies are `visual_beats.json`, `script.json`, and `facts.json`. The current schema records estimated speech duration and relative scene windows, not audio-bound scene timing or subtitle links. It also does not pass the selected-angle and approved research-framing artifacts as Storyboard inputs. Generating through that path would not satisfy the approved Phase 3C.3 input contract.
+At that historical checkpoint, status was `PHASE_3C3_BLOCKED_GENERALIZATION_GAP`: the generic Storyboard path did not consume the approved audio, alignment, or subtitle artifacts. `run_visual_pipeline()` sent only run ID, Script, and allowed claim IDs to the beat planner; its registered Storyboard dependencies were `visual_beats.json`, `script.json`, and `facts.json`. The schema recorded estimated speech duration and relative scene windows, not audio-bound scene timing or subtitle links. It also did not pass selected-angle and approved research-framing artifacts as Storyboard inputs. This blocker was resolved by later generic Phase 3C.3 work recorded below.
 
-Exact next action: generalize the Storyboard request/owner and artifact dependencies to accept current approved Script, selected angle, eligible facts/research framing, approved audio identity, alignment, and subtitle cues; produce scene windows traceable to those timings; then add focused contract tests and rerun validation. Keep the change topic-neutral. No Storyboard, visual assets, Timeline, or MP4 has been created for this BLS run. Human Storyboard Review has not started.
+That checkpoint's next action was to generalize the Storyboard request/owner and artifact dependencies. It is superseded by the current state below.
+
+## Current Phase 3C.3C — timing-aware Storyboard ready for human review
+
+The generic `render_visual_plan()` renderer now branches on Storyboard timing semantics. Legacy schema 4.0 / `estimated_speech` output retains its original no-audio-timestamp explanation. Alignment-derived Storyboard output shows its timing basis, source, method, estimated quality, audio binding, and scene `start_ms` / `end_ms` / duration directly from the Storyboard, with an explicit precision caveat. The existing Storyboard was not regenerated: its SHA-256 remains `a649b81656193ffbac7898361d9c6b7227b9bd2411cf1208756c1b1e6b85e9e6`; it remains schema 5.0 with 9 scenes, all 12 narration segments, `0–58,679 ms`, and automated quality gate passed.
+
+The corrected `visual_plan.md` is rendered through the `visual_plan_render` ArtifactRegistry owner from the existing Storyboard. Planner/storyboard stage attempt counts remain unchanged; no provider or network was called. Focused visual/rendering tests passed 38; the safe non-integration regression passed 879. The generic renderer fix is committed at `356a0c3` (`fix: render timing-aware visual plan provenance`).
+
+The complete, Chinese-first [STORYBOARD_REVIEW.md](STORYBOARD_REVIEW.md) packet lists all 9 scenes and the exact ownership of all 12 segments, plus coverage and factual-safety review notes. The renderer correction and automated Storyboard gate do not grant human approval. **Current gate: `HUMAN STORYBOARD REVIEW = PENDING`.** No visual asset production, Timeline, or MP4 rendering has started.
+
+**Exact next action: human review of `STORYBOARD_REVIEW.md` and the current Storyboard/visual plan.** Review pacing, visual density, numbers, survey boundaries, revision semantics, partial industry coverage, source attribution, transitions, and overall coherence. Do not generate visual assets or Timeline until the human Storyboard review is separately completed.
