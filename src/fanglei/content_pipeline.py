@@ -14,6 +14,9 @@ from fanglei.angle_selection import HumanAngleSelectionV1
 from fanglei.content_models import AngleCandidate, ScriptDraft
 from fanglei.content_policy import build_fact_palette
 from fanglei.content_render import render_angle_markdown, render_script_json, render_script_markdown
+from fanglei.artifact_registry import ArtifactRegistry
+from fanglei.artifacts import read_json
+from fanglei.models import RunManifest
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
 from fanglei.research_focus import ResearchFocusV1
@@ -27,6 +30,198 @@ from fanglei.providers.content import (
 )
 from fanglei.script_lint import lint_script
 from fanglei.script_patch import apply_script_patches, build_repair_scope
+
+
+def submit_human_script_recovery(
+    run_id: str,
+    runs_dir: Path,
+    draft: ScriptDraft | dict,
+    *,
+    reviewer: str,
+    rationale: str,
+    failed_draft_sha256: str | None = None,
+    speaking_rate: float = 4.0,
+) -> Path:
+    """Validate and register a human-edited script without invoking a provider."""
+    from datetime import datetime
+
+    from fanglei.angle_selection import HumanAngleSelectionV1
+    from fanglei.human_script_recovery import (
+        HumanScriptEditV1,
+        canonical_json_sha256,
+        failed_draft_sha256_from_manifest,
+    )
+    from fanglei.research_focus import ResearchFocusV1
+    from fanglei.script_terminology import validate_script_terminology_map
+
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
+    if manifest.run_id != run_id:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_RUN_ID_MISMATCH")
+    registry = ArtifactRegistry(
+        run_dir,
+        manifest,
+        research_focus_mode=True,
+        human_angle_selection_mode=True,
+        script_terminology_mode=True,
+        human_script_recovery_mode=True,
+    )
+    if registry.imported_checkpoint_mode:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
+
+    required_artifacts = (
+        "source.md", "facts.json", "research_focus.json", "research.md", "angles.json",
+        "angle_selection.json", "angle.md", "script_terminology.json",
+    )
+    try:
+        for name in required_artifacts:
+            registry.validate(name)
+    except Exception as error:
+        # Validation only changes the in-memory manifest here. Do not save a
+        # stale state when a human candidate is rejected before publication.
+        raise ArtifactConflictError(f"SCRIPT_RECOVERY_UPSTREAM_NOT_CURRENT: {error}") from error
+
+    facts = registry.read_json("facts.json")
+    if facts.get("run_id") != run_id or not isinstance(facts.get("claims"), list):
+        raise ArtifactConflictError("SCRIPT_RECOVERY_FACTS_IDENTITY_INVALID")
+    focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+    if focus.run_id != run_id or not focus.case_id.strip():
+        raise ArtifactConflictError("SCRIPT_RECOVERY_CASE_IDENTITY_INVALID")
+
+    angles = registry.read_json("angles.json")
+    if angles.get("run_id") != run_id or not isinstance(angles.get("candidates"), list):
+        raise ArtifactConflictError("SCRIPT_RECOVERY_ANGLES_IDENTITY_INVALID")
+    selection = HumanAngleSelectionV1.model_validate(registry.read_json("angle_selection.json"))
+    if selection.run_id != run_id:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTION_IDENTITY_INVALID")
+    if (selection.angles_sha256 != manifest.artifacts["angles.json"].content_hash
+            or selection.facts_sha256 != manifest.artifacts["facts.json"].content_hash):
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTION_STALE")
+    candidates = [row for row in angles["candidates"]
+                  if isinstance(row, dict) and row.get("angle_id") == selection.selected_angle_id]
+    if len(candidates) != 1:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTED_ANGLE_INVALID")
+    try:
+        selected = AngleCandidate.model_validate(candidates[0])
+    except Exception as error:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTED_ANGLE_INVALID") from error
+    if selected.eligibility != "eligible":
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTED_ANGLE_INELIGIBLE")
+    eligible_claim_ids = {claim.claim_id for claim in build_fact_palette(facts)}
+    if not set(selected.supporting_claim_ids) <= eligible_claim_ids:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_SELECTED_ANGLE_HAS_INELIGIBLE_CLAIMS")
+    angle_markers = re.findall(
+        r"(?m)^selected_angle_id: `([^`]+)`\s*$",
+        (run_dir / "angle.md").read_text(encoding="utf-8"),
+    )
+    if angle_markers != [selection.selected_angle_id]:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_RENDERED_ANGLE_MISMATCH")
+
+    facts_hash = manifest.artifacts["facts.json"].content_hash
+    if not facts_hash:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_FACTS_HASH_MISSING")
+    try:
+        terminology = validate_script_terminology_map(
+            registry.read_json("script_terminology.json"), facts,
+            expected_run_id=run_id, expected_case_id=focus.case_id,
+            facts_sha256=facts_hash,
+            allowed_claim_ids=set(selected.supporting_claim_ids), require_approved=True,
+        )
+    except Exception as error:
+        raise ArtifactConflictError("SCRIPT_RECOVERY_TERMINOLOGY_INVALID") from error
+
+    try:
+        parsed_draft = draft if isinstance(draft, ScriptDraft) else ScriptDraft.model_validate(draft)
+    except Exception as error:
+        raise ArtifactConflictError(f"SCRIPT_HUMAN_DRAFT_INVALID: {error}") from error
+    if parsed_draft.angle_id != selection.selected_angle_id:
+        raise ArtifactConflictError("SCRIPT_ANGLE_ID_MISMATCH")
+    if (not parsed_draft.target_language
+            or parsed_draft.target_language.casefold() != terminology.target_language.casefold()):
+        raise ArtifactConflictError("SCRIPT_TARGET_LANGUAGE_MISMATCH")
+
+    source_text = (run_dir / "source.md").read_text(encoding="utf-8")
+    lint = lint_script(
+        parsed_draft, selected, facts, source_text,
+        speaking_rate=speaking_rate,
+        target_duration_seconds=parsed_draft.target_duration_seconds,
+        target_language=terminology.target_language,
+        terminology_map=terminology,
+        current_facts_sha256=facts_hash,
+        run_id=run_id,
+        case_id=focus.case_id,
+    )
+    if not lint.passed:
+        issue_codes = list(dict.fromkeys(issue.code for issue in lint.issues if issue.severity == "error"))
+        raise ArtifactConflictError("SCRIPT_HUMAN_DRAFT_REJECTED:" + ",".join(issue_codes))
+
+    # A submitted human edit is write-once. Existing artifacts must be reviewed
+    # explicitly through a later owner flow rather than silently overwritten.
+    for name in ("human_script_edit.json", "script.json", "script.md"):
+        path = run_dir / name
+        state = manifest.artifacts[name]
+        if path.exists() or state.status != "missing":
+            raise ArtifactConflictError(f"SCRIPT_RECOVERY_OUTPUT_ALREADY_EXISTS: {name}")
+
+    submitted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    draft_payload = parsed_draft.model_dump(mode="json")
+    failed_hash = failed_draft_sha256_from_manifest(manifest.model_dump(mode="json"))
+    if failed_draft_sha256 is not None:
+        if failed_hash is not None and failed_draft_sha256 != failed_hash:
+            raise ArtifactConflictError("SCRIPT_RECOVERY_FAILED_DRAFT_HASH_MISMATCH")
+        failed_hash = failed_draft_sha256
+    edit = HumanScriptEditV1(
+        schema_version="human-script-edit/1.0",
+        status="pending_human_review",
+        run_id=run_id,
+        case_id=focus.case_id,
+        angle_id=selection.selected_angle_id,
+        reviewer=reviewer,
+        submitted_at=submitted_at,
+        rationale=rationale,
+        target_language=terminology.target_language,
+        facts_sha256=facts_hash,
+        research_sha256=manifest.artifacts["research.md"].content_hash or "",
+        source_sha256=manifest.artifacts["source.md"].content_hash or "",
+        angles_sha256=manifest.artifacts["angles.json"].content_hash or "",
+        angle_selection_sha256=manifest.artifacts["angle_selection.json"].content_hash or "",
+        terminology_sha256=manifest.artifacts["script_terminology.json"].content_hash or "",
+        failed_draft_sha256=failed_hash,
+        draft_sha256=canonical_json_sha256(draft_payload),
+        draft=parsed_draft,
+    )
+    edit_payload = edit.model_dump(mode="json")
+    script_payload = render_script_json(parsed_draft, lint)
+    rendered_script = render_script_markdown(parsed_draft, lint)
+
+    def write_human_edit() -> None:
+        registry.write_json("human_script_edit.json", edit_payload, "human_script_recovery")
+
+    _execute(manifest, registry, "human_script_recovery", write_human_edit)
+    script_payload.update({
+        "authoring_method": "human_edit",
+        "human_review_status": "pending",
+        "human_script_edit_sha256": manifest.artifacts["human_script_edit.json"].content_hash,
+        "script_lint": {
+            "status": "passed",
+            "issue_codes": [issue.code for issue in lint.issues],
+            "estimated_duration_seconds": lint.estimated_duration_seconds,
+            "submitted_at": submitted_at,
+        },
+    })
+
+    def write_script() -> None:
+        registry.write_json("script.json", script_payload, "script_generation")
+
+    _execute(manifest, registry, "script_generation", write_script, force=True)
+
+    def render_script() -> None:
+        registry.write_text("script.md", rendered_script, "script_render")
+
+    _execute(manifest, registry, "script_render", render_script, force=True)
+    manifest.status = "scripted"
+    registry.save_manifest()
+    return run_dir / "human_script_edit.json"
 
 
 def _selection_failure(code: str, detail: str) -> ArtifactConflictError:

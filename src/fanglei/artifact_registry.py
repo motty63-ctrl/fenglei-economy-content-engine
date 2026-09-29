@@ -121,6 +121,25 @@ def _script_terminology_graph(
     )
     return graph
 
+
+def _human_script_recovery_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Opt in to a provider-free, hash-bound human script submission."""
+    graph = _script_terminology_graph(base_graph)
+    dependencies = [
+        name for name in (
+            "source.md", "research.md", "facts.json", "angles.json", "angle_selection.json",
+            "script_terminology.json", "research_focus.json",
+        ) if name in graph
+    ]
+    graph["human_script_edit.json"] = ("human_script_recovery", tuple(dependencies))
+    owner, script_dependencies = graph["script.json"]
+    graph["script.json"] = (
+        owner, tuple(dict.fromkeys((*script_dependencies, "human_script_edit.json"))),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -181,6 +200,7 @@ class ArtifactRegistry:
         human_angle_selection_mode: bool = False,
         evidence_targets_mode: bool = False,
         script_terminology_mode: bool = False,
+        human_script_recovery_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -213,6 +233,11 @@ class ArtifactRegistry:
             ).is_file()
             if terminology_enabled:
                 self.graph = _script_terminology_graph(self.graph)
+            recovery_enabled = human_script_recovery_mode or (
+                self.run_dir / "human_script_edit.json"
+            ).is_file() or "human_script_edit.json" in manifest.artifacts
+            if recovery_enabled:
+                self.graph = _human_script_recovery_graph(self.graph)
         for name, (owner, dependencies) in self.graph.items():
             self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

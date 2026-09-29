@@ -311,8 +311,14 @@ def _number_token_role_ok(
 
 
 _REVISION_ROLE_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("revision_previous", re.compile(r"(?:从|由|from|previous(?:ly)?|此前(?:为)?|原值(?:为)?)\s*$", re.I)),
-    ("revision_revised", re.compile(r"(?:修正为|修订为|调整为|调整至|改为|变为|revised\s+to|to)\s*$", re.I)),
+    ("revision_previous", re.compile(
+        r"(?:从|由|from)\s*(?:(?:增加|减少|上升|下降|increase|decrease)\s*)?\s*$|"
+        r"(?:previous(?:ly)?|此前(?:为)?|原值(?:为)?)\s*$", re.I,
+    )),
+    ("revision_revised", re.compile(
+        r"(?:修正为|修订为|调整为|调整至|改为|变为|revised\s+to|to)\s*"
+        r"(?:(?:增加|减少|上升|下降|increase|decrease)\s*)?$", re.I,
+    )),
     ("revision_delta", re.compile(
         r"(?:上修|下修|上调|下调|修订(?:幅度)?(?:为)?|调整(?:幅度)?(?:为)?|"
         r"(?:revised\s+(?:up|down)\s+by|revision(?:\s+amount)?(?:\s+of)?|by))\s*$", re.I,
@@ -341,6 +347,54 @@ def _surface_revision_role(text: str, start: int, end: int) -> tuple[str | None,
         elif re.search(r"下修|下调|revised\s+down", marker, re.I):
             direction = "down"
     return role, direction
+
+
+def _revision_surface_value(
+    text: str, start: int, end: int, role: str | None, value: Decimal, signed: bool,
+) -> tuple[Decimal, bool]:
+    """Use explicit increase/decrease wording to retain signed revision values."""
+    if role not in {"revision_previous", "revision_revised"}:
+        return value, signed
+    prefix = text[max(0, start - 48):start]
+    marker = re.search(
+        r"(?:从|由|from)\s*(增加|减少|上升|下降|increase|decrease)\s*$", prefix, re.I
+    )
+    if marker is None:
+        revised = re.search(
+            r"(?:修正为|修订为|调整为|调整至|改为|变为|revised\s+to|to)\s*"
+            r"(增加|减少|上升|下降|increase|decrease)\s*$", prefix, re.I
+        )
+        marker = revised
+    if marker is None:
+        return value, signed
+    direction = marker.group(1).casefold()
+    decreases = {"减少", "下降", "decrease"}
+    increases = {"增加", "上升", "increase"}
+    if direction in decreases:
+        return -abs(value), True
+    if direction in increases:
+        return abs(value), True
+    return value, signed
+
+
+def _infer_surface_unit(
+    text: str, claim: dict, terminology: ScriptTerminologyMapV1,
+    value: Decimal, unit: str,
+) -> str:
+    """Allow a number-only magnitude when the same claim's approved unit is stated nearby."""
+    if unit != "number":
+        return unit
+    expected_units = {row[1] for row in _expected_numbers(claim)
+                      if row[0] == value and row[1] != "number"}
+    if len(expected_units) != 1:
+        return unit
+    approved_unit_aliases = {
+        alias for entry in _approved_entries(terminology, str(claim.get("claim_id")), "unit")
+        for alias in entry.approved_target_terms
+    }
+    if any(_has_term(text, alias) for alias in approved_unit_aliases):
+        return next(iter(expected_units))
+    return unit
 
 
 def _claim_has_revision_values(claim: dict) -> bool:
@@ -437,6 +491,8 @@ def _cross_language_claim_issues(
     attribution_inherited: bool = False,
     diagnostics: list[dict[str, Any]] | None = None,
     bound_claim_ids: set[str] | None = None,
+    check_surface_terms: bool = True,
+    check_numeric_values: bool = True,
 ) -> set[str]:
     issues: set[str] = set()
     claim_id = claim.get("claim_id")
@@ -482,41 +538,53 @@ def _cross_language_claim_issues(
                                                  for alias in entry.approved_target_terms}),
              claimless=False)
 
-    lexical_issues, lexical_diagnostics = _lexical_term_requirements(
-        text, claim, terminology, bound_claim_ids=bound_claim_ids,
-    )
-    issues.update(lexical_issues)
-    if diagnostics is not None:
-        diagnostics.extend({"code": "TERMINOLOGY_TERM_MISSING", **item}
-                           for item in lexical_diagnostics)
+    if check_surface_terms:
+        lexical_issues, lexical_diagnostics = _lexical_term_requirements(
+            text, claim, terminology, bound_claim_ids=bound_claim_ids,
+        )
+        issues.update(lexical_issues)
+        if diagnostics is not None:
+            diagnostics.extend({"code": "TERMINOLOGY_TERM_MISSING", **item}
+                               for item in lexical_diagnostics)
 
     if _LANGUAGE_EXPANSION_RE.search(text):
         add("AUTHORITY_SCOPE_EXPANSION", surface=text,
              reason="causal, predictive, motive, market-impact, or policy scope expansion")
 
-    period_aliases = [alias for entry in _approved_entries(terminology, claim_id, "period")
-                      for alias in entry.approved_target_terms]
-    number_text = text
-    for alias in sorted(set(period_aliases), key=len, reverse=True):
-        if alias:
-            number_text = re.sub(re.escape(alias), " ", number_text, flags=re.I)
-    unsupported_format = _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(number_text)
-    if unsupported_format:
-        add("UNSUPPORTED_NUMERIC_FORMAT", surface_token=unsupported_format.group(0),
-             normalized_candidate=None, reason="numeric expression is not deterministically parseable")
+    if check_numeric_values:
+        period_aliases = [alias for entry in _approved_entries(terminology, claim_id, "period")
+                          for alias in entry.approved_target_terms]
+        number_text = text
+        for alias in sorted(set(period_aliases), key=len, reverse=True):
+            if alias:
+                number_text = re.sub(re.escape(alias), " ", number_text, flags=re.I)
+        unsupported_format = _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(number_text)
+        if unsupported_format:
+            add("UNSUPPORTED_NUMERIC_FORMAT", surface_token=unsupported_format.group(0),
+                 normalized_candidate=None, reason="numeric expression is not deterministically parseable")
 
-    expected = _expected_numbers(claim)
-    matches = list(_TRANSLATED_NUMBER_RE.finditer(number_text))
+        expected = _expected_numbers(claim)
+        matches = list(_TRANSLATED_NUMBER_RE.finditer(number_text))
+    else:
+        number_text = text
+        expected = []
+        matches = []
     for match in matches:
         parsed = _number_and_unit(match.group(0))
         if not parsed:
             add("UNSUPPORTED_NUMERIC_VALUE", surface_token=match.group(0),
-                 normalized_candidate=None, expected_values=[
+                normalized_candidate=None, expected_values=[
                      {"value": str(value), "unit": unit, "role": role}
-                     for value, unit, _signed, role in expected
-                 ], actual_parsed_unit=None, reason="numeric token could not be normalized")
+                 for value, unit, _signed, role in expected
+             ], actual_parsed_unit=None, reason="numeric token could not be normalized")
             continue
         value, unit, signed = parsed
+        surface_declares_unit = unit != "number"
+        surface_role, _surface_direction = _surface_revision_role(number_text, match.start(), match.end())
+        value, signed = _revision_surface_value(
+            number_text, match.start(), match.end(), surface_role, value, signed,
+        )
+        unit = _infer_surface_unit(number_text, claim, terminology, value, unit)
         candidates = [row for row in expected if row[0] == value and row[1] == unit
                       and (not row[2] or signed)]
         if not candidates:
@@ -556,8 +624,7 @@ def _cross_language_claim_issues(
                                              for item in claim.get("evidence", [])
                                              if isinstance(item, dict) and isinstance(item.get("revision_values"), dict)), None),
                  }, reason="surface grammar does not assign this number its structured revision role")
-        declared_unit = unit != "number"
-        if declared_unit:
+        if surface_declares_unit:
             unit_entries = _approved_entries(terminology, claim_id, "unit")
             rendered_unit = " ".join(filter(None, (match.group("prefix"), match.group("unit"))))
             if not any(
@@ -575,6 +642,216 @@ def _cross_language_claim_issues(
     return issues
 
 
+def _term_spans(text: str, term: str) -> list[tuple[int, int]]:
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9 .'-]*", term):
+        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", re.I)
+    else:
+        pattern = re.compile(re.escape(term), re.I)
+    return [(match.start(), match.end()) for match in pattern.finditer(text)]
+
+
+def _cross_language_claim_set_issues(
+    text: str,
+    claims: list[dict],
+    terminology: ScriptTerminologyMapV1,
+    *,
+    attribution_inherited: bool = False,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    """Validate a multi-claim sentence against the union without cross-applying each claim."""
+    issues: set[str] = set()
+    bound_ids = {claim.get("claim_id") for claim in claims if isinstance(claim.get("claim_id"), str)}
+
+    def add(code: str, **details: Any) -> None:
+        issues.add(code)
+        if diagnostics is not None:
+            diagnostics.append({"code": code, "claim_ids": sorted(bound_ids), **details})
+
+    if len(claims) < 2 or len(bound_ids) != len(claims):
+        add("CLAIM_SCOPE_MISMATCH", reason="multi-claim validation requires distinct, identified claims")
+        return issues
+
+    # Retain each claim's identity, authority, evidence and required-scope checks.
+    # Only sentence-surface matching is evaluated across the union below.
+    for claim in claims:
+        issues.update(_cross_language_claim_issues(
+            text, claim, terminology,
+            attribution_inherited=attribution_inherited,
+            bound_claim_ids=bound_ids,
+            check_surface_terms=False,
+            check_numeric_values=False,
+        ))
+
+    bound_entries = [entry for entry in terminology.entries
+                     if entry.review_status == "approved" and set(entry.claim_ids) & bound_ids]
+    bound_alias_spans: dict[str, list[tuple[int, int]]] = {}
+    for entry in bound_entries:
+        for alias in entry.approved_target_terms:
+            bound_alias_spans.setdefault(entry.semantic_role, []).extend(_term_spans(text, alias))
+    for entry in terminology.entries:
+        if entry.review_status != "approved" or set(entry.claim_ids) & bound_ids:
+            continue
+        for alias in entry.approved_target_terms:
+            spans = _term_spans(text, alias)
+            unsupported_spans = [
+                span for span in spans
+                if not any(start <= span[0] and span[1] <= end
+                           for start, end in bound_alias_spans.get(entry.semantic_role, []))
+            ]
+            if unsupported_spans:
+                add("TERMINOLOGY_TERM_MISSING", surface_term=alias,
+                    semantic_role=entry.semantic_role,
+                    reason="spoken terminology is not approved for any bound claim")
+
+    def matching_claims(fragment: str, roles: set[str]) -> set[str]:
+        matched: set[str] = set()
+        for claim in claims:
+            claim_id = claim.get("claim_id")
+            for role, source_field, source_term in _required_cross_language_terms(claim):
+                if role not in roles:
+                    continue
+                entries = [entry for entry in _approved_entries(terminology, str(claim_id), role)
+                           if entry.source_field == source_field and entry.source_term == source_term]
+                if any(_has_term(fragment, alias)
+                       for entry in entries for alias in entry.approved_target_terms):
+                    matched.add(str(claim_id))
+                    break
+        return matched
+
+    def clause_bounds(position: int) -> tuple[int, int]:
+        starts = [text.rfind(mark, 0, position) + 1 for mark in ("，", ",", "；", ";", "。")]
+        start = max(starts, default=0)
+        ends = [found for mark in ("，", ",", "；", ";", "。")
+                if (found := text.find(mark, position)) >= 0]
+        end = min(ends, default=len(text))
+        return start, end
+
+    # Remove approved period terms as whole spans, while retaining offsets for
+    # claim-to-period checks. This keeps month numbers from being mistaken for facts.
+    period_mentions: list[tuple[int, int, set[str], str]] = []
+    for entry in bound_entries:
+        if entry.semantic_role != "period":
+            continue
+        entry_claims = set(entry.claim_ids) & bound_ids
+        for alias in entry.approved_target_terms:
+            period_mentions.extend((start, end, entry_claims, alias)
+                                   for start, end in _term_spans(text, alias))
+    # Collapse identical spans from entries shared by several claims.
+    collapsed: dict[tuple[int, int, str], set[str]] = {}
+    for start, end, claim_ids, alias in period_mentions:
+        collapsed.setdefault((start, end, alias.casefold()), set()).update(claim_ids)
+    period_mentions = [(start, end, ids, alias)
+                       for (start, end, alias), ids in collapsed.items()]
+    masked_chars = list(text)
+    for start, end, _claim_ids, _alias in period_mentions:
+        masked_chars[start:end] = " " * (end - start)
+    numeric_text = "".join(masked_chars)
+
+    scope_roles = {"subject", "metric", "population", "reporting_scope", "statistic"}
+    for start, end, period_claim_ids, alias in period_mentions:
+        left, right = clause_bounds(start)
+        scope_claim_ids = matching_claims(text[left:right], scope_roles)
+        if scope_claim_ids and not (scope_claim_ids & period_claim_ids):
+            add("CLAIM_PERIOD_MISMATCH", surface_period=alias,
+                period_claim_ids=sorted(period_claim_ids), scope_claim_ids=sorted(scope_claim_ids))
+
+    malformed = _CHINESE_NUMERIC_WITH_CONTEXT_RE.search(numeric_text)
+    if malformed:
+        add("UNSUPPORTED_NUMERIC_FORMAT", surface_token=malformed.group(0),
+            reason="numeric expression is not deterministically parseable")
+
+    all_expected = {
+        str(claim["claim_id"]): _expected_numbers(claim)
+        for claim in claims if isinstance(claim.get("claim_id"), str)
+    }
+    for match in _TRANSLATED_NUMBER_RE.finditer(numeric_text):
+        parsed = _number_and_unit(match.group(0))
+        if not parsed:
+            add("UNSUPPORTED_NUMERIC_VALUE", surface_token=match.group(0),
+                reason="numeric token could not be normalized")
+            continue
+        value, unit, signed = parsed
+        left, right = clause_bounds(match.start())
+        clause = text[left:right]
+        metric_claim_ids = matching_claims(clause, scope_roles)
+        period_claim_ids = set().union(*(
+            ids for period_start, period_end, ids, _alias in period_mentions
+            if left <= period_start < right
+        )) if any(left <= period_start < right for period_start, _end, _ids, _alias in period_mentions) else set()
+        if metric_claim_ids and period_claim_ids:
+            candidate_ids = metric_claim_ids & period_claim_ids
+            if not candidate_ids:
+                add("CLAIM_PERIOD_MISMATCH", surface_token=match.group(0),
+                    period_claim_ids=sorted(period_claim_ids), scope_claim_ids=sorted(metric_claim_ids))
+                candidate_ids = metric_claim_ids
+        else:
+            candidate_ids = metric_claim_ids or period_claim_ids
+        if not candidate_ids and len(claims) == 1:
+            candidate_ids = bound_ids
+        if not candidate_ids:
+            add("CLAIM_SCOPE_MISMATCH", surface_token=match.group(0),
+                reason="numeric assertion has no claim-specific subject, measure, or period in its clause")
+            continue
+
+        surface_role, _surface_direction = _surface_revision_role(numeric_text, match.start(), match.end())
+        value, signed = _revision_surface_value(
+            numeric_text, match.start(), match.end(), surface_role, value, signed,
+        )
+        expected_rows = [
+            (claim_id, row)
+            for claim_id in candidate_ids
+            for row in all_expected.get(claim_id, [])
+        ]
+        unit_candidates = [(claim_id, row) for claim_id, row in expected_rows if row[0] == value]
+        inferred_units: set[str] = set()
+        if unit == "number":
+            for claim_id in candidate_ids:
+                claim = next(item for item in claims if item.get("claim_id") == claim_id)
+                inferred = _infer_surface_unit(clause, claim, terminology, value, unit)
+                if inferred != "number":
+                    inferred_units.add(inferred)
+        effective_unit = next(iter(inferred_units)) if len(inferred_units) == 1 else unit
+        exact = [(claim_id, row) for claim_id, row in unit_candidates
+                 if row[1] == effective_unit and (not row[2] or signed)]
+        if not exact:
+            same_value_rows = [(claim_id, row) for claim_id, row in unit_candidates
+                               if not row[2] or signed]
+            global_value_claims = {
+                claim_id for claim_id, rows in all_expected.items()
+                if any(row[0] == value for row in rows)
+            }
+            if same_value_rows:
+                add("UNIT_SCOPE_MISMATCH", surface_token=match.group(0),
+                    expected_units=sorted({row[1] for _claim_id, row in same_value_rows}),
+                    actual_unit=effective_unit)
+            elif global_value_claims:
+                add("CLAIM_SCOPE_MISMATCH", surface_token=match.group(0),
+                    candidate_claim_ids=sorted(candidate_ids),
+                    matching_value_claim_ids=sorted(global_value_claims))
+            else:
+                add("UNSUPPORTED_NUMERIC_VALUE", surface_token=match.group(0),
+                    normalized_candidate=str(value),
+                    candidate_claim_ids=sorted(candidate_ids))
+            continue
+
+        role_matches: list[tuple[str, tuple[Decimal, str, bool, str | None]]] = []
+        for claim_id, row in exact:
+            claim = next(item for item in claims if item.get("claim_id") == claim_id)
+            direction = next((item.get("revision_values", {}).get("direction")
+                              for item in claim.get("evidence", [])
+                              if isinstance(item, dict)
+                              and isinstance(item.get("revision_values"), dict)
+                              and item.get("revision_values", {}).get("direction") is not None), None)
+            if _number_token_role_ok(numeric_text, match.start(), match.end(), row[3], direction):
+                role_matches.append((claim_id, row))
+        if not role_matches:
+            add("REVISION_ROLE_MISMATCH", surface_token=match.group(0),
+                expected_roles=sorted({row[3] for _claim_id, row in exact if row[3]}),
+                surface_role=surface_role)
+
+    return issues
+
+
 def _validate_cross_language_attribution_contexts(
     sentences: list[Any], claims: dict[str, dict], terminology: ScriptTerminologyMapV1,
     *, diagnostics_by_sentence: dict[str, dict[str, Any]] | None = None,
@@ -583,7 +860,7 @@ def _validate_cross_language_attribution_contexts(
     failures: dict[str, set[str]] = {}
     inherited: set[str] = set()
     active_id: str | None = None
-    active_signature: tuple[tuple[str, ...], tuple[str, ...], str] | None = None
+    active_signature: tuple[tuple[str, ...], tuple[str, ...]] | None = None
     for sentence in sentences:
         bound = [claims.get(claim_id) for claim_id in sentence.claim_ids]
         authorities = [claim for claim in bound if isinstance(claim, dict)
@@ -614,7 +891,6 @@ def _validate_cross_language_attribution_contexts(
         signature = (
             tuple(sorted({source for sources, _ in signatures for source in sources})),
             tuple(sorted({attribution for _, attribution in signatures})),
-            sentence.section,
         )
         active_reuse = context_id is not None and context_id == active_id and signature == active_signature
         explicit = True
@@ -872,32 +1148,57 @@ def lint_script(draft: ScriptDraft, angle: AngleCandidate, facts: dict, source_t
                         message="script sentence references a claim outside the selected angle",
                         sentence_id=sentence.sentence_id,
                     ))
-                for claim_id in sentence.claim_ids:
-                    claim = claims.get(claim_id)
-                    if claim is None or _is_cross_language_claim(claim, target_language):
-                        if claim is None:
-                            issues.append(LintIssue(code="CLAIM_NOT_ELIGIBLE", message="bound claim is unavailable",
-                                                    sentence_id=sentence.sentence_id))
-                        else:
-                            claim_diagnostics: list[dict[str, Any]] = []
-                            codes = _cross_language_claim_issues(
-                                sentence.text, claim, parsed_terminology,
-                                attribution_inherited=sentence.sentence_id in inherited_attribution,
-                                diagnostics=claim_diagnostics,
-                                bound_claim_ids=set(sentence.claim_ids),
-                            )
-                            for code in sorted(codes):
-                                detail = next((row for row in claim_diagnostics if row.get("code") == code), None)
-                                issues.append(LintIssue(
-                                    code=code,
-                                    message="translated fact exceeds or misses its approved structured claim scope",
-                                    sentence_id=sentence.sentence_id,
-                                    diagnostics={key: value for key, value in (detail or {}).items()
-                                                 if key != "code"} | {
-                                                     "sentence_id": sentence.sentence_id,
-                                                     "supporting_claim_ids": [claim_id],
-                                                 },
-                                ))
+                sentence_claims = [claims.get(claim_id) for claim_id in sentence.claim_ids]
+                if len(sentence.claim_ids) > 1 and all(
+                    isinstance(claim, dict) and claim_id in cross_language_claim_ids
+                    for claim_id, claim in zip(sentence.claim_ids, sentence_claims)
+                ):
+                    group_diagnostics: list[dict[str, Any]] = []
+                    group_codes = _cross_language_claim_set_issues(
+                        sentence.text,
+                        [claim for claim in sentence_claims if isinstance(claim, dict)],
+                        parsed_terminology,
+                        attribution_inherited=sentence.sentence_id in inherited_attribution,
+                        diagnostics=group_diagnostics,
+                    )
+                    for code in sorted(group_codes):
+                        detail = next((row for row in group_diagnostics if row.get("code") == code), None)
+                        issues.append(LintIssue(
+                            code=code,
+                            message="translated fact exceeds or misses its bound claim set",
+                            sentence_id=sentence.sentence_id,
+                            diagnostics={key: value for key, value in (detail or {}).items()
+                                         if key != "code"} | {
+                                             "sentence_id": sentence.sentence_id,
+                                             "supporting_claim_ids": list(sentence.claim_ids),
+                                         },
+                        ))
+                else:
+                    for claim_id, claim in zip(sentence.claim_ids, sentence_claims):
+                        if claim is None or _is_cross_language_claim(claim, target_language):
+                            if claim is None:
+                                issues.append(LintIssue(code="CLAIM_NOT_ELIGIBLE", message="bound claim is unavailable",
+                                                        sentence_id=sentence.sentence_id))
+                            else:
+                                claim_diagnostics: list[dict[str, Any]] = []
+                                codes = _cross_language_claim_issues(
+                                    sentence.text, claim, parsed_terminology,
+                                    attribution_inherited=sentence.sentence_id in inherited_attribution,
+                                    diagnostics=claim_diagnostics,
+                                    bound_claim_ids=set(sentence.claim_ids),
+                                )
+                                for code in sorted(codes):
+                                    detail = next((row for row in claim_diagnostics if row.get("code") == code), None)
+                                    issues.append(LintIssue(
+                                        code=code,
+                                        message="translated fact exceeds or misses its approved structured claim scope",
+                                        sentence_id=sentence.sentence_id,
+                                        diagnostics={key: value for key, value in (detail or {}).items()
+                                                     if key != "code"} | {
+                                                         "sentence_id": sentence.sentence_id,
+                                                         "supporting_claim_ids": [claim_id],
+                                                     },
+                                    ))
         for sentence_id, codes in context_failures.items():
             for code in sorted(codes):
                 issues.append(LintIssue(

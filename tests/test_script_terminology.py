@@ -1009,3 +1009,191 @@ def test_legacy_lint_does_not_require_terminology_without_explicit_cross_languag
     draft = draft.model_copy(update={"target_language": "zh-Hans"})
     result = lint_script(draft, _angle(), _facts(), "unrelated source text")
     assert "SCRIPT_TERMINOLOGY_REVIEW_REQUIRED" not in {issue.code for issue in result.issues}
+
+
+def _synthetic_multi_claim_pair():
+    from fanglei.evidence_targets import atomic_proposition_spans
+
+    alpha = _claim()
+    beta = _beta_claim()
+    beta_scope = beta["authority_attestation"]["scope"]
+    beta_scope["period"] = "September"
+    beta_evidence = beta["evidence"][0]
+    beta_excerpt = "Metric Beta increased by 20 units in September."
+    beta["claim_text"] = f'Data Office reports: "{beta_excerpt}"'
+    beta_evidence.update(
+        evidence_text=beta_excerpt,
+        proposition_span=atomic_proposition_spans(beta_excerpt)[0],
+        authority_scope_candidate=dict(beta_scope),
+        explicit_values=[{"value": "20", "unit": "units"}],
+        evidence_period_matches=["September"],
+    )
+    terminology_payload = _map_with_beta(beta)
+    for entry in terminology_payload["entries"]:
+        if entry["claim_ids"] == ["claim_beta"] and entry["semantic_role"] == "period":
+            entry["source_term"] = "September"
+            entry["proposed_target_terms"] = ["9月"]
+            entry["approved_target_terms"] = ["9月"]
+    return alpha, beta, terminology_payload
+
+
+def test_multi_claim_numeric_validation_uses_bound_claim_union_and_preserves_metric_value_pairs() -> None:
+    from fanglei.script_lint import _cross_language_claim_set_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta, payload = _synthetic_multi_claim_pair()
+    terminology = ScriptTerminologyMapV1.model_validate(payload)
+    claims = [alpha, beta]
+    correct = "数据署报告，8月零售调查的甲指标增加10单位，9月就业调查的乙指标增加20单位。"
+    swapped = "数据署报告，8月零售调查的甲指标增加20单位，9月就业调查的乙指标增加10单位。"
+    wrong_unit = "数据署报告，8月零售调查的甲指标增加10单位，9月就业调查的乙指标增加20岗位。"
+
+    assert not _cross_language_claim_set_issues(correct, claims, terminology)
+    assert _cross_language_claim_set_issues(swapped, claims, terminology)
+    assert "UNIT_SCOPE_MISMATCH" in _cross_language_claim_set_issues(wrong_unit, claims, terminology)
+
+
+def test_multi_claim_does_not_treat_subterm_inside_bound_alias_as_unbound_claim() -> None:
+    from fanglei.script_lint import _cross_language_claim_set_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta, payload = _synthetic_multi_claim_pair()
+    unbound = _entry("metric", "authority_attestation.scope.measure", "Metric Gamma", "指标", "gamma")
+    unbound["claim_ids"] = ["claim_gamma"]
+    payload["entries"].append(unbound)
+    terminology = ScriptTerminologyMapV1.model_validate(payload)
+    correct = "数据署报告，8月零售调查的甲指标增加10单位，9月就业调查的乙指标增加20单位。"
+    with_unbound_occurrence = correct + "此外，指标需要核对。"
+
+    assert not _cross_language_claim_set_issues(correct, [alpha, beta], terminology)
+    assert "TERMINOLOGY_TERM_MISSING" in _cross_language_claim_set_issues(
+        with_unbound_occurrence, [alpha, beta], terminology
+    )
+
+
+def test_multi_claim_period_aliases_are_checked_against_the_claim_they_scope() -> None:
+    from fanglei.script_lint import _cross_language_claim_set_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta, payload = _synthetic_multi_claim_pair()
+    terminology = ScriptTerminologyMapV1.model_validate(payload)
+    correct = "数据署报告，8月甲指标增加10单位，9月乙指标增加20单位。"
+    swapped_periods = "数据署报告，9月甲指标增加10单位，8月乙指标增加20单位。"
+
+    assert not _cross_language_claim_set_issues(correct, [alpha, beta], terminology)
+    assert "CLAIM_PERIOD_MISMATCH" in _cross_language_claim_set_issues(
+        swapped_periods, [alpha, beta], terminology
+    )
+
+
+def test_revision_roles_accept_chinese_increase_decrease_between_role_marker_and_value() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    claim = _synthetic_revision_claim()
+    evidence = claim["evidence"][0]
+    evidence["explicit_values"] = [
+        {"value": "-23,000", "unit": None},
+        {"value": "+21,000", "unit": None},
+        {"value": "44,000", "unit": None},
+    ]
+    evidence["revision_values"] = {
+        "previous_value": "-23,000", "revised_value": "+21,000",
+        "revision_amount": "44,000", "direction": "up",
+    }
+    text = "数据署报告，8月甲指标从减少2.3万修正为增加2.1万，上修4.4万。"
+
+    issues = _cross_language_claim_issues(
+        text, claim, ScriptTerminologyMapV1.model_validate(_synthetic_revision_terminology())
+    )
+    assert not issues
+
+
+def test_inferred_unit_from_bound_metric_does_not_require_duplicate_unit_suffix() -> None:
+    from fanglei.script_lint import _cross_language_claim_issues
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    claim = _claim()
+    scope = claim["authority_attestation"]["scope"]
+    scope.update(subject="job count", measure="job count", unit="jobs")
+    claim["evidence"][0]["authority_scope_candidate"] = dict(scope)
+    claim["evidence"][0]["explicit_values"] = [{"value": "42,000", "unit": "jobs"}]
+    entries = []
+    for row in _approved_map()["entries"]:
+        copy = dict(row)
+        if copy["semantic_role"] in {"subject", "metric"}:
+            copy["source_term"] = "job count"
+            copy["proposed_target_terms"] = ["就业岗位数"]
+            copy["approved_target_terms"] = ["就业岗位数"]
+        elif copy["semantic_role"] == "unit":
+            copy["source_term"] = "jobs"
+            copy["proposed_target_terms"] = ["岗位"]
+            copy["approved_target_terms"] = ["岗位"]
+        entries.append(copy)
+    terminology = ScriptTerminologyMapV1.model_validate(_approved_map(entries=entries))
+
+    assert not _cross_language_claim_issues(
+        "数据署报告，8月就业岗位数增加4.2万。", claim, terminology
+    )
+
+
+def test_attribution_context_can_continue_across_script_sections_when_source_is_unchanged() -> None:
+    from fanglei.content_models import ScriptSentence
+    from fanglei.script_lint import _validate_cross_language_attribution_contexts
+    from fanglei.script_terminology import ScriptTerminologyMapV1
+
+    alpha, beta = _claim(), _beta_claim()
+    terminology = ScriptTerminologyMapV1.model_validate(_map_with_beta(beta))
+    anchor = ScriptSentence(
+        sentence_id="anchor", section="phenomenon", sentence_type="verified_fact",
+        text="数据署报告：8月零售调查的甲指标增加10单位。", claim_ids=["claim_alpha"],
+        attribution_context_id="same-source",
+    )
+    continued = ScriptSentence(
+        sentence_id="continued", section="mechanism", sentence_type="verified_fact",
+        text="8月就业调查的乙指标增加10单位。", claim_ids=["claim_beta"],
+        attribution_context_id="same-source",
+    )
+
+    failures, inherited = _validate_cross_language_attribution_contexts(
+        [anchor, continued], {"claim_alpha": alpha, "claim_beta": beta}, terminology
+    )
+    assert not failures
+    assert inherited == {"continued"}
+
+
+def test_lint_script_routes_multi_claim_fact_through_union_numeric_validation() -> None:
+    from fanglei.content_models import ScriptDraft, ScriptSentence
+    from fanglei.script_lint import lint_script
+
+    alpha, beta, payload = _synthetic_multi_claim_pair()
+    angle = _angle(["claim_alpha", "claim_beta"])
+    terminology = _api("ScriptTerminologyMapV1").model_validate(payload)
+    factual = ScriptSentence(
+        sentence_id="paired_fact", section="phenomenon", sentence_type="verified_fact",
+        text="数据署报告，8月零售调查的甲指标增加10单位，9月就业调查的乙指标增加20单位。",
+        claim_ids=["claim_alpha", "claim_beta"], attribution_context_id="same-source",
+    )
+    draft = ScriptDraft(
+        angle_id=angle.angle_id, title=angle.title, target_language="zh-Hans",
+        sentences=[
+            ScriptSentence(sentence_id="hook", section="hook", sentence_type="interpretation",
+                           text="先把两份记录分开看。"),
+            factual,
+            ScriptSentence(sentence_id="mechanism", section="mechanism", sentence_type="explanation",
+                           text="对象和月份要分别核对。"),
+            ScriptSentence(sentence_id="close", section="core_judgment", sentence_type="interpretation",
+                           text="两项记录应保留各自的统计范围。"),
+        ],
+    )
+
+    result = lint_script(
+        draft, angle, {"schema_version": "2.2", "claims": [alpha, beta]},
+        "Synthetic unrelated source", speaking_rate=4.0, hard_min_duration_seconds=0,
+        hard_max_duration_seconds=1000, target_language="zh-Hans", terminology_map=terminology,
+        current_facts_sha256="b" * 64, run_id="synthetic-run-001", case_id="synthetic-retail-case",
+    )
+    targeted = {"UNSUPPORTED_NUMERIC_VALUE", "UNSUPPORTED_NUMERIC_FORMAT", "UNIT_SCOPE_MISMATCH",
+                "CLAIM_SCOPE_MISMATCH", "CLAIM_PERIOD_MISMATCH", "TERMINOLOGY_TERM_MISSING"}
+    paired_codes = {issue.code for issue in result.issues if issue.sentence_id == "paired_fact"}
+    assert not (paired_codes & targeted)

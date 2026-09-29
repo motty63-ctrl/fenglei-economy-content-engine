@@ -111,6 +111,7 @@ STAGE_ARTIFACT = {
     "angle_generation": "angles.json",
     "angle_selection": "angle.md",
     "human_angle_selection": "angle_selection.json",
+    "human_script_recovery": "human_script_edit.json",
     "script_generation": "script.json",
     "script_render": "script.md",
     "visual_planning": "visual_beats.json",
