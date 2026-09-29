@@ -14,7 +14,7 @@ from fanglei.human_visual_asset_recovery import (
     validate_visual_asset_recovery_plan,
 )
 from fanglei.artifact_registry import _human_visual_asset_recovery_graph
-from fanglei.pipeline import STAGE_ARTIFACTS
+from fanglei.pipeline import STAGE_ARTIFACT, STAGE_ARTIFACTS
 from fanglei.visual_assets import build_visual_asset_bundle
 from fanglei.visual_pipeline import _now
 from fanglei.visual_models import (
@@ -32,6 +32,11 @@ CASE_ID = "synthetic-retail-case"
 HASHES = {
     "visual_assets": "1" * 64,
     "human_visual_asset_review_candidate_1.json": "b" * 64,
+    "visual_asset_recovery.json": "c" * 64,
+    "visual_assets_candidate_2": "d" * 64,
+    "human_visual_asset_review_candidate_2.json": "e" * 64,
+    "visual_asset_recovery_candidate_3.json": "f" * 64,
+    "visual_assets_candidate_3": "a" * 64,
     "human_storyboard_approval.json": "2" * 64,
     "human_storyboard_candidate.json": "3" * 64,
     "human_script_approval.json": "c" * 64,
@@ -113,10 +118,11 @@ def _storyboard() -> Storyboard:
     )
 
 
-def _review(storyboard: Storyboard, **changes) -> HumanVisualAssetReviewV1:
+def _review(storyboard: Storyboard, *, candidate_id: int = 1, **changes) -> HumanVisualAssetReviewV1:
+    bundle_name = "visual_assets" if candidate_id == 1 else f"visual_assets_candidate_{candidate_id}"
     payload = {
         "schema_version": "human-visual-asset-review/1.0",
-        "candidate_id": 1,
+        "candidate_id": candidate_id,
         "decision": "changes_required",
         "run_id": RUN_ID,
         "case_id": CASE_ID,
@@ -128,14 +134,21 @@ def _review(storyboard: Storyboard, **changes) -> HumanVisualAssetReviewV1:
         "storyboard_sha256": canonical_json_sha256(storyboard),
         "storyboard_artifact_sha256": HASHES["human_storyboard_candidate.json"],
         "storyboard_approval_sha256": HASHES["human_storyboard_approval.json"],
-        "visual_bundle_sha256": HASHES["visual_assets"],
+        "visual_bundle_sha256": HASHES[bundle_name],
         "dependency_hashes": dict(HASHES),
     }
     payload.update(changes)
     return HumanVisualAssetReviewV1.model_validate(payload)
 
 
-def _recovery_plan(storyboard: Storyboard, review: HumanVisualAssetReviewV1, **changes) -> VisualAssetRecoveryPlanV1:
+def _recovery_plan(
+    storyboard: Storyboard,
+    review: HumanVisualAssetReviewV1,
+    *,
+    source_candidate_id: int = 1,
+    candidate_id: int = 2,
+    **changes,
+) -> VisualAssetRecoveryPlanV1:
     scene_layouts = [
         {
             "scene_id": "scene_open", "order": 1, "profile": "hero_topics",
@@ -164,14 +177,16 @@ def _recovery_plan(storyboard: Storyboard, review: HumanVisualAssetReviewV1, **c
         "schema_version": "visual-asset-recovery/1.0",
         "run_id": RUN_ID,
         "case_id": CASE_ID,
-        "source_candidate_id": 1,
-        "candidate_id": 2,
+        "source_candidate_id": source_candidate_id,
+        "candidate_id": candidate_id,
         "recovery_rationale": "Rebalance layout and typography without changing approved copy.",
         "storyboard_sha256": canonical_json_sha256(storyboard),
         "storyboard_artifact_sha256": HASHES["human_storyboard_candidate.json"],
         "storyboard_approval_sha256": HASHES["human_storyboard_approval.json"],
-        "source_visual_bundle_sha256": HASHES["visual_assets"],
-        "source_review_sha256": HASHES["human_visual_asset_review_candidate_1.json"],
+        "source_visual_bundle_sha256": HASHES[
+            "visual_assets" if source_candidate_id == 1 else f"visual_assets_candidate_{source_candidate_id}"
+        ],
+        "source_review_sha256": HASHES[f"human_visual_asset_review_candidate_{source_candidate_id}.json"],
         "dependency_hashes": dict(HASHES),
         "source_footer": {"label": "Source: Example Data Office", "source_ids": ["src_synthetic"]},
         "scene_layouts": scene_layouts,
@@ -383,6 +398,96 @@ def test_recovery_registers_new_candidate_without_approving_timeline() -> None:
         "visual_asset_recovery",
         ("visual_asset_recovery.json", "human_visual_asset_review_candidate_1.json", "visual_assets"),
     )
+    assert graph["human_visual_asset_review_candidate_2.json"][1] == (
+        "visual_assets_candidate_2", "visual_asset_recovery.json",
+        "human_visual_asset_review_candidate_1.json", "human_storyboard_approval.json",
+        "human_storyboard_candidate.json",
+    )
+    assert graph["human_visual_asset_review_candidate_2.json"][0] == "human_visual_asset_review_candidate_2"
+    assert STAGE_ARTIFACT["human_visual_asset_review_candidate_2"] == "human_visual_asset_review_candidate_2.json"
+    assert graph["visual_assets_candidate_3"] == (
+        "visual_asset_recovery_candidate_3",
+        ("visual_asset_recovery_candidate_3.json", "human_visual_asset_review_candidate_2.json",
+         "visual_assets_candidate_2"),
+    )
     assert STAGE_ARTIFACTS["visual_asset_recovery"] == (
         "visual_asset_recovery.json", "visual_assets_candidate_2",
     )
+    assert STAGE_ARTIFACTS["visual_asset_recovery_candidate_3"] == (
+        "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
+    )
+
+
+def test_candidate_three_binds_candidate_two_review_and_does_not_approve_timeline() -> None:
+    storyboard = _storyboard()
+    review = _review(storyboard, candidate_id=2)
+    plan = _recovery_plan(
+        storyboard, review, source_candidate_id=2, candidate_id=3,
+        source_review_sha256=HASHES["human_visual_asset_review_candidate_2.json"],
+        source_visual_bundle_sha256=HASHES["visual_assets_candidate_2"],
+    )
+
+    validate_visual_asset_recovery_plan(
+        storyboard, review, plan,
+        current_visual_bundle_sha256=HASHES["visual_assets_candidate_2"],
+        current_dependency_hashes=HASHES,
+        approved_source_ids={"src_synthetic"},
+    )
+    files = build_visual_asset_bundle(
+        storyboard,
+        _approval_for_candidate(storyboard),
+        approval_artifact_sha256=HASHES["human_storyboard_approval.json"],
+        recovery_plan=plan,
+    )
+    manifest = json.loads(files["manifest.json"])
+
+    assert manifest["candidate_id"] == 3
+    assert manifest["source_candidate_id"] == 2
+    assert manifest["review_status"] == "pending_human_visual_review"
+    assert "Candidate 2 — CHANGES_REQUIRED" in files["index.html"]
+    assert "../visual_assets_candidate_2/index.html" in files["index.html"]
+    assert "timeline" not in manifest
+
+
+def test_recovery_plan_rejects_objects_outside_mobile_safe_region() -> None:
+    storyboard = _storyboard()
+    review = _review(storyboard)
+    plan = _recovery_plan(storyboard, review)
+    first_layout = plan.scene_layouts[0].model_copy(update={
+        "object_styles": [plan.scene_layouts[0].object_styles[0].model_copy(update={
+            "placement": Placement(x=0.01, y=0.16, width=0.84, height=0.30),
+        })],
+    })
+    invalid_plan = plan.model_copy(update={
+        "scene_layouts": [first_layout, plan.scene_layouts[1]],
+    })
+
+    with pytest.raises(Exception, match="VISUAL_ASSET_RECOVERY_OBJECT_OUTSIDE_SAFE_AREA"):
+        validate_visual_asset_recovery_plan(
+            storyboard, review, invalid_plan,
+            current_visual_bundle_sha256=HASHES["visual_assets"],
+            current_dependency_hashes=HASHES,
+            approved_source_ids={"src_synthetic"},
+        )
+
+
+def test_recovery_plan_rejects_preferred_break_inside_value_unit_token() -> None:
+    storyboard = _storyboard()
+    review = _review(storyboard)
+    payload = _recovery_plan(storyboard, review).model_dump(mode="json")
+    value_style = next(
+        style
+        for scene in payload["scene_layouts"]
+        for style in scene["object_styles"]
+        if style["object_id"] == "value_positive"
+    )
+    value_style["preferred_line_breaks"] = [5]
+    invalid_plan = VisualAssetRecoveryPlanV1.model_validate(payload)
+
+    with pytest.raises(Exception, match="VISUAL_ASSET_RECOVERY_BREAK_SPLITS_VALUE_UNIT"):
+        validate_visual_asset_recovery_plan(
+            storyboard, review, invalid_plan,
+            current_visual_bundle_sha256=HASHES["visual_assets"],
+            current_dependency_hashes=HASHES,
+            approved_source_ids={"src_synthetic"},
+        )

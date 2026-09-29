@@ -41,7 +41,9 @@ from fanglei.visual_timing import apply_alignment_derived_timing, build_timing_a
 VISUAL_STAGES = {
     "visual_planning", "storyboard_generation", "visual_plan_render",
     "human_storyboard_review", "human_storyboard_recovery", "human_storyboard_approval",
-    "visual_asset_generation", "human_visual_asset_review", "visual_asset_recovery",
+    "visual_asset_generation", "human_visual_asset_review",
+    "human_visual_asset_review_candidate_2", "visual_asset_recovery",
+    "visual_asset_recovery_candidate_3",
 }
 
 
@@ -328,20 +330,25 @@ def record_human_visual_asset_review(
     reason_code: str,
     rationale: str,
     findings: list[str],
+    candidate_id: int = 1,
 ) -> Path:
-    """Record the first human visual decision without replacing its reviewed bundle."""
+    """Record a human decision for one immutable visual candidate."""
     if decision != "changes_required":
         raise ArtifactConflictError("VISUAL_ASSET_REVIEW_DECISION_NOT_SUPPORTED_IN_RECOVERY")
+    if candidate_id < 1:
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_CANDIDATE_ID_INVALID")
     run_dir, manifest, registry = _load_storyboard_approval_registry(
         run_id, runs_dir, visual_asset_recovery_mode=True,
     )
     if registry.imported_checkpoint_mode:
         raise ArtifactConflictError("VISUAL_ASSET_REVIEW_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
-    output_name = "human_visual_asset_review_candidate_1.json"
+    output_name = f"human_visual_asset_review_candidate_{candidate_id}.json"
+    if output_name not in registry.graph:
+        raise ArtifactConflictError("VISUAL_ASSET_REVIEW_CANDIDATE_NOT_REGISTERED")
     output_path = run_dir / output_name
     output_state = manifest.artifacts[output_name]
     if output_path.exists() or output_state.status != "missing":
-        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_1_REVIEW_ALREADY_EXISTS")
+        raise ArtifactConflictError(f"VISUAL_ASSET_CANDIDATE_{candidate_id}_REVIEW_ALREADY_EXISTS")
 
     dependency_names = registry.graph[output_name][1]
     try:
@@ -355,7 +362,8 @@ def record_human_visual_asset_review(
     )
     candidate_path = run_dir / "human_storyboard_candidate.json"
     candidate_artifact_hash = sha256_bytes(candidate_path.read_bytes())
-    visual_bundle_hash = manifest.artifacts["visual_assets"].content_hash or ""
+    bundle_name = "visual_assets" if candidate_id == 1 else f"visual_assets_candidate_{candidate_id}"
+    visual_bundle_hash = manifest.artifacts[bundle_name].content_hash or ""
     if (
         candidate.run_id != run_id
         or not approval.case_id.strip()
@@ -372,7 +380,7 @@ def record_human_visual_asset_review(
     }
     review = HumanVisualAssetReviewV1.model_validate({
         "schema_version": "human-visual-asset-review/1.0",
-        "candidate_id": 1,
+        "candidate_id": candidate_id,
         "decision": "changes_required",
         "run_id": run_id,
         "case_id": approval.case_id,
@@ -389,9 +397,9 @@ def record_human_visual_asset_review(
     })
 
     def write_review() -> None:
-        registry.write_json(output_name, review.model_dump(mode="json"), "human_visual_asset_review")
+        registry.write_json(output_name, review.model_dump(mode="json"), output_state.owner)
 
-    _execute(manifest, registry, "human_visual_asset_review", write_review)
+    _execute(manifest, registry, output_state.owner, write_review)
     registry.validate(output_name)
     return output_path
 
@@ -407,16 +415,28 @@ def recover_visual_asset_candidate(
     )
     if registry.imported_checkpoint_mode:
         raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
-    plan_path = run_dir / "visual_asset_recovery.json"
-    target = run_dir / "visual_assets_candidate_2"
+    plan_name = (
+        "visual_asset_recovery.json" if plan.candidate_id == 2
+        else f"visual_asset_recovery_candidate_{plan.candidate_id}.json"
+    )
+    target_name = f"visual_assets_candidate_{plan.candidate_id}"
+    source_bundle_name = (
+        "visual_assets" if plan.source_candidate_id == 1
+        else f"visual_assets_candidate_{plan.source_candidate_id}"
+    )
+    source_review_name = f"human_visual_asset_review_candidate_{plan.source_candidate_id}.json"
+    if plan_name not in registry.graph or target_name not in registry.graph:
+        raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_CANDIDATE_NOT_REGISTERED")
+    plan_path = run_dir / plan_name
+    target = run_dir / target_name
     if (
         plan_path.exists() or target.exists()
-        or manifest.artifacts["visual_asset_recovery.json"].status != "missing"
-        or manifest.artifacts["visual_assets_candidate_2"].status != "missing"
+        or manifest.artifacts[plan_name].status != "missing"
+        or manifest.artifacts[target_name].status != "missing"
     ):
-        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_2_ALREADY_EXISTS")
+        raise ArtifactConflictError(f"VISUAL_ASSET_CANDIDATE_{plan.candidate_id}_ALREADY_EXISTS")
 
-    dependency_names = registry.graph["visual_asset_recovery.json"][1]
+    dependency_names = registry.graph[plan_name][1]
     try:
         for name in dependency_names:
             registry.validate(name)
@@ -428,7 +448,7 @@ def recover_visual_asset_candidate(
         registry.read_json("human_storyboard_approval.json")
     )
     review = HumanVisualAssetReviewV1.model_validate(
-        registry.read_json("human_visual_asset_review_candidate_1.json")
+        registry.read_json(source_review_name)
     )
     candidate_file_hash = sha256_bytes((run_dir / "human_storyboard_candidate.json").read_bytes())
     if candidate_file_hash != approval.candidate_artifact_sha256:
@@ -452,7 +472,7 @@ def recover_visual_asset_candidate(
         candidate,
         review,
         plan,
-        current_visual_bundle_sha256=manifest.artifacts["visual_assets"].content_hash or "",
+        current_visual_bundle_sha256=manifest.artifacts[source_bundle_name].content_hash or "",
         current_dependency_hashes=current_dependencies,
         approved_source_ids=approved_source_ids,
     )
@@ -465,18 +485,20 @@ def recover_visual_asset_candidate(
         recovery_plan=plan,
     )
 
+    owner_stage = manifest.artifacts[plan_name].owner
+
     def write_recovery() -> None:
         registry.write_json(
-            "visual_asset_recovery.json", plan.model_dump(mode="json"), "visual_asset_recovery",
+            plan_name, plan.model_dump(mode="json"), owner_stage,
         )
         registry.write_directory(
-            "visual_assets_candidate_2", files, "visual_asset_recovery",
+            target_name, files, owner_stage,
         )
 
-    _execute(manifest, registry, "visual_asset_recovery", write_recovery)
-    registry.validate("visual_assets")
-    registry.validate("visual_asset_recovery.json")
-    registry.validate("visual_assets_candidate_2")
+    _execute(manifest, registry, owner_stage, write_recovery)
+    registry.validate(source_bundle_name)
+    registry.validate(plan_name)
+    registry.validate(target_name)
     return target
 
 

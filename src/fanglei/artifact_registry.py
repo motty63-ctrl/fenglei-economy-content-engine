@@ -253,6 +253,29 @@ def _human_visual_asset_recovery_graph(
         "visual_asset_recovery",
         ("visual_asset_recovery.json", "human_visual_asset_review_candidate_1.json", "visual_assets"),
     )
+    graph["human_visual_asset_review_candidate_2.json"] = (
+        "human_visual_asset_review_candidate_2",
+        (
+            "visual_assets_candidate_2", "visual_asset_recovery.json",
+            "human_visual_asset_review_candidate_1.json", "human_storyboard_approval.json",
+            "human_storyboard_candidate.json",
+        ),
+    )
+    graph["visual_asset_recovery_candidate_3.json"] = (
+        "visual_asset_recovery_candidate_3",
+        (
+            "human_visual_asset_review_candidate_2.json", "visual_assets_candidate_2",
+            "visual_asset_recovery.json", "human_visual_asset_review_candidate_1.json",
+            "human_storyboard_approval.json", "human_storyboard_candidate.json",
+        ),
+    )
+    graph["visual_assets_candidate_3"] = (
+        "visual_asset_recovery_candidate_3",
+        (
+            "visual_asset_recovery_candidate_3.json", "human_visual_asset_review_candidate_2.json",
+            "visual_assets_candidate_2",
+        ),
+    )
     return graph
 
 # The focus profile is opt-in. Research and content planning both track the
@@ -402,7 +425,8 @@ class ArtifactRegistry:
                 (self.run_dir / name).exists() or name in manifest.artifacts
                 for name in (
                     "human_visual_asset_review_candidate_1.json", "visual_asset_recovery.json",
-                    "visual_assets_candidate_2",
+                    "visual_assets_candidate_2", "human_visual_asset_review_candidate_2.json",
+                    "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
                 )
             )
             if visual_asset_recovery_enabled:

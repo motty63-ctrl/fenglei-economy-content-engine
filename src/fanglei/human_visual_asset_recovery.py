@@ -17,6 +17,10 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SIGNED_DISPLAY_VALUE = re.compile(
     r"^(?P<sign>[+＋\-−])(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)(?P<unit>\s*[^\d\s].*)?$"
 )
+_VALUE_UNIT_SPAN = re.compile(
+    r"(?<![\w])(?:[+＋\-−])?\d+(?:,\d{3})*(?:\.\d+)?"
+    r"\s*(?:[%％]|[\u3400-\u9fff]+|[A-Za-z][A-Za-z0-9./-]*)"
+)
 _TONES = Literal["primary", "secondary", "muted", "positive", "negative", "neutral"]
 
 
@@ -116,12 +120,20 @@ class VisualObjectStyleV1(BaseModel):
     target_font_size: StrictInt = Field(ge=16, le=240)
     tone: _TONES
     show_card: bool
+    preferred_line_breaks: list[StrictInt] = Field(default_factory=list)
 
     @field_validator("object_id")
     @classmethod
     def object_id_nonblank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("object_id must not be blank")
+        return value
+
+    @field_validator("preferred_line_breaks")
+    @classmethod
+    def line_breaks_are_ordered_unique(cls, value: list[int]) -> list[int]:
+        if value != sorted(set(value)):
+            raise ValueError("preferred line breaks must be sorted and unique")
         return value
 
 
@@ -263,7 +275,7 @@ class VisualAssetRecoveryPlanV1(BaseModel):
         if self.candidate_id != self.source_candidate_id + 1:
             raise ValueError("recovery candidate ID must advance exactly once")
         bindings = {
-            "human_visual_asset_review_candidate_1.json": self.source_review_sha256,
+            f"human_visual_asset_review_candidate_{self.source_candidate_id}.json": self.source_review_sha256,
             "human_storyboard_candidate.json": self.storyboard_artifact_sha256,
             "human_storyboard_approval.json": self.storyboard_approval_sha256,
             "visual_assets" if self.source_candidate_id == 1 else f"visual_assets_candidate_{self.source_candidate_id}":
@@ -315,7 +327,8 @@ def validate_visual_asset_recovery_plan(
         or current_visual_bundle_sha256 != review.visual_bundle_sha256
     ):
         raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_SOURCE_BUNDLE_MISMATCH")
-    if plan.source_review_sha256 != current_dependency_hashes.get("human_visual_asset_review_candidate_1.json"):
+    source_review_name = f"human_visual_asset_review_candidate_{plan.source_candidate_id}.json"
+    if plan.source_review_sha256 != current_dependency_hashes.get(source_review_name):
         raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_REVIEW_HASH_MISMATCH")
     if review.storyboard_approval_sha256 != plan.storyboard_approval_sha256:
         raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_APPROVAL_MISMATCH")
@@ -341,6 +354,23 @@ def validate_visual_asset_recovery_plan(
             box = style.placement
             if box.x < 0.05 or box.y < 0.04 or box.x + box.width > 0.95 or box.y + box.height > 0.90:
                 raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_OBJECT_OUTSIDE_SAFE_AREA")
+            text = storyboard_objects[style.object_id].content
+            if any(point <= 0 or point >= len(text) for point in style.preferred_line_breaks):
+                raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_BREAK_HINT_INVALID")
+            if style.preferred_line_breaks:
+                boundaries = [0, *style.preferred_line_breaks, len(text)]
+                if any(
+                    end - start < 2
+                    or text[start:end].strip() in {"，", "。", "！", "？", "、", "：", "；"}
+                    for start, end in zip(boundaries, boundaries[1:])
+                ):
+                    raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_BREAK_HINT_ORPHAN")
+            if any(
+                match.start() < point < match.end()
+                for match in _VALUE_UNIT_SPAN.finditer(text)
+                for point in style.preferred_line_breaks
+            ):
+                raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_BREAK_SPLITS_VALUE_UNIT")
         for bar in layout.diverging_bars:
             label = storyboard_objects.get(bar.label_object_id)
             value = storyboard_objects.get(bar.value_object_id)

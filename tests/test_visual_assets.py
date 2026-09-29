@@ -10,7 +10,7 @@ from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.human_storyboard_approval import HumanStoryboardApprovalV1
 from fanglei.human_storyboard_recovery import canonical_json_sha256
 from fanglei.models import RunManifest
-from fanglei.visual_assets import build_visual_asset_bundle
+from fanglei.visual_assets import _fit_text, _wrap_text, build_visual_asset_bundle
 from fanglei.visual_pipeline import generate_storyboard_visual_assets
 from fanglei.visual_models import (
     Placement, RendererDirectives, Storyboard, StoryboardObject, StoryboardScene,
@@ -188,3 +188,48 @@ def test_visual_asset_owner_fails_closed_without_approval_or_output(tmp_path) ->
         generate_storyboard_visual_assets(RUN_ID, tmp_path)
 
     assert not (run_dir / "visual_assets").exists()
+
+
+@pytest.mark.parametrize("value", [
+    "+12.5万", "−3.2万", "42美元", "37.75美元", "8小时", "34.4小时", "10美分", "4.1%",
+])
+def test_numeric_value_and_unit_are_atomic_visual_tokens(value: str) -> None:
+    obj = StoryboardObject(
+        object_id="metric_value", object_type="number", content=value, factual=True,
+        sentence_ids=["retail_001"], claim_ids=["claim_retail"], deterministic_render=True,
+        placement=Placement(x=0.1, y=0.2, width=0.34, height=0.28),
+        appearance_order=1, emphasis="primary",
+    )
+
+    lines, rendered_font_size = _fit_text(obj, "scene_synthetic", preferred_font_size=100)
+
+    assert lines == [value]
+    assert rendered_font_size >= 42
+
+
+def test_numeric_token_keeps_primary_size_when_layout_has_enough_width() -> None:
+    obj = StoryboardObject(
+        object_id="metric_value", object_type="number", content="37.75美元", factual=True,
+        sentence_ids=["retail_001"], claim_ids=["claim_retail"], deterministic_render=True,
+        placement=Placement(x=0.1, y=0.2, width=0.75, height=0.28),
+        appearance_order=1, emphasis="primary",
+    )
+
+    lines, rendered_font_size = _fit_text(obj, "scene_synthetic", preferred_font_size=100)
+
+    assert lines == ["37.75美元"]
+    assert rendered_font_size == 100
+
+
+def test_generic_chinese_label_break_hints_are_layout_only_and_avoid_orphans() -> None:
+    label = "零售销售变化情况"
+    lines = _wrap_text(label, 4 * 42, 42, preferred_breaks=[4])
+    explicit_preference = _wrap_text("地方政府教育部门", 12 * 48, 48, preferred_breaks=[4])
+    orphan_checked = _wrap_text("零售就业趋势观察", 3 * 48, 48)
+
+    assert lines == ["零售销售", "变化情况"]
+    assert explicit_preference == ["地方政府", "教育部门"]
+    assert "".join(lines) == label
+    assert "零售销售变化情况" == label
+    assert all(len(line) > 1 for line in orphan_checked)
+    assert "".join(orphan_checked) == "零售就业趋势观察"

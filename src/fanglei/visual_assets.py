@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 import unicodedata
 from typing import Any
 
@@ -21,6 +22,16 @@ from fanglei.visual_models import Storyboard, StoryboardObject, StoryboardScene
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
 _SHA256_LENGTH = 64
+_ATOMIC_NUMERIC_VALUE = re.compile(
+    r"^[+＋\-−]?\d+(?:,\d{3})*(?:\.\d+)?"
+    r"(?:\s*(?:[%％]|[\u3400-\u9fff]+|[A-Za-z][A-Za-z0-9./-]*))?$"
+)
+_VALUE_UNIT_SPAN = re.compile(
+    r"(?<![\w])(?:[+＋\-−])?\d+(?:,\d{3})*(?:\.\d+)?"
+    r"\s*(?:[%％]|[\u3400-\u9fff]+|[A-Za-z][A-Za-z0-9./-]*)"
+)
+_LINE_START_PUNCTUATION = frozenset("，。！？、：；）》】〕〉」』")
+_LINE_END_PUNCTUATION = frozenset("（《【〔〈「『")
 
 
 def build_visual_asset_bundle(
@@ -72,6 +83,7 @@ def build_visual_asset_bundle(
         layout = layouts.get(scene.scene_id)
         if layout is not None and layout.order != scene.order:
             raise ArtifactConflictError("VISUAL_ASSET_RECOVERY_SCENE_ORDER_CHANGED")
+        scene_styles = {style.object_id: style for style in layout.object_styles} if layout else {}
         svg, rendered_sizes, bar_metadata = _render_scene(
             scene,
             layout=layout,
@@ -96,7 +108,10 @@ def build_visual_asset_bundle(
                     "factual": obj.factual,
                     "sentence_ids": list(obj.sentence_ids),
                     "claim_ids": list(obj.claim_ids),
-                    "placement": obj.placement.model_dump(mode="json"),
+                    "placement": (
+                        scene_styles[obj.object_id].placement
+                        if obj.object_id in scene_styles else obj.placement
+                    ).model_dump(mode="json"),
                     "emphasis": obj.emphasis,
                 }
                 for obj in sorted(scene.objects, key=lambda item: item.appearance_order)
@@ -144,7 +159,9 @@ def build_visual_asset_bundle(
     files["index.html"] = _render_contact_sheet(
         scene_entries,
         candidate_id=recovery_plan.candidate_id if recovery_plan else None,
-        previous_candidate_href="../visual_assets/index.html" if recovery_plan else None,
+        previous_candidate_href=(
+            _previous_candidate_href(recovery_plan.candidate_id) if recovery_plan else None
+        ),
     )
     return files
 
@@ -185,6 +202,7 @@ def _render_scene(
         lines, font_size = _fit_text(
             obj, scene.scene_id, placement=placement,
             preferred_font_size=style.target_font_size if style else None,
+            preferred_breaks=style.preferred_line_breaks if style else (),
         )
         rendered_sizes[obj.object_id] = font_size
         x = round(placement.x * CANVAS_WIDTH)
@@ -253,6 +271,7 @@ def _fit_text(
     *,
     placement=None,
     preferred_font_size: int | None = None,
+    preferred_breaks=(),
 ) -> tuple[list[str], int]:
     placement = placement or obj.placement
     width = placement.width * CANVAS_WIDTH
@@ -263,7 +282,12 @@ def _fit_text(
     available_height = height - vertical_padding * 2
     start_font_size = preferred_font_size or 92
     for font_size in range(start_font_size, 15, -2):
-        lines = _wrap_text(obj.content, available_width, font_size)
+        if obj.object_type == "number" and _ATOMIC_NUMERIC_VALUE.fullmatch(obj.content):
+            lines = [obj.content]
+        else:
+            lines = _wrap_text(
+                obj.content, available_width, font_size, preferred_breaks=preferred_breaks,
+            )
         line_height = font_size * 1.22
         if len(lines) * line_height <= available_height and all(
             _measured_width(line, font_size) <= available_width + 0.1 for line in lines
@@ -272,26 +296,85 @@ def _fit_text(
     raise ArtifactConflictError(f"VISUAL_ASSET_TEXT_DOES_NOT_FIT:{scene_id}:{obj.object_id}")
 
 
-def _wrap_text(value: str, available_width: float, font_size: int) -> list[str]:
+def _wrap_text(
+    value: str,
+    available_width: float,
+    font_size: int,
+    *,
+    preferred_breaks=(),
+) -> list[str]:
+    """Wrap text deterministically, preferring supplied codepoint break points."""
     paragraphs = value.split("\n")
     lines: list[str] = []
+    offset = 0
     for paragraph in paragraphs:
         if not paragraph:
             lines.append("")
-            continue
-        current = ""
-        current_width = 0.0
-        for character in paragraph:
-            char_width = _character_width(character) * font_size
-            if current and current_width + char_width > available_width:
-                lines.append(current)
-                current = character
-                current_width = char_width
-            else:
-                current += character
-                current_width += char_width
-        lines.append(current)
+        else:
+            local_breaks = {
+                point - offset for point in preferred_breaks if offset < point < offset + len(paragraph)
+            }
+            boundaries = [0, *sorted(local_breaks), len(paragraph)]
+            for start, end in zip(boundaries, boundaries[1:]):
+                lines.extend(_wrap_paragraph(paragraph[start:end], available_width, font_size))
+        offset += len(paragraph) + 1
     return lines
+
+
+def _wrap_paragraph(
+    paragraph: str,
+    available_width: float,
+    font_size: int,
+) -> list[str]:
+    if _measured_width(paragraph, font_size) <= available_width + 0.1:
+        return [paragraph]
+
+    protected_boundaries = {
+        boundary
+        for match in _VALUE_UNIT_SPAN.finditer(paragraph)
+        for boundary in range(match.start() + 1, match.end())
+    }
+    length = len(paragraph)
+    best: list[tuple[int, float, list[str]] | None] = [None] * (length + 1)
+    best[length] = (0, 0.0, [])
+    for start in range(length - 1, -1, -1):
+        candidates: list[tuple[int, float, list[str]]] = []
+        for end in range(start + 1, length + 1):
+            if end in protected_boundaries:
+                continue
+            line = paragraph[start:end]
+            line_width = _measured_width(line, font_size)
+            if line_width > available_width + 0.1:
+                break
+            tail = best[end]
+            if tail is None:
+                continue
+            slack = max(0.0, (available_width - line_width) / max(available_width, 1.0))
+            penalty = slack * slack
+            if end < length:
+                if line and len(line) == 1:
+                    penalty += 100.0
+                if paragraph[end] in _LINE_START_PUNCTUATION:
+                    penalty += 100.0
+                if line[-1] in _LINE_END_PUNCTUATION:
+                    penalty += 100.0
+            if tail[2] and len(tail[2][0]) == 1:
+                penalty += 100.0
+            candidates.append((tail[0] + 1, penalty + tail[1], [line, *tail[2]]))
+        if candidates:
+            best[start] = min(candidates, key=lambda item: (item[0], item[1]))
+    if best[0] is None:
+        # A too-wide protected token is left for the caller's size-fit validation.
+        return [paragraph]
+    return best[0][2]
+
+
+def _previous_candidate_href(candidate_id: int) -> str:
+    if candidate_id <= 1:
+        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_ID_INVALID")
+    if candidate_id == 2:
+        return "../visual_assets/index.html"
+    return f"../visual_assets_candidate_{candidate_id - 1}/index.html"
 
 
 def _character_width(character: str) -> float:
@@ -389,7 +472,7 @@ def _render_contact_sheet(
     if candidate_id is not None:
         previous_link = (
             f'<a href="{html.escape(previous_candidate_href, quote=True)}">'
-            "Candidate 1 — CHANGES_REQUIRED</a> · "
+            f"Candidate {candidate_id - 1} — CHANGES_REQUIRED</a> · "
             if previous_candidate_href else ""
         )
         candidate_banner = (
