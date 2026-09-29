@@ -214,6 +214,22 @@ def _human_storyboard_recovery_graph(
             )
     return graph
 
+
+def _human_storyboard_approval_graph(
+    base_graph: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Require a run-bound human approval before deterministic scene asset generation."""
+    graph = dict(base_graph)
+    candidate_inputs = tuple(graph["human_storyboard_candidate.json"][1])
+    approval_dependencies = tuple(dict.fromkeys(("human_storyboard_candidate.json", *candidate_inputs)))
+    graph["human_storyboard_approval.json"] = (
+        "human_storyboard_approval", approval_dependencies,
+    )
+    graph["visual_assets"] = (
+        "visual_asset_generation", ("human_storyboard_approval.json", "human_storyboard_candidate.json"),
+    )
+    return graph
+
 # The focus profile is opt-in. Research and content planning both track the
 # explicit focus; legacy runs continue to use questions.json for angle framing.
 RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -278,6 +294,7 @@ class ArtifactRegistry:
         human_script_approval_mode: bool = False,
         timing_aware_storyboard_mode: bool | None = None,
         human_storyboard_recovery_mode: bool = False,
+        human_storyboard_approval_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -347,6 +364,14 @@ class ArtifactRegistry:
             )
             if storyboard_recovery_enabled:
                 self.graph = _human_storyboard_recovery_graph(self.graph)
+            storyboard_approval_enabled = human_storyboard_approval_mode or any(
+                (self.run_dir / name).is_file() or name in manifest.artifacts
+                for name in ("human_storyboard_approval.json", "visual_assets")
+            )
+            if storyboard_approval_enabled and storyboard_recovery_enabled:
+                self.graph = _human_storyboard_approval_graph(self.graph)
+            elif storyboard_approval_enabled:
+                raise ArtifactConflictError("STORYBOARD_APPROVAL_REQUIRES_RECOVERED_CANDIDATE")
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

@@ -3,26 +3,40 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+import re
 import wave
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import read_json, sha256_bytes
 from fanglei.angle_selection import HumanAngleSelectionV1
 from fanglei.errors import ArtifactConflictError
+from fanglei.evidence_policy import is_claim_eligible_for_content
+from fanglei.human_script_approval import HumanScriptApprovalV1
+from fanglei.human_storyboard_approval import HumanStoryboardApprovalV1
+from fanglei.human_storyboard_recovery import (
+    HumanStoryboardEditV1,
+    HumanStoryboardReviewV1,
+    canonical_json_sha256,
+    validate_human_storyboard_candidate,
+)
 from fanglei.models import RunManifest
 from fanglei.paths import resolve_run_dir
 from fanglei.pipeline import _execute, _load
 from fanglei.providers.visual import VisualPlanningProvider, VisualPlanningRequest
+from fanglei.research_focus import ResearchFocusV1
 from fanglei.storyboard import build_storyboard
 from fanglei.storyboard_quality import lint_storyboard
+from fanglei.v05_models import VoiceReviewDocument
 from fanglei.visual_models import Storyboard, VisualBeatPlan
 from fanglei.visual_render import render_visual_plan
+from fanglei.visual_assets import build_visual_asset_bundle
 from fanglei.visual_timing import apply_alignment_derived_timing, build_timing_aware_context, validate_timed_scene_coverage
 
 
 VISUAL_STAGES = {
     "visual_planning", "storyboard_generation", "visual_plan_render",
-    "human_storyboard_review", "human_storyboard_recovery",
+    "human_storyboard_review", "human_storyboard_recovery", "human_storyboard_approval",
+    "visual_asset_generation",
 }
 
 
@@ -34,6 +48,257 @@ def _validate_storyboard_run_identity(
         return
     if artifact_run_id != run_id:
         raise ArtifactConflictError(f"STORYBOARD_RECOVERY_RUN_ID_MISMATCH:{artifact_name}")
+
+
+def _load_storyboard_approval_registry(run_id: str, runs_dir: Path):
+    run_dir = resolve_run_dir(Path(runs_dir), run_id)
+    manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
+    if manifest.run_id != run_id:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_RUN_ID_MISMATCH")
+    registry = ArtifactRegistry(
+        run_dir, manifest, research_focus_mode=True, human_angle_selection_mode=True,
+        script_terminology_mode=True, human_script_recovery_mode=True,
+        human_script_approval_mode=True, timing_aware_storyboard_mode=True,
+        human_storyboard_recovery_mode=True, human_storyboard_approval_mode=True,
+    )
+    if registry.imported_checkpoint_mode:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_NOT_SUPPORTED_FOR_IMPORTED_CHECKPOINT")
+    return run_dir, manifest, registry
+
+
+def approve_human_storyboard_candidate(
+    run_id: str,
+    runs_dir: Path,
+    *,
+    expected_candidate_sha256: str,
+    reviewer: str,
+    rationale: str,
+) -> Path:
+    """Record explicit, write-once human approval for the current recovered Storyboard."""
+    from datetime import datetime
+
+    from fanglei.human_storyboard_recovery import canonical_json_sha256
+
+    run_dir, manifest, registry = _load_storyboard_approval_registry(run_id, runs_dir)
+    output_path = run_dir / "human_storyboard_approval.json"
+    output_state = manifest.artifacts["human_storyboard_approval.json"]
+    if output_path.exists() or output_state.status != "missing":
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_ALREADY_EXISTS")
+    if re.fullmatch(r"[0-9a-f]{64}", expected_candidate_sha256) is None:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_EXPECTED_HASH_INVALID")
+    if not reviewer.strip() or not rationale.strip():
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_HUMAN_REVIEW_FIELDS_REQUIRED")
+
+    dependency_names = registry.graph["human_storyboard_approval.json"][1]
+    try:
+        for name in dependency_names:
+            registry.validate(name)
+    except Exception as error:
+        raise ArtifactConflictError(f"STORYBOARD_APPROVAL_UPSTREAM_NOT_CURRENT:{error}") from error
+
+    script = registry.read_json("script.json")
+    facts = registry.read_json("facts.json")
+    focus = ResearchFocusV1.model_validate(registry.read_json("research_focus.json"))
+    selection = HumanAngleSelectionV1.model_validate(registry.read_json("angle_selection.json"))
+    script_approval = HumanScriptApprovalV1.model_validate(
+        registry.read_json("human_script_approval.json")
+    )
+    voice_review = VoiceReviewDocument.model_validate(registry.read_json("audio/review.json"))
+    original = Storyboard.model_validate(registry.read_json("storyboard.json"))
+    review = HumanStoryboardReviewV1.model_validate(registry.read_json("storyboard_review.json"))
+    edit = HumanStoryboardEditV1.model_validate(registry.read_json("human_storyboard_edit.json"))
+    candidate = Storyboard.model_validate(registry.read_json("human_storyboard_candidate.json"))
+
+    candidate_path = run_dir / "human_storyboard_candidate.json"
+    candidate_artifact_hash = sha256_bytes(candidate_path.read_bytes())
+    if candidate_artifact_hash != manifest.artifacts["human_storyboard_candidate.json"].content_hash:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_CANDIDATE_ARTIFACT_HASH_MISMATCH")
+    candidate_digest = canonical_json_sha256(candidate)
+    if candidate_digest != expected_candidate_sha256:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_CANDIDATE_DIGEST_MISMATCH")
+    if candidate_digest != edit.candidate_storyboard_sha256 or candidate != edit.candidate_storyboard:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_EDIT_BINDING_MISMATCH")
+
+    if focus.run_id != run_id or not focus.case_id.strip():
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_CASE_IDENTITY_INVALID")
+    if facts.get("run_id") != run_id:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_FACTS_RUN_ID_MISMATCH")
+    if selection.run_id != run_id or selection.source != "human":
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_ANGLE_SELECTION_INVALID")
+    if script.get("angle_id") != selection.selected_angle_id:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_SELECTED_ANGLE_MISMATCH")
+
+    current_hashes = {
+        name: manifest.artifacts[name].content_hash or ""
+        for name in dependency_names
+    }
+    required_hashes = {
+        "storyboard.json": manifest.artifacts["storyboard.json"].content_hash,
+        "script.json": manifest.artifacts["script.json"].content_hash,
+        "facts.json": manifest.artifacts["facts.json"].content_hash,
+        "angle_selection.json": manifest.artifacts["angle_selection.json"].content_hash,
+        "audio/narration.wav": manifest.artifacts["audio/narration.wav"].content_hash,
+        "audio/review.json": manifest.artifacts["audio/review.json"].content_hash,
+        "alignment.json": manifest.artifacts["alignment.json"].content_hash,
+        "subtitle_track.json": manifest.artifacts["subtitle_track.json"].content_hash,
+    }
+    if any(not digest for digest in current_hashes.values()) or any(
+        current_hashes.get(name) != digest for name, digest in required_hashes.items()
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_DEPENDENCY_HASH_MISSING")
+    candidate_hash = current_hashes["human_storyboard_candidate.json"]
+    storyboard_hash = current_hashes["storyboard.json"]
+    script_hash = current_hashes["script.json"]
+    facts_hash = current_hashes["facts.json"]
+    selection_hash = current_hashes["angle_selection.json"]
+    voice_review_hash = current_hashes["audio/review.json"]
+    audio_hash = current_hashes["audio/narration.wav"]
+    alignment_hash = current_hashes["alignment.json"]
+    subtitle_hash = current_hashes["subtitle_track.json"]
+
+    if (
+        original.run_id != run_id or candidate.run_id != run_id
+        or original.script_id != script.get("script_id")
+        or candidate.script_id != original.script_id
+        or review.decision != "changes_required" or review.run_id != run_id
+        or review.case_id != focus.case_id or review.original_storyboard_sha256 != storyboard_hash
+        or edit.status != "pending_human_review" or edit.run_id != run_id
+        or edit.case_id != focus.case_id or edit.review_sha256 != manifest.artifacts["storyboard_review.json"].content_hash
+        or edit.original_storyboard_sha256 != storyboard_hash
+        or edit.dependency_hashes != review.dependency_hashes
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_RECOVERY_CHAIN_INVALID")
+    if (
+        script_approval.status != "approved_for_tts" or script_approval.run_id != run_id
+        or script_approval.case_id != focus.case_id
+        or script_approval.angle_id != selection.selected_angle_id
+        or script_approval.script_sha256 != script_hash
+        or script_approval.angle_selection_sha256 != selection_hash
+        or script_approval.target_language.casefold() != str(script.get("target_language", "")).casefold()
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_SCRIPT_APPROVAL_BINDING_INVALID")
+    if (
+        voice_review.status != "approved" or voice_review.run_id != run_id
+        or voice_review.audio_sha256 != audio_hash
+        or (voice_review.script_sha256 and voice_review.script_sha256 != script_hash)
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_AUDIO_REVIEW_BINDING_INVALID")
+    if (
+        selection.facts_sha256 != facts_hash
+        or selection.angles_sha256 != manifest.artifacts["angles.json"].content_hash
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_SELECTION_STALE")
+    timing = candidate.timing_provenance
+    if (
+        timing is None or timing.audio_sha256 != audio_hash
+        or timing.voice_review_sha256 != voice_review_hash
+        or timing.alignment_sha256 != alignment_hash or timing.subtitle_sha256 != subtitle_hash
+    ):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_TIMING_BINDING_INVALID")
+    checked = validate_human_storyboard_candidate(original, candidate, script, facts)
+    if checked != candidate or not candidate.quality_gate or not candidate.quality_gate.passed:
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_CANDIDATE_QUALITY_INVALID")
+
+    eligible_claim_ids = sorted(
+        str(claim["claim_id"])
+        for claim in facts.get("claims", [])
+        if isinstance(claim, dict) and isinstance(claim.get("claim_id"), str)
+        and is_claim_eligible_for_content(claim)
+    )
+    candidate_claim_ids = {
+        claim_id for scene in candidate.scenes for obj in scene.objects for claim_id in obj.claim_ids
+    }
+    if not candidate_claim_ids.issubset(set(eligible_claim_ids)):
+        raise ArtifactConflictError("STORYBOARD_APPROVAL_INELIGIBLE_CLAIM_REFERENCE")
+
+    approval = HumanStoryboardApprovalV1(
+        schema_version="human-storyboard-approval/1.0",
+        decision="approved_for_visual_generation",
+        run_id=run_id,
+        case_id=focus.case_id,
+        reviewer=reviewer,
+        approved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        rationale=rationale,
+        original_storyboard_sha256=storyboard_hash or "",
+        candidate_storyboard_sha256=candidate_digest,
+        candidate_artifact_sha256=candidate_artifact_hash,
+        script_sha256=script_hash or "",
+        facts_sha256=facts_hash or "",
+        angle_selection_sha256=selection_hash or "",
+        selected_angle_id=selection.selected_angle_id,
+        eligible_claim_ids=eligible_claim_ids,
+        audio_sha256=audio_hash or "",
+        voice_review_sha256=voice_review_hash or "",
+        alignment_sha256=alignment_hash or "",
+        subtitle_sha256=subtitle_hash or "",
+        dependency_hashes=current_hashes,
+    )
+    payload = approval.model_dump(mode="json")
+
+    def write_approval() -> None:
+        registry.write_json("human_storyboard_approval.json", payload, "human_storyboard_approval")
+
+    _execute(manifest, registry, "human_storyboard_approval", write_approval)
+    registry.validate("human_storyboard_approval.json")
+    return output_path
+
+
+def generate_storyboard_visual_assets(run_id: str, runs_dir: Path) -> Path:
+    """Generate deterministic scene SVGs only after the bound human approval exists."""
+    run_dir, manifest, registry = _load_storyboard_approval_registry(run_id, runs_dir)
+    try:
+        registry.validate("human_storyboard_approval.json")
+        approval = HumanStoryboardApprovalV1.model_validate(
+            registry.read_json("human_storyboard_approval.json")
+        )
+        candidate = Storyboard.model_validate(registry.read_json("human_storyboard_candidate.json"))
+        facts = registry.read_json("facts.json")
+    except Exception as error:
+        raise ArtifactConflictError(f"VISUAL_ASSET_APPROVAL_OR_INPUT_INVALID:{error}") from error
+
+    current_dependencies = {
+        name: manifest.artifacts[name].content_hash or ""
+        for name in registry.graph["human_storyboard_approval.json"][1]
+    }
+    if approval.dependency_hashes != current_dependencies:
+        raise ArtifactConflictError("VISUAL_ASSET_APPROVAL_DEPENDENCY_MISMATCH")
+    if (
+        approval.run_id != run_id or candidate.run_id != run_id
+        or canonical_json_sha256(candidate) != approval.candidate_storyboard_sha256
+        or sha256_bytes((run_dir / "human_storyboard_candidate.json").read_bytes())
+        != approval.candidate_artifact_sha256
+    ):
+        raise ArtifactConflictError("VISUAL_ASSET_CANDIDATE_BINDING_INVALID")
+    current_eligible = sorted(
+        str(claim["claim_id"])
+        for claim in facts.get("claims", [])
+        if isinstance(claim, dict) and isinstance(claim.get("claim_id"), str)
+        and is_claim_eligible_for_content(claim)
+    )
+    if current_eligible != approval.eligible_claim_ids:
+        raise ArtifactConflictError("VISUAL_ASSET_ELIGIBLE_CLAIMS_CHANGED")
+
+    approval_hash = manifest.artifacts["human_storyboard_approval.json"].content_hash or ""
+    files = build_visual_asset_bundle(
+        candidate, approval, approval_artifact_sha256=approval_hash,
+    )
+    target = run_dir / "visual_assets"
+    asset_state = manifest.artifacts["visual_assets"]
+    if target.exists() or asset_state.status != "missing":
+        if asset_state.status == "valid":
+            try:
+                registry.validate("visual_assets")
+                return target
+            except Exception as error:
+                raise ArtifactConflictError(f"VISUAL_ASSET_EXISTING_BUNDLE_INVALID:{error}") from error
+        raise ArtifactConflictError("VISUAL_ASSET_EXISTING_BUNDLE_NOT_REUSABLE")
+
+    def write_assets() -> None:
+        registry.write_directory("visual_assets", files, "visual_asset_generation")
+
+    _execute(manifest, registry, "visual_asset_generation", write_assets)
+    registry.validate("visual_assets")
+    return target
 
 
 def submit_human_storyboard_recovery(

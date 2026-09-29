@@ -116,6 +116,8 @@ STAGE_ARTIFACT = {
     "human_script_recovery": "human_script_edit.json",
     "human_storyboard_review": "storyboard_review.json",
     "human_storyboard_recovery": "human_storyboard_candidate.json",
+    "human_storyboard_approval": "human_storyboard_approval.json",
+    "visual_asset_generation": "visual_assets",
     "human_script_approval": "human_script_approval.json",
     "script_generation": "script.json",
     "script_render": "script.md",
