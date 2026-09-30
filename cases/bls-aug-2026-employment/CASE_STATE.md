@@ -4,7 +4,7 @@
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **`V0.2_PHASE_3C5_WAITING_FOR_PREVIEW_REVIEW`.** Candidate 1 and Candidate 2 retain their formal `CHANGES_REQUIRED` decisions. Candidate 3 received a hash-bound `approved_for_timeline` review. A 5.1 Timeline and local preview-only renderer project were generated from the approved inputs; final subtitle burn-in and MP4 rendering/export have not started. Human preview review is pending.
+- Status: **`V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW`**. Preview Candidate 1: human `CHANGES_REQUIRED`; Preview Candidate 2: technical render failure, not human-reviewed; Preview Candidate 3: current/valid, awaiting human review. Visual Candidate 3 remains approved. No final-render approval or final MP4 exists.
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
 - Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Audio Candidate 1's formal rejection and media are archived; audio Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; its recovered candidate was approved for visual generation. Visual Candidates 1 and 2 are formally `CHANGES_REQUIRED`; Candidate 3 is approved for Timeline. See [VISUAL_REVIEW.md](VISUAL_REVIEW.md) for preserved candidate history and [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md) for the current review packet. No final MP4 exists for this BLS run.
@@ -171,7 +171,7 @@ Candidate 3 remains bound to the same recovered Storyboard SHA-256 `9bea77de9cf7
 
 At the Phase 3C.4B checkpoint, Candidate 3 was awaiting its final visual decision. That gate was later resolved by the explicit, hash-bound approval recorded in Phase 3C.5 below; the prior Candidate 1/2 decisions and bundles remain preserved.
 
-## Current Phase 3C.5 — approved visual, Timeline, motion, and preview
+## Historical Phase 3C.5 — approved visual, Timeline, motion, and preview
 
 Reviewer `motty63-ctrl` approved Visual Candidate 3 for Timeline at `2026-09-30T00:04:37+08:00`. The formal review is `runs/2026-09-27-001-bls-august-2026-employment-situation/human_visual_asset_review_candidate_3.json`, SHA-256 `a92d5d010c2ae2389ca8cd8c85da3bb5614dfaae684326e2e3390505004c11b3`. It binds Candidate 3 bundle SHA-256 `5786ac2a2fd1627159969e3fba10a92e4d51822ba611d601c4a2c17e45806355` to recovered Storyboard canonical SHA-256 `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded` and the current upstream review/dependency hashes. Candidate 1 and Candidate 2 reviews remain preserved.
 
@@ -180,3 +180,18 @@ The formal Timeline owner generated `timeline.json` schema `5.1`, SHA-256 `87730
 The local preview-only entry is `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project/review-preview.html`, SHA-256 `0b77b76ded4713644e3d0dbd665a2c137e16516586535883db7e4a4d554bc31f`; it is marked `PREVIEW · NOT FINAL` and `HUMAN REVIEW REQUIRED`. Static QA confirms local audio/visual assets, 9/9 scene mapping, 12 subtitle cues, ordered in-bounds timing, contiguous scene ranges, and `full_render_requested=false`. The browser security policy blocked opening the local `file://` preview in this review pass, so visual appearance, browser playback, text clipping, and perceived sync have not been visually inspected by the agent. Alignment remains `proportional_by_normalized_char_count`, quality `estimated`, not word-level acoustic alignment. The review checklist is [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md).
 
 **Current gate: `HUMAN PREVIEW REVIEW = PENDING`.** No final-render approval, final MP4, publication, or V0.2 acceptance is recorded. Exact next action: human review of `PREVIEW_REVIEW.md` and the local `review-preview.html`.
+
+
+## Current Phase 3C.5C — corrected preview awaiting human review
+
+**`V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW` · `HUMAN PREVIEW REVIEW = PENDING`**
+
+Preview Candidate 1 has the explicit human `CHANGES_REQUIRED / SUBTITLE_OCCLUSION_AND_TIMING_SYNC` decision. Preview Candidate 2 is `TECHNICAL_RENDER_FAILURE / RENDER_TIME_AND_SUBTITLE_LAYOUT`, never registered for human review; it is not a human rejection. Both videos and old renderer packages are preserved.
+
+Generic renderer fix `0e587cc` binds scenes, motion and captions to requested HyperFrames frame time, independently of audio playback. Full subtitle text is measured after browser font resolution; compact panels adapt to actual wrapping and safe free bands without clipping or covering measured critical objects/footers. No BLS/Fed-specific rendering branches or added font files are used.
+
+The formal owner reused Timeline Candidate 2 unchanged (SHA-256 `3e60ff14724751cef59d252e013c76950db37cacc30f99f515aa4e1db9da6642`) and generated renderer/preview Candidate 3. All previously existing run files except owner-updated `run.json` remain byte-identical. Current MP4: `runs/2026-09-27-001-bls-august-2026-employment-situation/review-preview-candidate-3.mp4`; SHA-256 `0421363e620e56429e8b14b3dead33b5fbdbf99f1b0eda1ecece917b9738f4fe`. It is NON-FINAL, 3,889,121 bytes, 1080×1920, 30 FPS, H.264/AAC, 58.700 s video / 58.679 s audio.
+
+Actual QA covered 9 scene interiors, 6 boundary frames, all 12 subtitle cues, and opening/ending. The 27 scene/boundary/cue frames match the compiled DOM; scene_003 is correct and scene_008's three lines are visible. Both DOM probes report zero clipping/footer/critical-object collision. Focused tests: 49 passed; safe non-integration: 958 passed (zero failures/skips); diff check passed. Font fallback and large-HTML lint messages remain documented non-blocking limitations. Timing remains pause-refined sentence timing, not word-level forced alignment.
+
+**Exact next action: human review of Preview Candidate 3 and `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`.** No preview approval, final render, publication, push, merge, or V0.2 completion is authorized by this phase.

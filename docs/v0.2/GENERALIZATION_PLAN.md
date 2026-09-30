@@ -124,8 +124,25 @@ V0.2 is complete when:
 6. V0.1.0 artifacts and public release remain unchanged; safe non-integration regression does not lose coverage or regress.
 7. Limitations, including sentence-level proportional timing until a word-alignment adapter is validated, are described accurately.
 
-## Next action
+## Historical next action after Phase 3C.5
 
 Phases 1A, 1B, 1C, 2A, 2B, 3A.1, 3A.2, 3B.1, 3B.2, 3C.1.2–3C.1.5, 3C.3D, 3C.4A, and 3C.4B are complete. Phase 3C.5 has generated a current Timeline and non-final local preview and is waiting for human preview review. Phase 3C.1 / 3C.1.1 remain historical blocked checkpoints. The recovered Storyboard canonical SHA-256 is `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded`; Candidate 3 bundle SHA-256 is `5786ac2a2fd1627159969e3fba10a92e4d51822ba611d601c4a2c17e45806355`.
 
 **Current state: `V0.2_PHASE_3C5_WAITING_FOR_PREVIEW_REVIEW`; `HUMAN PREVIEW REVIEW = PENDING`.** The hash-bound Candidate 3 approval and Timeline are current. The local preview is `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project/review-preview.html`; human inspection remains the exact next action through `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`. No final render, MP4 export, or publication is approved. V0.1.0 remains frozen; V0.2 is incomplete.
+
+
+## Current Phase 3C.5C — corrected preview awaiting human review
+
+**`V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW` · `HUMAN PREVIEW REVIEW = PENDING`**
+
+Preview Candidate 1 has the explicit human `CHANGES_REQUIRED / SUBTITLE_OCCLUSION_AND_TIMING_SYNC` decision. Preview Candidate 2 is `TECHNICAL_RENDER_FAILURE / RENDER_TIME_AND_SUBTITLE_LAYOUT`, never registered for human review; it is not a human rejection. Both videos and old renderer packages are preserved.
+
+Generic renderer fix `0e587cc` binds scenes, motion and captions to requested HyperFrames frame time, independently of audio playback. Full subtitle text is measured after browser font resolution; compact panels adapt to actual wrapping and safe free bands without clipping or covering measured critical objects/footers. No BLS/Fed-specific rendering branches or added font files are used.
+
+The formal owner reused Timeline Candidate 2 unchanged (SHA-256 `3e60ff14724751cef59d252e013c76950db37cacc30f99f515aa4e1db9da6642`) and generated renderer/preview Candidate 3. All previously existing run files except owner-updated `run.json` remain byte-identical. Current MP4: `runs/2026-09-27-001-bls-august-2026-employment-situation/review-preview-candidate-3.mp4`; SHA-256 `0421363e620e56429e8b14b3dead33b5fbdbf99f1b0eda1ecece917b9738f4fe`. It is NON-FINAL, 3,889,121 bytes, 1080×1920, 30 FPS, H.264/AAC, 58.700 s video / 58.679 s audio.
+
+Actual QA covered 9 scene interiors, 6 boundary frames, all 12 subtitle cues, and opening/ending. The 27 scene/boundary/cue frames match the compiled DOM; scene_003 is correct and scene_008's three lines are visible. Both DOM probes report zero clipping/footer/critical-object collision. Focused tests: 49 passed; safe non-integration: 958 passed (zero failures/skips); diff check passed. Font fallback and large-HTML lint messages remain documented non-blocking limitations. Timing remains pause-refined sentence timing, not word-level forced alignment.
+
+**Exact next action: human review of Preview Candidate 3 and `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`.** No preview approval, final render, publication, push, merge, or V0.2 completion is authorized by this phase.
+
+The generic change is confined to review composition/time authority, measured subtitle layout, and separately registered renderer/preview candidates. The Candidate 2 owner API remains a compatibility wrapper; it is not replaced or overwritten. Revert the renderer helper, adapter integration, candidate-owner/graph extension and tests together to roll back the implementation, while preserving local preview audit history. A rollback does not grant any human approval.
