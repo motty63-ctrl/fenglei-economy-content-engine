@@ -1,8 +1,40 @@
 # BLS Case 2 — Preview Candidate 3 Human Review
 
-**Current state: `V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW`**
+## Current Phase 3C.6A — Final Render contract ready, export not started
 
-**HUMAN PREVIEW REVIEW = PENDING · NON-FINAL · Final Render NOT approved**
+**`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
+
+已按用户既有决定记录 Preview Candidate 3 的 `approved_for_final_render`，reviewer 为 `motty63-ctrl`，时间 `2026-09-30T10:22:16+08:00`。本阶段没有再次请求审批，也没有启动 HyperFrames / FFmpeg、LLM、TTS 或外部服务。
+
+| 当前正式 artifact | SHA-256 / state |
+|---|---|
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/human_preview_review_candidate_3.json` | `9a746fe7dbfe6ff872dfaf1f11a98eabab3f80f7a0387fb9c18f8e8c2a954c55` · valid/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/final_render_request.json` | `1f5ea05edaadfb96bad0285382ed06fed671f22846f3db52781f012732a40269` · validated/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/render_manifest_final.json` | `ac70d8cd628e54aa14dc77ebdefe8bd82fec055cc7a528523cacff39a72a7703` · valid/current, ready_for_final_render |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project_final` | `b073d8cef8d50c4bb1b7f443adfabcf2b3773579912c9b20ddafc5d846572d1d` · valid/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/final.mp4` / `final_video_candidate.json` | missing — not generated |
+
+Approval 绑定当前 Preview 3、Timeline 2、Visual Candidate 3、音频、Script、recovered Storyboard、两条字幕身份、timing refinement、上游审批和 renderer package/manifest 的完整 hash 链。决策记录的 `final_render_approved=true` 只有在 owner 重新验证完整 current 依赖后才可授权 export；stale approval 不能继续授权。旧 `changes_required` / `approved_for_review` 仍是非最终渲染批准。
+
+通用实现 commit：`e9b11c9379d882d52a46e3b1cf31e8afee0cd180`。新 owner APIs：`create_final_render_request()` → `validate_final_render_request()` → `prepare_final_render()`；后续真实 export 才可调用 `record_final_video_candidate()`。未注册的 source preview 不能仅凭文件存在或技术 QA 获得最终渲染许可。
+
+独立 final manifest 为 `preview_only=false`、`full_render_requested=true`。Final package 复制获批 renderer package 的原始 bytes，保留当前 composition、审阅标识、字幕、motion 和时钟行为；没有改写 Preview 3 manifest 或 Timeline 2。配置来自 pinned HyperFrames package 与既有 canvas/timing metadata：HyperFrames `0.8.20`、1080×1920、30 FPS、native H.264/AAC MP4 export profile，继承 renderer default quality，不增加 bitrate 策略。
+
+Final Render 未开始，Final Candidate 未生成。未来 candidate 的 contract 状态为 `pending_human_final_review`，technical QA / Human Final Video Review / workflow acceptance 是分别待完成的 gate；技术产物或最终视频审批都不自动代表 V0.2 acceptance。没有发布、上传、Release/tag、push 或 merge；V0.1.0 保持冻结。
+
+验证：focused **81 passed**；safe non-integration **990 passed, 0 failed, 0 skipped**，包括已安装本地浏览器上的 renderer 回归。新增直接回归保证 dependency map 键顺序不影响批准身份；采用唯一 review/media 直接依赖对识别授权 candidate。独立 review 未发现其余 blocker。新生产代码无 BLS/case ID、claim_063–071、当前数值/hash/timestamp 专用分支。`git diff --check` 通过。
+
+Offline replay 审计：184 个原 run 文件中，183 个内容文件 byte-identical，仅 owner 更新 `run.json`。原 Script、音频、Storyboard、Visual 3、Facts、Research、Timeline 2、Preview 1/2/3 与历史 reviews 均保持不变。Ignored run artifacts 按既有约定保留在本地，没有 force-add 二进制或 run 输出。
+
+**Exact next phase: Phase 3C.6B — Canonical Final Render + Final Media QA。** 使用上述 current approved request/manifest 与不变的 Timeline 2，完成真实 export、decode / actual-frame / subtitle / Preview→Final QA 后，停在人工 Final Video Review；本阶段没有执行这一步。
+
+**FINAL RENDER = NOT STARTED · HUMAN FINAL VIDEO REVIEW = NOT STARTED · V0.2 ACCEPTANCE = PENDING**
+
+## Historical preview review packet and preserved QA
+
+**Historical Phase 3C.5C state: `V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW`**
+
+**Historical review-pending checkpoint; superseded by the formal approval above.**
 
 Open [Preview Candidate 3](../../runs/2026-09-27-001-bls-august-2026-employment-situation/review-preview-candidate-3.mp4). This local, ignored MP4 is the current review target. Earlier previews and their audit evidence are preserved below.
 
@@ -12,7 +44,7 @@ Open [Preview Candidate 3](../../runs/2026-09-27-001-bls-august-2026-employment-
 |---|---|---|
 | Preview 1 | Human `CHANGES_REQUIRED / SUBTITLE_OCCLUSION_AND_TIMING_SYNC`, reviewer `motty63-ctrl` | `d846da9f9688887ef7c91fb102fb4341d0f7e6c1f4c9e7fbcbf0b4d6a00fdde7` |
 | Preview 2 | `TECHNICAL_RENDER_FAILURE / RENDER_TIME_AND_SUBTITLE_LAYOUT`; never registered for human review, not human-rejected | `5447663a0009d52381b5205138ee46edfcc97e68bd80ca74013fd1a5dba9d9d0` |
-| Preview 3 | Current/valid; `PENDING_HUMAN_PREVIEW_REVIEW` | `0421363e620e56429e8b14b3dead33b5fbdbf99f1b0eda1ecece917b9738f4fe` |
+| Preview 3 | `APPROVED_FOR_FINAL_RENDER`, reviewer `motty63-ctrl`; current hash-bound approval above | `0421363e620e56429e8b14b3dead33b5fbdbf99f1b0eda1ecece917b9738f4fe` |
 
 Candidate 2 remains at `runs/2026-09-27-001-bls-august-2026-employment-situation/review-preview-candidate-2.mp4`, with its renderer package unchanged. Its technical defects were the opening visual at a scene_003 time and a clipped third subtitle line in scene_008. It did not reach the human gate.
 
@@ -44,7 +76,7 @@ The generic renderer fix is commit `0e587cc` (`fix: make preview rendering timel
 | Composition/timeline time metadata | **RESOLVED**: one root resolves duration `58.679`, dimensions `1080×1920`, FPS `30`, 1,761 frames. |
 | Other renderer messages | **NON_BLOCKING**: large-HTML lint and a resource 404; all required assets, text, audio and sampled output validated. Compiler logs Inter font-face retrieval/caching and inline mapping; no font assets were installed/committed, and no LLM, TTS, image-generation, or external rendering service was used. |
 
-## Human review checklist — current Candidate 3 only
+## Historical human review checklist — Candidate 3 (approval recorded above)
 
 - [ ] Listen for perceived pause-aware subtitle/audio synchronization; this is **sentence-level refinement**, not WhisperX or word-level forced alignment.
 - [ ] Judge pacing, scene transition fades, and the opening/ending hold.
@@ -69,9 +101,9 @@ The following original packet is preserved as historical evidence. Its pending g
 
 The reviewer accepted the visual direction but requested a smaller subtitle treatment and playback timing that follows natural pauses more closely. The observed scene-boundary offsets are review observations only; they are not target timestamps and must not be hardcoded. Script, audio, Storyboard, Visual Candidate 3, scene order, and factual content remain frozen.
 
-**Current gate: `HUMAN PREVIEW REVIEW = PENDING`**
+**Historical gate: `HUMAN PREVIEW REVIEW = PENDING` at original packet creation; superseded above.**
 
-This is a local review preview, not a final video. No final-render approval or publication decision has been recorded.
+At this historical checkpoint, this was a local review preview, not a final video, and no final-render approval or publication decision had been recorded. The current final-render approval is recorded above; publication remains unapproved.
 
 ## A. Approval chain
 
