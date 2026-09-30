@@ -43,7 +43,7 @@ class PreviewReviewFindingV1(StrictModel):
 class HumanPreviewReviewV1(StrictModel):
     schema_version: Literal["human-preview-review/1.0"] = "human-preview-review/1.0"
     artifact_type: Literal["human_preview_review"] = "human_preview_review"
-    candidate_id: Literal[1, 2]
+    candidate_id: Literal[1, 2, 3]
     run_id: str = Field(min_length=1)
     case_id: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)
@@ -92,7 +92,9 @@ def _load_registry(run_dir: Path) -> tuple[RunManifest, ArtifactRegistry]:
 
 
 def _safe_preview_path(run_dir: Path, candidate_id: int) -> tuple[str, Path]:
-    relative = "review-preview.mp4" if candidate_id == 1 else "review-preview-candidate-2.mp4"
+    if candidate_id not in (1, 2, 3):
+        raise ValueError("PREVIEW_CANDIDATE_ID_INVALID")
+    relative = "review-preview.mp4" if candidate_id == 1 else f"review-preview-candidate-{candidate_id}.mp4"
     target = (run_dir / relative).resolve()
     try:
         target.relative_to(run_dir.resolve())
@@ -104,7 +106,7 @@ def _safe_preview_path(run_dir: Path, candidate_id: int) -> tuple[str, Path]:
 def record_human_preview_review(
     run_dir: Path,
     *,
-    candidate_id: Literal[1, 2],
+    candidate_id: Literal[1, 2, 3],
     reviewer: str,
     decision: Literal["changes_required", "approved_for_review"],
     reason_code: str,
@@ -115,7 +117,7 @@ def record_human_preview_review(
     run_dir = Path(run_dir).resolve()
     manifest, registry = _load_registry(run_dir)
     timeline_name = "timeline.json" if candidate_id == 1 else "timeline_candidate_2.json"
-    render_manifest_name = "render_manifest.json" if candidate_id == 1 else "render_manifest_candidate_2.json"
+    render_manifest_name = "render_manifest.json" if candidate_id == 1 else f"render_manifest_candidate_{candidate_id}.json"
     review_name = f"human_preview_review_candidate_{candidate_id}.json"
     if registry.manifest.artifacts[review_name].status != "missing":
         raise ArtifactConflictError("PREVIEW_REVIEW_DECISION_ALREADY_RECORDED")
@@ -347,11 +349,13 @@ def create_timeline_candidate_2(run_dir: Path) -> Path:
     return path
 
 
-def create_renderer_project_candidate_2(run_dir: Path) -> Path:
+def create_renderer_project_candidate(run_dir: Path, *, candidate_id: Literal[2, 3]) -> Path:
     """Build a separate preview-only renderer package from Timeline Candidate 2."""
+    if candidate_id not in (2, 3):
+        raise ValueError("PREVIEW_CANDIDATE_ID_INVALID")
     run_dir = Path(run_dir).resolve()
     manifest, registry = _load_registry(run_dir)
-    _validated_dependency_hashes(registry, "renderer_project_candidate_2")
+    _validated_dependency_hashes(registry, f"renderer_project_candidate_{candidate_id}")
     storyboard_name = "human_storyboard_candidate.json"
     storyboard = registry.read_json(storyboard_name)
     timeline = TimelineDocument.model_validate(registry.read_json("timeline_candidate_2.json"))
@@ -392,24 +396,26 @@ def create_renderer_project_candidate_2(run_dir: Path) -> Path:
         "path": storyboard_name, "sha256": storyboard_sha,
     }
     render_manifest["renderer"].update({
-        "candidate_id": 2,
+        "candidate_id": candidate_id,
         "preview_only": True,
         "preview_review_status": "pending_human_preview_review",
         "full_render_requested": False,
     })
     project_path = registry.write_directory(
-        "renderer_project_candidate_2", files, "playback_preview_adaptation",
+        f"renderer_project_candidate_{candidate_id}", files, "playback_preview_adaptation",
     )
     registry.write_json(
-        "render_manifest_candidate_2.json", render_manifest,
+        f"render_manifest_candidate_{candidate_id}.json", render_manifest,
         "playback_preview_adaptation",
     )
     registry.save_manifest()
     return project_path
 
 
-def record_preview_candidate_2(run_dir: Path, rendered_file: Path) -> Path:
+def record_preview_candidate(run_dir: Path, rendered_file: Path, *, candidate_id: Literal[2, 3]) -> Path:
     """Register one externally rendered local MP4 as a non-final review artifact."""
+    if candidate_id not in (2, 3):
+        raise ValueError("PREVIEW_CANDIDATE_ID_INVALID")
     run_dir = Path(run_dir).resolve()
     rendered_file = Path(rendered_file).resolve()
     try:
@@ -422,13 +428,13 @@ def record_preview_candidate_2(run_dir: Path, rendered_file: Path) -> Path:
     if len(payload) < 12 or payload[4:8] != b"ftyp":
         raise ValueError("PREVIEW_RENDER_OUTPUT_NOT_MP4")
     manifest, registry = _load_registry(run_dir)
-    _validated_dependency_hashes(registry, "review-preview-candidate-2.mp4")
-    render_manifest = registry.read_json("render_manifest_candidate_2.json")
+    _validated_dependency_hashes(registry, f"review-preview-candidate-{candidate_id}.mp4")
+    render_manifest = registry.read_json(f"render_manifest_candidate_{candidate_id}.json")
     timeline = TimelineDocument.model_validate(registry.read_json("timeline_candidate_2.json"))
     renderer = render_manifest.get("renderer", {})
     if (
         render_manifest.get("run_id") != manifest.run_id
-        or renderer.get("candidate_id") != 2
+        or renderer.get("candidate_id") != candidate_id
         or renderer.get("preview_only") is not True
         or renderer.get("full_render_requested") is not False
         or renderer.get("preview_review_status") != "pending_human_preview_review"
@@ -437,7 +443,17 @@ def record_preview_candidate_2(run_dir: Path, rendered_file: Path) -> Path:
     ):
         raise ValueError("PREVIEW_RENDER_OUTPUT_NOT_PENDING_REVIEW")
     path = registry.write_bytes(
-        "review-preview-candidate-2.mp4", payload, "review_preview_render",
+        f"review-preview-candidate-{candidate_id}.mp4", payload, "review_preview_render",
     )
     registry.save_manifest()
     return path
+
+
+def create_renderer_project_candidate_2(run_dir: Path) -> Path:
+    """Compatibility owner for the original playback recovery package."""
+    return create_renderer_project_candidate(run_dir, candidate_id=2)
+
+
+def record_preview_candidate_2(run_dir: Path, rendered_file: Path) -> Path:
+    """Compatibility owner for the original playback recovery preview."""
+    return record_preview_candidate(run_dir, rendered_file, candidate_id=2)

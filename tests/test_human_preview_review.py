@@ -37,6 +37,17 @@ def _valid_review_payload() -> dict:
     }
 
 
+def test_renderer_recovery_candidate_has_independent_owner_and_same_timeline(tmp_path):
+    registry = _prime_review_registry(tmp_path)
+    assert registry.graph["renderer_project_candidate_3"][1] == registry.graph["renderer_project_candidate_2"][1]
+    assert "renderer_project_candidate_3" in registry.graph["review-preview-candidate-3.mp4"][1]
+    assert "review-preview-candidate-3.mp4" in registry.graph["human_preview_review_candidate_3.json"][1]
+    payload = _valid_review_payload()
+    payload.update(candidate_id=3, preview_path="review-preview-candidate-3.mp4", timeline_path="timeline_candidate_2.json")
+    review = HumanPreviewReviewV1.model_validate(payload)
+    assert not review.final_render_approved
+
+
 def _prime_review_registry(run_dir):
     run_dir.mkdir(parents=True, exist_ok=True)
     bundle = run_dir / "visual_assets_candidate_3"

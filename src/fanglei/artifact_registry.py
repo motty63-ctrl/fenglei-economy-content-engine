@@ -375,6 +375,23 @@ def _playback_preview_graph(
             "render_manifest_candidate_2.json",
         ),
     )
+    graph["renderer_project_candidate_3"] = (
+        "playback_preview_adaptation", ("timeline_candidate_2.json", "human_storyboard_candidate.json"),
+    )
+    graph["render_manifest_candidate_3.json"] = (
+        "playback_preview_adaptation", ("timeline_candidate_2.json", "renderer_project_candidate_3"),
+    )
+    graph["review-preview-candidate-3.mp4"] = (
+        "review_preview_render",
+        ("timeline_candidate_2.json", "renderer_project_candidate_3", "render_manifest_candidate_3.json"),
+    )
+    graph["human_preview_review_candidate_3.json"] = (
+        "human_preview_review",
+        (
+            "review-preview-candidate-3.mp4", "timeline_candidate_2.json",
+            "render_manifest_candidate_3.json",
+        ),
+    )
     return graph
 
 # The focus profile is opt-in. Research and content planning both track the

@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 
 from fanglei.artifacts import sha256_bytes, sha256_text
 from fanglei.v05_models import TimelineDocument
+from fanglei.preview_composition import review_composition_html
 
 
 SUPPORTED_ANIMATION_DIRECTIVES = {
@@ -302,71 +303,18 @@ def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[st
         "start_ms": cue.start_ms, "end_ms": cue.end_ms,
         "font_size_px": cue.font_size_px,
     } for cue in composition.subtitle_cues]
-    scripts_json = json.dumps(
-        {"scenes": scene_schedule, "subtitles": subtitle_data,
-         "duration_ms": timeline.audio["duration_ms"]},
-        ensure_ascii=False, separators=(",", ":"),
-    ).replace("</", "<\\/")
     layout = composition.subtitle_layout.model_dump(mode="json")
-    zone = layout["reserved_zone"]
-    max_lines = layout.get("maximum_lines", 2)
-    horizontal_padding = layout.get("horizontal_padding_px", 36)
-    vertical_padding = layout.get("vertical_padding_px", 24)
-    line_height = layout.get("line_height", 1.28)
-    if any(len(row["lines"]) > max_lines for row in subtitle_data):
-        raise ValueError("REVIEW_PREVIEW_SUBTITLE_LAYOUT_INVALID")
     timing_status = (
         "本地暂停点细化的句级字幕时间；仍不是词级对齐"
         if composition.alignment_method == "pause_refined_from_proportional"
         else "字幕时间来自句级估算对齐"
     )
-    return (
-        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<title>Local Preview — Human Review Required</title><style>'
-        '*{box-sizing:border-box}body{margin:0;background:#171717;color:#fff;'
-        'font-family:Arial,"Microsoft YaHei",sans-serif;display:flex;flex-direction:column;'
-        'align-items:center;gap:12px;padding:12px}#stage{position:relative;width:min(96vw,calc((100vh - 100px)*.5625));'
-        'aspect-ratio:9/16;background:#F7F2E8;overflow:hidden}#canvas{position:absolute;inset:0 auto auto 0;'
-        'width:1080px;height:1920px;transform-origin:top left;transform:scale(var(--preview-scale,1))}'
-        '#canvas svg{width:100%;height:100%;display:block}'
-        '.visual-scene{position:absolute;inset:0;visibility:hidden;opacity:0;transition:opacity 220ms ease-out}'
-        '.visual-scene.active{visibility:visible;opacity:1}.preview-label{position:absolute;z-index:20;left:24px;top:24px;'
-        'padding:12px 18px;background:#8d2118;color:white;font-weight:800;font-size:24px;letter-spacing:.04em}'
-        '#review-required{position:absolute;z-index:20;right:20px;top:24px;padding:10px 14px;'
-        'background:#20211d;color:white;font-weight:700;font-size:18px}#subtitle-layer{position:absolute;z-index:30;'
-        f'left:50%;top:{zone["y"]}px;width:max-content;max-width:{zone["width"]}px;height:auto;'
-        f'min-height:0;max-height:{zone["height"]}px;transform:translateX(-50%);'
-        f'padding:{vertical_padding}px {horizontal_padding}px;display:none;align-items:center;'
-        'justify-content:center;text-align:center;'
-        'background:rgba(247,242,232,.88);color:#1E1E1E;border-radius:18px;overflow:hidden;white-space:pre-line;'
-        f'font-weight:700;line-height:{line_height}}}audio{{width:min(96vw,720px)}}#status{{font-size:14px;color:#ddd}}'
-        '@media(prefers-reduced-motion:reduce){.visual-scene{transition:none}}'
-        '</style></head><body><main id="stage" data-preview="true" data-final="false"><div id="canvas">'
-        + "".join(scene_markup)
-        + '<div class="preview-label">PREVIEW · NOT FINAL</div>'
-        + '<div id="review-required">HUMAN REVIEW REQUIRED</div>'
-        + '<div id="subtitle-layer" aria-live="off"></div></div></main>'
-        + '<audio id="narration" controls preload="metadata" src="assets/narration.wav"></audio>'
-        + f'<div id="status">本地审阅预览 · {timing_status}</div>'
-        + f'<script type="application/json" id="preview-data">{scripts_json}</script>'
-        + '<script>(()=>{const data=JSON.parse(document.getElementById("preview-data").textContent);'
-        + 'const audio=document.getElementById("narration"),subtitle=document.getElementById("subtitle-layer");'
-        + 'const stage=document.getElementById("stage"),scenes=data.scenes.map(row=>({...row,node:document.getElementById(row.scene_id)}));'
-        + 'const resize=()=>stage.style.setProperty("--preview-scale",String(stage.clientWidth/1080));resize();'
-        + 'window.addEventListener("resize",resize);'
-        + 'const update=()=>{const t=audio.currentTime*1000;let active=scenes.find((s,i)=>t>=s.start_ms&&(t<s.end_ms||(i===scenes.length-1&&t<=s.end_ms)));'
-        + 'scenes.forEach(s=>{const on=s===active;s.node.classList.toggle("active",on);'
-        + 'if(!on)return;for(const cue of s.motion){const node=[...s.node.querySelectorAll("[data-object-id]")].find(x=>x.dataset.objectId===cue.object_id);'
-        + 'if(node){node.style.transition=`opacity ${cue.duration_ms}ms ease-out`;node.style.opacity=t>=s.start_ms+cue.delay_ms?"1":"0";}}});'
-        + 'const cue=data.subtitles.find(c=>t>=c.start_ms&&t<c.end_ms);subtitle.textContent=cue?cue.lines.join("\\n"):"";'
-        + 'subtitle.style.display=cue?"flex":"none";subtitle.style.fontSize=cue?`${cue.font_size_px}px`:"48px";'
-        + f'if(cue)subtitle.style.minHeight=`${{Math.ceil(cue.lines.length*cue.font_size_px*{line_height}+2*{vertical_padding})}}px`;}};'
-        + 'document.querySelectorAll("[data-object-id]").forEach(x=>x.style.opacity="0");'
-        + 'audio.addEventListener("timeupdate",update);audio.addEventListener("seeked",update);'
-        + 'audio.addEventListener("loadedmetadata",()=>{const requested=Number(new URLSearchParams(location.search).get("time"));'
-        + 'if(Number.isFinite(requested)&&requested>=0)audio.currentTime=Math.min(requested,data.duration_ms)/1000;update();});'
-        + 'update();window.fengleiPreviewUpdate=update;})();</script></body></html>\n'
+    return review_composition_html(
+        scene_markup,
+        {"scenes": scene_schedule, "subtitles": subtitle_data,
+         "duration_ms": timeline.audio["duration_ms"]},
+        layout,
+        timing_status,
     )
 
 
