@@ -167,6 +167,38 @@ def test_preview_review_rejects_timezone_naive_timestamp() -> None:
         HumanPreviewReviewV1.model_validate(payload)
 
 
+@pytest.mark.parametrize("decision, expected", [
+    ("changes_required", False), ("approved_for_review", False),
+    ("approved_for_final_render", True),
+])
+def test_preview_decision_derives_final_permission(decision, expected):
+    payload = _valid_review_payload()
+    payload.pop("final_render_approved")
+    payload.update(decision=decision, rationale="Explicit human decision.")
+    payload["dependency_hashes"].update({
+        "review-preview.mp4": payload["preview_sha256"],
+        "timeline.json": payload["timeline_sha256"],
+        **{name: "d" * 64 for name in (
+            "render_manifest.json", "script.json", "audio/narration.wav",
+            "human_storyboard_candidate.json", "visual_assets_candidate_3",
+            "human_visual_asset_review_candidate_3.json", "human_storyboard_approval.json",
+            "human_script_approval.json", "audio/review.json", "alignment.json", "subtitle_track.json",
+        )},
+    })
+    assert HumanPreviewReviewV1.model_validate(payload).final_render_approved is expected
+
+
+@pytest.mark.parametrize("decision, flag", [
+    ("changes_required", True), ("approved_for_review", True),
+    ("approved_for_final_render", False),
+])
+def test_preview_decision_rejects_contradictory_permission(decision, flag):
+    payload = _valid_review_payload()
+    payload.update(decision=decision, final_render_approved=flag)
+    with pytest.raises(ValueError):
+        HumanPreviewReviewV1.model_validate(payload)
+
+
 def test_preview_review_record_binds_candidate_hash_and_never_approves_final_render(tmp_path) -> None:
     registry = _prime_review_registry(tmp_path)
     preview = tmp_path / "review-preview.mp4"

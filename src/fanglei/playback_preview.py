@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 import re
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StrictBool, field_validator, model_validator
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import read_json, sha256_bytes
@@ -48,7 +48,7 @@ class HumanPreviewReviewV1(StrictModel):
     case_id: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)
     reviewed_at: str = Field(min_length=1)
-    decision: Literal["changes_required", "approved_for_review"]
+    decision: Literal["changes_required", "approved_for_review", "approved_for_final_render"]
     reason_code: str = Field(min_length=1)
     findings: list[PreviewReviewFindingV1] = Field(min_length=1)
     preview_path: str = Field(min_length=1)
@@ -56,7 +56,15 @@ class HumanPreviewReviewV1(StrictModel):
     timeline_path: Literal["timeline.json", "timeline_candidate_2.json"]
     timeline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     dependency_hashes: dict[str, str]
-    final_render_approved: Literal[False] = False
+    rationale: str | None = None
+    final_render_approved: StrictBool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_final_permission(cls, value):
+        if isinstance(value, dict) and "final_render_approved" not in value:
+            value = {**value, "final_render_approved": value.get("decision") == "approved_for_final_render"}
+        return value
 
     @field_validator("reviewed_at")
     @classmethod
@@ -71,6 +79,8 @@ class HumanPreviewReviewV1(StrictModel):
 
     @model_validator(mode="after")
     def dependency_map_is_valid(self) -> "HumanPreviewReviewV1":
+        if self.final_render_approved != (self.decision == "approved_for_final_render"):
+            raise ValueError("PREVIEW_REVIEW_FINAL_PERMISSION_CONTRADICTORY")
         if not self.dependency_hashes or any(
             not name or not re.fullmatch(r"[0-9a-f]{64}", digest)
             for name, digest in self.dependency_hashes.items()
@@ -81,6 +91,24 @@ class HumanPreviewReviewV1(StrictModel):
             raise ValueError("PREVIEW_REVIEW_TIMELINE_IDENTITY_INVALID")
         if self.decision == "changes_required" and self.reason_code == "APPROVED_FOR_REVIEW":
             raise ValueError("PREVIEW_REVIEW_REASON_INVALID")
+        if self.final_render_approved:
+            if not self.reviewer.strip() or not self.rationale or not self.rationale.strip():
+                raise ValueError("FINAL_RENDER_APPROVAL_REQUIRES_REVIEWER_RATIONALE")
+            suffix = "" if self.candidate_id == 1 else f"_candidate_{self.candidate_id}"
+            expected_preview = "review-preview.mp4" if self.candidate_id == 1 else f"review-preview-candidate-{self.candidate_id}.mp4"
+            required = {
+                expected_preview, self.timeline_path, f"renderer_project{suffix}",
+                f"render_manifest{suffix}.json", "script.json", "human_script_approval.json",
+                "audio/narration.wav", "audio/review.json", "human_storyboard_candidate.json",
+                "human_storyboard_approval.json", "alignment.json", "subtitle_track.json",
+            }
+            if self.candidate_id != 1:
+                required.update({"playback_timing_refinement.json", "preview_subtitle_track_candidate_2.json"})
+            if (self.preview_path != expected_preview or not required.issubset(self.dependency_hashes)
+                or self.dependency_hashes[expected_preview] != self.preview_sha256
+                or self.dependency_hashes[self.timeline_path] != self.timeline_sha256
+                or not any(name.startswith("visual_assets") for name in self.dependency_hashes)):
+                raise ValueError("FINAL_RENDER_APPROVAL_BINDINGS_INCOMPLETE")
         return self
 
 
@@ -108,14 +136,20 @@ def record_human_preview_review(
     *,
     candidate_id: Literal[1, 2, 3],
     reviewer: str,
-    decision: Literal["changes_required", "approved_for_review"],
+    decision: Literal["changes_required", "approved_for_review", "approved_for_final_render"],
     reason_code: str,
     findings: list[dict],
     expected_preview_sha256: str,
+    rationale: str | None = None,
 ) -> Path:
     """Record an explicit human decision bound to the current local preview bytes."""
     run_dir = Path(run_dir).resolve()
     manifest, registry = _load_registry(run_dir)
+    if decision == "approved_for_final_render":
+        registry = ArtifactRegistry(
+            run_dir, manifest, playback_preview_mode=True,
+            final_render_mode=True, final_preview_candidate_id=candidate_id,
+        )
     timeline_name = "timeline.json" if candidate_id == 1 else "timeline_candidate_2.json"
     render_manifest_name = "render_manifest.json" if candidate_id == 1 else f"render_manifest_candidate_{candidate_id}.json"
     review_name = f"human_preview_review_candidate_{candidate_id}.json"
@@ -171,6 +205,7 @@ def record_human_preview_review(
         decision=decision,
         reason_code=reason_code,
         findings=findings,
+        rationale=rationale,
         preview_path=preview_relative,
         preview_sha256=actual_preview_sha,
         timeline_path=timeline_name,

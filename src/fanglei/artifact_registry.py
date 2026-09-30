@@ -408,6 +408,32 @@ RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
+
+def _final_render_graph(base_graph, candidate_id: int):
+    """Opt in to a separate, approved export branch; never reinterpret preview nodes."""
+    if candidate_id not in (1, 2, 3):
+        raise ArtifactConflictError("FINAL_RENDER_PREVIEW_ID_INVALID")
+    graph = dict(base_graph)
+    suffix = "" if candidate_id == 1 else f"_candidate_{candidate_id}"
+    timeline = "timeline.json" if candidate_id == 1 else "timeline_candidate_2.json"
+    preview = "review-preview.mp4" if candidate_id == 1 else f"review-preview-candidate-{candidate_id}.mp4"
+    review = f"human_preview_review_candidate_{candidate_id}.json"
+    if preview not in graph:
+        graph[preview] = ("review_preview_render", (timeline, f"renderer_project{suffix}", f"render_manifest{suffix}.json"))
+    inputs = tuple(dict.fromkeys((
+        preview, timeline, f"renderer_project{suffix}", f"render_manifest{suffix}.json",
+        *graph[timeline][1],
+    )))
+    graph[review] = ("human_preview_review", inputs)
+    approved_inputs = (review, *inputs)
+    graph["final_render_request.json"] = ("final_render", approved_inputs)
+    graph["renderer_project_final"] = ("final_render", ("final_render_request.json",))
+    graph["render_manifest_final.json"] = ("final_render", ("final_render_request.json", "renderer_project_final"))
+    graph["final.mp4"] = ("final_render", ("render_manifest_final.json", "renderer_project_final", "final_render_request.json", *approved_inputs))
+    graph["final_video_candidate.json"] = ("final_render", ("final.mp4", "render_manifest_final.json", "final_render_request.json"))
+    graph["final_video_qa.json"] = ("final_video_qa", ("final.mp4", "final_video_candidate.json"))
+    return graph
+
 # Checkpoint imports enter the graph after research and script approval. Keep the
 # ordinary graph above byte-for-byte unchanged; the importer opts into this
 # separate profile through the checkpoint_import manifest stage.
@@ -461,6 +487,8 @@ class ArtifactRegistry:
         human_storyboard_approval_mode: bool = False,
         human_visual_asset_recovery_mode: bool = False,
         playback_preview_mode: bool = False,
+        final_render_mode: bool = False,
+        final_preview_candidate_id: int | None = None,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -580,6 +608,32 @@ class ArtifactRegistry:
                 )
             if playback_enabled:
                 self.graph = _playback_preview_graph(self.graph)
+            final_enabled = final_render_mode or "final_render_request.json" in manifest.artifacts or (
+                self.run_dir / "final_render_request.json"
+            ).exists()
+            if final_enabled:
+                if not playback_enabled:
+                    raise ArtifactConflictError("FINAL_RENDER_REQUIRES_PLAYBACK_GRAPH")
+                request_state = manifest.artifacts.get("final_render_request.json")
+                # Match the review AND its media as direct request dependencies.
+                # Historical timing reviews alone do not authorize this export;
+                # JSON object ordering never supplies identity.
+                request_dependencies = request_state.dependencies if request_state else {}
+                recorded_ids = [
+                    i for i in (1, 2, 3)
+                    if f"human_preview_review_candidate_{i}.json" in request_dependencies
+                    and ("review-preview.mp4" if i == 1 else f"review-preview-candidate-{i}.mp4") in request_dependencies
+                ]
+                if request_dependencies and len(recorded_ids) != 1:
+                    raise ArtifactConflictError("FINAL_RENDER_APPROVAL_IDENTITY_MISSING")
+                if recorded_ids and (
+                    final_preview_candidate_id is not None and final_preview_candidate_id != recorded_ids[0]
+                ):
+                    raise ArtifactConflictError("FINAL_RENDER_PREVIEW_ID_CONFLICT")
+                candidate_id = final_preview_candidate_id or (recorded_ids[0] if recorded_ids else None)
+                if candidate_id is None:
+                    raise ArtifactConflictError("FINAL_RENDER_PREVIEW_ID_MISSING")
+                self.graph = _final_render_graph(self.graph, candidate_id)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
