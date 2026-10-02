@@ -432,6 +432,9 @@ def _final_render_graph(base_graph, candidate_id: int):
     graph["final.mp4"] = ("final_render", ("render_manifest_final.json", "renderer_project_final", "final_render_request.json", *approved_inputs))
     graph["final_video_candidate.json"] = ("final_render", ("final.mp4", "render_manifest_final.json", "final_render_request.json"))
     graph["final_video_qa.json"] = ("final_video_qa", ("final.mp4", "final_video_candidate.json"))
+    graph["human_final_video_review.json"] = (
+        "human_final_video_review", ("final_video_candidate.json", "final_video_qa.json"),
+    )
     return graph
 
 # Checkpoint imports enter the graph after research and script approval. Keep the

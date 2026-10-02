@@ -82,6 +82,7 @@ def source_run(tmp_path):
     comp["storyboard_sha256"] = canonical_json_sha256({})
     timeline["audio"]["sha256"] = comp["audio_sha256"]
     _json(tmp_path / "timeline_candidate_2.json", timeline)
+    _json(tmp_path / "renderer_project_candidate_3/data/timeline.json", timeline)
     refresh()
     _json(tmp_path / "render_manifest_candidate_3.json", {
         "run_id": reg.manifest.run_id,
@@ -192,7 +193,8 @@ def test_final_candidate_is_pending_and_stales_with_approved_chain(source_run):
     assert candidate["status"] == "pending_human_final_review"
     assert candidate["human_final_video_review"] == "pending"
     assert candidate["workflow_acceptance"] == "pending"
-    assert candidate["technical_qa_status"] == "pending"
+    from fanglei.final_video_qa import derive_final_video_qa_status
+    assert derive_final_video_qa_status(source_run) == "pending"
     m = RunManifest.model_validate_json((source_run / "run.json").read_text())
     reg = ArtifactRegistry(source_run, m)
     assert reg.graph["final.mp4"][0] == "final_render"

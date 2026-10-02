@@ -105,7 +105,6 @@ class FinalVideoCandidateV1(_Contract):
     render_manifest: ArtifactBinding
     provenance: FinalRenderRequestV1
     technical_qa_artifact: Literal["final_video_qa.json"] = "final_video_qa.json"
-    technical_qa_status: Literal["pending"] = "pending"
     human_final_video_review: Literal["pending"] = "pending"
     workflow_acceptance: Literal["pending"] = "pending"
 
