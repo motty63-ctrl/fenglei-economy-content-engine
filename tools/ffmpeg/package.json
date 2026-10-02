@@ -1,0 +1,10 @@
+{
+  "name": "fenglei-local-media-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Project-local FFmpeg and FFprobe binaries for media tooling",
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "ffprobe-static": "3.1.0"
+  }
+}

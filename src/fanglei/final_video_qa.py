@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -20,7 +21,7 @@ from fanglei.final_render import (
 from fanglei.v05_models import TimelineDocument
 
 
-QA_OWNER_VERSION = "1.0"
+QA_OWNER_VERSION = "1.1"
 MINIMUM_FRAME_SIMILARITY = 0.94
 
 
@@ -46,7 +47,7 @@ class FinalVideoQAReportV1(_Contract):
     human_preview_approval: ArtifactBinding
     preview: ArtifactBinding
     timeline: ArtifactBinding
-    qa_owner_version: Literal["1.0"] = QA_OWNER_VERSION
+    qa_owner_version: Literal["1.0"] = "1.0"
     executed_at: datetime
     result: Literal["passed", "failed"]
     checks: list[FinalVideoQACheckV1]
@@ -67,6 +68,121 @@ class FinalVideoQAReportV1(_Contract):
         if self.result == "failed" and not blocking_failure:
             raise ValueError("failed QA requires a blocking failure")
         return self
+
+
+class FinalVideoQAReportV2(FinalVideoQAReportV1):
+    """A new immutable evaluation, linked to the prior attempt when superseding."""
+    schema_version: Literal["final-video-qa/1.1"] = "final-video-qa/1.1"
+    qa_owner_version: Literal["1.1"] = QA_OWNER_VERSION
+    attempt_number: int = Field(ge=1)
+    previous_qa: ArtifactBinding | None
+    implementation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def previous_attempt_required(self):
+        if (self.attempt_number == 1) != (self.previous_qa is None):
+            raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+        return self
+
+
+def _implementation_sha256():
+    root = Path(__file__).parent
+    return sha256_bytes(b"\0".join((root / name).read_bytes() for name in (
+        "final_video_qa.py", "final_video_probe.mjs",
+    )))
+
+
+def _qa_report(path):
+    raw = read_json(path)
+    if raw.get("schema_version") == "final-video-qa/1.0":
+        return FinalVideoQAReportV1.model_validate_json(path.read_text(encoding="utf-8"))
+    if raw.get("schema_version") == "final-video-qa/1.1":
+        return FinalVideoQAReportV2.model_validate_json(path.read_text(encoding="utf-8"))
+    raise ValueError("FINAL_VIDEO_QA_VERSION_UNSUPPORTED")
+
+
+def _qa_name(number):
+    return "final_video_qa.json" if number == 1 else f"final_video_qa_attempt_{number}.json"
+
+
+def _latest_qa_number(registry):
+    numbers = [1]
+    for name in registry.graph:
+        if name.startswith("final_video_qa_attempt_"):
+            numbers.append(int(name.removeprefix("final_video_qa_attempt_").removesuffix(".json")))
+    return max(numbers)
+
+
+def _ffprobe_json_metadata(raw):
+    """Validate the ffprobe JSON boundary; never infer absent technical properties."""
+    def positive(value, integer=False):
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError("FFPROBE_PROPERTY_INVALID")
+        try:
+            result = int(value) if integer else float(value)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise ValueError("FFPROBE_PROPERTY_INVALID") from error
+        if not math.isfinite(result) or result <= 0 or (integer and str(result) != str(value)):
+            raise ValueError("FFPROBE_PROPERTY_INVALID")
+        return result
+    if not isinstance(raw, dict) or not isinstance(raw.get("streams"), list) or not isinstance(raw.get("format"), dict):
+        raise ValueError("FFPROBE_JSON_INVALID")
+    if "mp4" not in raw["format"].get("format_name", "").split(","):
+        raise ValueError("FFPROBE_CONTAINER_INVALID")
+    if not all(isinstance(row, dict) for row in raw["streams"]):
+        raise ValueError("FFPROBE_STREAM_INVALID")
+    tracks = {}
+    for kind, handler in (("video", "vide"), ("audio", "soun")):
+        rows = [row for row in raw["streams"] if row.get("codec_type") == kind]
+        if len(rows) > 1:
+            raise ValueError("FFPROBE_AMBIGUOUS_STREAMS")
+        if not rows:
+            tracks[kind] = None
+            continue
+        row = rows[0]
+        if not isinstance(row.get("codec_name"), str) or not row["codec_name"]:
+            raise ValueError("FFPROBE_CODEC_INVALID")
+        track = {"handler": handler, "codec": row["codec_name"],
+                 "duration_seconds": positive(row.get("duration"))}
+        if kind == "video":
+            try:
+                numerator, denominator = row["avg_frame_rate"].split("/")
+                fps = positive(numerator) / positive(denominator)
+            except (KeyError, AttributeError, ValueError) as error:
+                raise ValueError("FFPROBE_FRAME_RATE_INVALID") from error
+            track.update(width=positive(row.get("width"), True), height=positive(row.get("height"), True),
+                         fps=fps, frame_count=positive(row.get("nb_read_frames", row.get("nb_frames")), True))
+        else:
+            track.update(sample_rate=positive(row.get("sample_rate"), True), channels=positive(row.get("channels"), True))
+        tracks[kind] = track
+    return {"container": "mp4", "container_duration_seconds": positive(raw["format"].get("duration")),
+            **tracks, "track_count": len(raw["streams"])}
+
+
+def _ffprobe_metadata(media_path, executable):
+    try:
+        result = subprocess.run([str(executable), "-v", "error", "-count_frames", "-show_format", "-show_streams",
+                                 "-of", "json", str(media_path)], capture_output=True, text=True,
+                                encoding="utf-8", check=False, timeout=180)
+        if result.returncode:
+            raise ValueError("FFPROBE_FAILED: " + result.stderr[-500:])
+        return _ffprobe_json_metadata(json.loads(result.stdout))
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+        raise ValueError("FFPROBE_FAILED: " + str(error)) from error
+
+
+def _ffprobe_tool(node, configured=None):
+    path = configured or os.environ.get("FENGLEI_FFPROBE") or os.environ.get("HYPERFRAMES_FFPROBE_PATH")
+    if not path:
+        # Resolve the repository-local dependency through its own exported path.
+        module = Path(__file__).resolve().parents[2] / "tools/ffmpeg/node_modules/ffprobe-static"
+        result = subprocess.run([node, "-e", "console.log(require(process.argv[1]).path)", str(module)],
+                                capture_output=True, text=True, check=False, timeout=20)
+        if result.returncode == 0:
+            path = result.stdout.strip()
+    if not path or not Path(path).is_absolute() or not Path(path).is_file():
+        raise ValueError("FINAL_VIDEO_QA_FFPROBE_UNAVAILABLE")
+    return Path(path).resolve()
 
 
 class HumanFinalVideoReviewEntryV1(_Contract):
@@ -107,6 +223,8 @@ class HumanFinalVideoReviewV1(_Contract):
 
 
 def _box_rows(data: bytes, start: int, end: int):
+    if not 0 <= start <= end <= len(data):
+        raise ValueError("MP4_BOX_SCOPE_INVALID")
     rows = []
     cursor = start
     while cursor + 8 <= end:
@@ -129,9 +247,15 @@ def _box_rows(data: bytes, start: int, end: int):
     return rows
 
 
-def _children(data: bytes, parent, skip=0):
-    _kind, _start, payload, end = parent
-    return _box_rows(data, payload + skip, end)
+def _children(data: bytes, parent, skip=None):
+    kind, _start, payload, end = parent
+    if skip is None:
+        # FullBox and sample-entry prefixes are structured fields, not boxes.
+        skip = {b"meta": 4, b"stsd": 8, b"avc1": 78, b"mp4a": 28}.get(kind, 0)
+    rows = _box_rows(data, payload + skip, end)
+    if kind == b"stsd" and len(rows) != int.from_bytes(data[payload + 4:payload + 8], "big"):
+        raise ValueError("MP4_SAMPLE_ENTRY_COUNT_INVALID")
+    return rows
 
 
 def _find(rows, kind):
@@ -146,6 +270,10 @@ def _mp4_metadata(data: bytes) -> dict[str, Any]:
     if moov is None:
         raise ValueError("MP4_MOOV_MISSING")
     moov_children = _children(data, moov)
+    # Validate metadata containers without descending into opaque leaf payloads.
+    for udta in (row for row in moov_children if row[0] == b"udta"):
+        for meta in (row for row in _children(data, udta) if row[0] == b"meta"):
+            _children(data, meta)
     mvhd = _find(moov_children, b"mvhd")
     if mvhd is None:
         raise ValueError("MP4_MVHD_MISSING")
@@ -209,17 +337,27 @@ def _mp4_metadata(data: bytes) -> dict[str, Any]:
                 track["codec_profile"] = "avc1." + data[avcc[2] + 1:avcc[2] + 4].hex()
             else:
                 track["codec"] = track["sample_entry"]
-            if stts:
-                entries = _children(data, stts, skip=8)
-                for entry in entries:
-                    count = int.from_bytes(data[entry[2]:entry[2] + 4], "big")
-                    delta = int.from_bytes(data[entry[2] + 4:entry[2] + 8], "big")
-                    sample_count += count
-                    sample_ticks += count * delta
         elif sample_entry and handler == "soun":
             track["channels"] = int.from_bytes(data[sample_entry[2] + 16:sample_entry[2] + 18], "big")
             track["sample_rate"] = int.from_bytes(data[sample_entry[2] + 24:sample_entry[2] + 28], "big") >> 16
             track["codec"] = "aac" if sample_entry[0] == b"mp4a" else track["sample_entry"]
+            _children(data, sample_entry)
+        if stts:
+            payload, end = stts[2], stts[3]
+            if end - payload < 8:
+                raise ValueError("MP4_STTS_TRUNCATED")
+            entry_count = int.from_bytes(data[payload + 4:payload + 8], "big")
+            if payload + 8 + entry_count * 8 != end:
+                raise ValueError("MP4_STTS_ENTRY_COUNT_INVALID")
+            for cursor in range(payload + 8, end, 8):
+                count = int.from_bytes(data[cursor:cursor + 4], "big")
+                delta = int.from_bytes(data[cursor + 4:cursor + 8], "big")
+                if not count or not delta:
+                    raise ValueError("MP4_STTS_TIMING_INVALID")
+                sample_count += count
+                sample_ticks += count * delta
+        track["sample_count"] = sample_count
+        track["sample_ticks"] = sample_ticks
         tracks.append(track)
         tracks_by_id[track_id] = track
     mvex = _find(moov_children, b"mvex")
@@ -280,6 +418,7 @@ def _mp4_metadata(data: bytes) -> dict[str, Any]:
     for track in tracks:
         tid = track["track_id"]
         fragment_count, fragment_ticks = fragment_stats[tid]
+        sample_count, sample_ticks = track.pop("sample_count"), track.pop("sample_ticks")
         if fragment_count:
             sample_count, sample_ticks = fragment_count, fragment_ticks
         if sample_count:
@@ -374,6 +513,23 @@ def _qa_inputs_match(qa, registry, candidate, request, candidate_sha):
     )
 
 
+def _current_qa(registry, name):
+    qa = _qa_report(_path(registry, name))
+    if isinstance(qa, FinalVideoQAReportV2):
+        number = _latest_qa_number(registry)
+        if qa.attempt_number != number:
+            raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+        if qa.implementation_sha256 != _implementation_sha256():
+            raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_STALE")
+        if number > 1:
+            expected_path = _qa_name(number - 1)
+            if qa.previous_qa.path != expected_path or qa.previous_qa.sha256 != registry.manifest.artifacts[expected_path].content_hash:
+                raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+    elif _latest_qa_number(registry) != 1:
+        raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+    return qa
+
+
 def _node_tools(node_path=None, puppeteer_module=None, browser_path=None):
     node = node_path or os.environ.get("FENGLEI_RENDER_NODE")
     puppeteer = puppeteer_module or os.environ.get("FENGLEI_PUPPETEER_MODULE")
@@ -386,17 +542,42 @@ def _node_tools(node_path=None, puppeteer_module=None, browser_path=None):
 def run_final_video_qa(
     run_dir: Path, *, node_path: str | Path | None = None,
     puppeteer_module: str | Path | None = None, browser_path: str | Path | None = None,
+    ffprobe_path: str | Path | None = None, reevaluate: bool = False,
+    expected_previous_qa_sha256: str | None = None,
 ) -> Path:
-    """Probe one registered immutable candidate; write one separate, write-once QA artifact."""
+    """Write one immutable evaluation; explicit re-evaluation preserves failed history."""
     run_dir = Path(run_dir).resolve()
     registry, candidate, request, candidate_sha = _registry_candidate(run_dir)
     registry.validate("final.mp4")
     registry.validate(f"human_preview_review_candidate_{request.preview_candidate_id}.json")
     registry.validate("final_render_request.json")
-    qa_state = registry.manifest.artifacts["final_video_qa.json"]
-    qa_path = _path(registry, "final_video_qa.json")
+    number = _latest_qa_number(registry)
+    name = _qa_name(number)
+    qa_state = registry.manifest.artifacts[name]
+    qa_path = _path(registry, name)
+    previous = None
     if qa_state.status != "missing" or qa_path.exists():
-        raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
+        if not reevaluate:
+            raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
+        registry.validate(name)
+        old = _qa_report(qa_path)
+        if expected_previous_qa_sha256 != qa_state.content_hash:
+            raise ArtifactConflictError("FINAL_VIDEO_QA_EXPECTED_PREVIOUS_HASH_MISMATCH")
+        if not _qa_inputs_match(old, registry, candidate, request, candidate_sha):
+            raise ArtifactConflictError("FINAL_VIDEO_QA_PREVIOUS_INPUT_BINDING_MISMATCH")
+        if old.result != "failed" or (isinstance(old, FinalVideoQAReportV2)
+                                     and old.implementation_sha256 == _implementation_sha256()):
+            raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
+        if registry.manifest.artifacts["human_final_video_review.json"].status != "missing":
+            raise ArtifactConflictError("FINAL_VIDEO_QA_HUMAN_REVIEW_ALREADY_EXISTS")
+        previous = ArtifactBinding(path=name, sha256=qa_state.content_hash)
+        number += 1
+        name = _qa_name(number)
+        registry = _registry(run_dir, qa_attempt=number)
+        if _path(registry, name).exists():
+            raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
+    elif reevaluate:
+        raise ArtifactConflictError("FINAL_VIDEO_QA_PREVIOUS_ATTEMPT_MISSING")
     media_path = _path(registry, candidate.media.path)
     preview_path = _path(registry, request.preview.path)
     timeline_path = _path(registry, request.timeline.path)
@@ -407,6 +588,8 @@ def run_final_video_qa(
         timeline, expected_width, expected_height, request.render_configuration.fps,
     )
     node, puppeteer, browser = _node_tools(node_path, puppeteer_module, browser_path)
+    ffprobe = _ffprobe_tool(node, ffprobe_path)
+    implementation_sha = _implementation_sha256()
     with tempfile.TemporaryDirectory(prefix="fanglei-final-video-qa-") as temporary:
         sample_path = Path(temporary) / "samples.json"
         sample_path.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
@@ -430,7 +613,7 @@ def run_final_video_qa(
     preview_probe = probe.get("preview", {})
     full_decode = probe.get("full_decode", {})
     try:
-        final_mp4 = _mp4_metadata(media_bytes)
+        final_mp4 = _ffprobe_metadata(media_path, ffprobe)
     except (ValueError, IndexError, OverflowError) as error:
         final_mp4 = None
         mp4_error = str(error)
@@ -438,7 +621,7 @@ def run_final_video_qa(
         mp4_error = None
     preview_bytes = preview_path.read_bytes()
     try:
-        preview_mp4 = _mp4_metadata(preview_bytes)
+        preview_mp4 = _ffprobe_metadata(preview_path, ffprobe)
     except (ValueError, IndexError, OverflowError) as error:
         preview_mp4 = None
         preview_mp4_error = str(error)
@@ -510,7 +693,8 @@ def run_final_video_qa(
         checks.append(_check("browser_media_load", False, "Browser could not load a media candidate.", {"final": final_probe.get("error"), "preview": preview_probe.get("error")}))
     else:
         checks.append(_check("browser_media_load", True, "Browser loaded both media candidates.", {"final": final_probe, "preview": preview_probe}))
-    report = FinalVideoQAReportV1(
+    report = FinalVideoQAReportV2(
+        attempt_number=number, previous_qa=previous, implementation_sha256=implementation_sha,
         run_id=candidate.run_id, case_id=candidate.case_id,
         media=ArtifactBinding(path="final.mp4", sha256=registry.manifest.artifacts["final.mp4"].content_hash),
         candidate=ArtifactBinding(path="final_video_candidate.json", sha256=candidate_sha),
@@ -521,7 +705,8 @@ def run_final_video_qa(
         result="failed" if any(check.blocking and check.status == "fail" for check in checks) else "passed",
         checks=checks,
         measurements={"final": final_mp4, "preview": preview_mp4, "full_decode": full_decode,
-                      "sample_count": len(samples), "media_bytes": len(media_bytes)},
+                      "sample_count": len(samples), "media_bytes": len(media_bytes),
+                      "property_probe": {"tool": "ffprobe", "executable_sha256": sha256_bytes(ffprobe.read_bytes())}},
     )
     current_registry, current_candidate, current_request, current_candidate_sha = _registry_candidate(run_dir)
     current_registry.validate("final.mp4")
@@ -544,24 +729,33 @@ def run_final_video_qa(
         current_request.preview.path: report.preview.sha256,
         current_request.timeline.path: report.timeline.sha256,
     }
-    if current_candidate != candidate or current_request != request or current_bindings != expected_bindings:
+    if (current_candidate != candidate or current_request != request or current_bindings != expected_bindings
+            or implementation_sha != _implementation_sha256()):
         raise ArtifactConflictError("FINAL_VIDEO_QA_INPUT_CHANGED_DURING_RUN")
-    path = current_registry.write_json("final_video_qa.json", report.model_dump(mode="json"), "final_video_qa")
+    if previous:
+        current_registry.validate(previous.path)
+        if current_registry.manifest.artifacts[previous.path].content_hash != previous.sha256:
+            raise ArtifactConflictError("FINAL_VIDEO_QA_PREVIOUS_CHANGED_DURING_RUN")
+    current_registry = _registry(run_dir, qa_attempt=number)
+    if _path(current_registry, name).exists():
+        raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
+    path = current_registry.write_json(name, report.model_dump(mode="json"), "final_video_qa")
     current_registry.save_manifest()
     return path
 
 
 def derive_final_video_qa_status(run_dir: Path) -> Literal["pending", "passed", "failed", "stale"]:
     registry = _registry(Path(run_dir))
-    state = registry.manifest.artifacts["final_video_qa.json"]
-    if state.status == "missing" and not (registry.run_dir / "final_video_qa.json").exists():
+    name = _qa_name(_latest_qa_number(registry))
+    state = registry.manifest.artifacts[name]
+    if state.status == "missing" and not (registry.run_dir / name).exists():
         return "pending"
     try:
-        registry.validate("final_video_qa.json")
+        registry.validate(name)
         candidate_registry, candidate, request, candidate_sha = _registry_candidate(registry.run_dir)
+        qa = _current_qa(registry, name)
     except (ArtifactConflictError, ValueError):
         return "stale"
-    qa = FinalVideoQAReportV1.model_validate_json(_path(registry, "final_video_qa.json").read_text(encoding="utf-8"))
     if not _qa_inputs_match(qa, candidate_registry, candidate, request, candidate_sha):
         return "stale"
     return qa.result
@@ -569,9 +763,10 @@ def derive_final_video_qa_status(run_dir: Path) -> Literal["pending", "passed", 
 
 def validate_human_final_video_review_entry(run_dir: Path) -> HumanFinalVideoReviewEntryV1:
     registry, candidate, request, candidate_sha = _registry_candidate(Path(run_dir).resolve())
-    registry.validate("final_video_qa.json")
-    qa_state = registry.manifest.artifacts["final_video_qa.json"]
-    qa = FinalVideoQAReportV1.model_validate_json(_path(registry, "final_video_qa.json").read_text(encoding="utf-8"))
+    name = _qa_name(_latest_qa_number(registry))
+    registry.validate(name)
+    qa_state = registry.manifest.artifacts[name]
+    qa = _current_qa(registry, name)
     if qa.result != "passed":
         raise ValueError("FINAL_VIDEO_QA_NOT_PASSED")
     if not _qa_inputs_match(qa, registry, candidate, request, candidate_sha):

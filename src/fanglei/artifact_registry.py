@@ -409,7 +409,7 @@ RESEARCH_FOCUS_ARTIFACT_GRAPH: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
-def _final_render_graph(base_graph, candidate_id: int):
+def _final_render_graph(base_graph, candidate_id: int, qa_attempt: int = 1):
     """Opt in to a separate, approved export branch; never reinterpret preview nodes."""
     if candidate_id not in (1, 2, 3):
         raise ArtifactConflictError("FINAL_RENDER_PREVIEW_ID_INVALID")
@@ -432,8 +432,15 @@ def _final_render_graph(base_graph, candidate_id: int):
     graph["final.mp4"] = ("final_render", ("render_manifest_final.json", "renderer_project_final", "final_render_request.json", *approved_inputs))
     graph["final_video_candidate.json"] = ("final_render", ("final.mp4", "render_manifest_final.json", "final_render_request.json"))
     graph["final_video_qa.json"] = ("final_video_qa", ("final.mp4", "final_video_candidate.json"))
+    latest_qa = "final_video_qa.json"
+    for number in range(2, qa_attempt + 1):
+        name = f"final_video_qa_attempt_{number}.json"
+        graph[name] = ("final_video_qa", (
+            "final.mp4", "final_video_candidate.json", "final_render_request.json", latest_qa,
+        ))
+        latest_qa = name
     graph["human_final_video_review.json"] = (
-        "human_final_video_review", ("final_video_candidate.json", "final_video_qa.json"),
+        "human_final_video_review", ("final_video_candidate.json", latest_qa),
     )
     return graph
 
@@ -492,6 +499,7 @@ class ArtifactRegistry:
         playback_preview_mode: bool = False,
         final_render_mode: bool = False,
         final_preview_candidate_id: int | None = None,
+        final_qa_attempt: int | None = None,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -636,7 +644,20 @@ class ArtifactRegistry:
                 candidate_id = final_preview_candidate_id or (recorded_ids[0] if recorded_ids else None)
                 if candidate_id is None:
                     raise ArtifactConflictError("FINAL_RENDER_PREVIEW_ID_MISSING")
-                self.graph = _final_render_graph(self.graph, candidate_id)
+                attempts = sorted(
+                    int(name[len("final_video_qa_attempt_"):-len(".json")])
+                    for name in manifest.artifacts
+                    if name.startswith("final_video_qa_attempt_") and name.endswith(".json")
+                    and name[len("final_video_qa_attempt_"):-len(".json")].isdigit()
+                )
+                if attempts and attempts != list(range(2, attempts[-1] + 1)):
+                    raise ArtifactConflictError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+                latest = attempts[-1] if attempts else 1
+                if final_qa_attempt is not None:
+                    if final_qa_attempt not in (latest, latest + 1):
+                        raise ArtifactConflictError("FINAL_VIDEO_QA_ATTEMPT_SEQUENCE_INVALID")
+                    latest = final_qa_attempt
+                self.graph = _final_render_graph(self.graph, candidate_id, latest)
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

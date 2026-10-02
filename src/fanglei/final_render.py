@@ -109,12 +109,13 @@ class FinalVideoCandidateV1(_Contract):
     workflow_acceptance: Literal["pending"] = "pending"
 
 
-def _registry(run_dir: Path, candidate_id: int | None = None):
+def _registry(run_dir: Path, candidate_id: int | None = None, *, qa_attempt: int | None = None):
     root = Path(run_dir).resolve()
     manifest = RunManifest.model_validate(read_json(root / "run.json"))
     return ArtifactRegistry(
         root, manifest, playback_preview_mode=True,
         final_render_mode=True, final_preview_candidate_id=candidate_id,
+        final_qa_attempt=qa_attempt,
     )
 
 

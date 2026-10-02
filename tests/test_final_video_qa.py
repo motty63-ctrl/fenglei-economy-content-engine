@@ -340,3 +340,60 @@ def test_blocking_failure_cannot_be_labeled_overall_passed():
     }
     with pytest.raises(ValueError, match="blocking"):
         FinalVideoQAReportV1.model_validate(payload)
+
+
+def _historical_failed_qa(root):
+    from fanglei.final_render import _registry
+    path = _register_passed_qa_stub(root)
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    raw['result'] = 'failed'
+    raw['checks'] = [{'check_id': 'video_stream', 'status': 'fail', 'blocking': True,
+                      'summary': 'Historical probe failure.', 'evidence': {'error': 'MP4_BOX_SIZE_INVALID'}}]
+    registry = _registry(root, 3)
+    registry.write_json('final_video_qa.json', raw, 'final_video_qa', force=True)
+    registry.save_manifest()
+    return path
+
+
+def test_reassessment_preserves_failed_history_and_immutable_inputs(source_run, synthetic_media):
+    from fanglei.final_video_qa import run_final_video_qa, validate_human_final_video_review_entry
+    candidate = _ready_candidate(source_run, synthetic_media['matching'], synthetic_media['preview'])
+    old = _historical_failed_qa(source_run)
+    before = {path: path.read_bytes() for path in (old, candidate, source_run / 'final.mp4')}
+    old_sha = sha256_bytes(before[old])
+    with pytest.raises(ArtifactConflictError, match='ALREADY_EXISTS'):
+        run_final_video_qa(source_run)
+    with pytest.raises((ValueError, ArtifactConflictError), match='EXPECTED_PREVIOUS'):
+        run_final_video_qa(source_run, reevaluate=True, expected_previous_qa_sha256='0' * 64)
+    path = run_final_video_qa(source_run, reevaluate=True, expected_previous_qa_sha256=old_sha)
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    assert path.name == 'final_video_qa_attempt_2.json'
+    assert raw['result'] == 'passed'
+    assert raw['attempt_number'] == 2
+    assert raw['previous_qa'] == {'path': 'final_video_qa.json', 'sha256': old_sha}
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert validate_human_final_video_review_entry(source_run).qa_sha256 == sha256_bytes(path.read_bytes())
+    with pytest.raises(ArtifactConflictError, match='ALREADY_EXISTS'):
+        run_final_video_qa(source_run, reevaluate=True, expected_previous_qa_sha256=sha256_bytes(path.read_bytes()))
+
+
+def test_failed_reassessment_cannot_fall_back_to_prior_passed_gate(source_run, synthetic_media):
+    from fanglei.final_video_qa import run_final_video_qa, validate_human_final_video_review_entry
+    _ready_candidate(source_run, synthetic_media['divergent'], synthetic_media['preview'])
+    old = _historical_failed_qa(source_run)
+    path = run_final_video_qa(source_run, reevaluate=True, expected_previous_qa_sha256=sha256_bytes(old.read_bytes()))
+    assert json.loads(path.read_text(encoding='utf-8'))['result'] == 'failed'
+    with pytest.raises(ValueError, match='NOT_PASSED'):
+        validate_human_final_video_review_entry(source_run)
+    with pytest.raises(ArtifactConflictError, match='ALREADY_EXISTS'):
+        run_final_video_qa(source_run, reevaluate=True, expected_previous_qa_sha256=sha256_bytes(path.read_bytes()))
+
+
+def test_changed_qa_implementation_closes_current_review_gate(source_run, synthetic_media, monkeypatch):
+    import fanglei.final_video_qa as owner
+    _ready_candidate(source_run, synthetic_media['matching'], synthetic_media['preview'])
+    owner.run_final_video_qa(source_run)
+    monkeypatch.setattr(owner, '_implementation_sha256', lambda: 'f' * 64)
+    assert owner.derive_final_video_qa_status(source_run) == 'stale'
+    with pytest.raises(ValueError, match='IMPLEMENTATION_STALE'):
+        owner.validate_human_final_video_review_entry(source_run)
