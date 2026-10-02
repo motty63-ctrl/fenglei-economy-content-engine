@@ -1,6 +1,22 @@
 # BLS August 2026 Employment Situation — Case State
 
-## Current Phase 3C.6B3 — Final QA recovery passed, human final review pending
+## Current Phase 3C.7 — 最终视频已批准，V0.2 工作流验收通过
+
+**V0.2_ACCEPTED · HUMAN FINAL VIDEO REVIEW = APPROVED · CASE 2 PRODUCTION = COMPLETE**
+
+用户明确批准当前 Final Candidate 作为 V0.2 Case 2 最终视频，reviewer `motty63-ctrl`。正式 `record_human_final_video_review(...)` owner 于 `2026-10-02T10:34:32.323781Z` 写入独立 run artifact，SHA `3605deaa54caa24d5048fe5e8dce0b96c853b52741489661253beeb9b23fa910`；[FINAL_VIDEO_APPROVAL.json](FINAL_VIDEO_APPROVAL.json) 为逐字节审计副本。
+
+本轮视频审批与 workflow acceptance 分开：A–J PASS、K 非阻塞 CAUTION、L 无阻塞项，按用户指定规则判为 ACCEPTED。验收时间 `2026-10-02T10:39:17.210928+00:00`；[V0_2_ACCEPTANCE.json](V0_2_ACCEPTANCE.json) SHA `e5360ced3bbfc1c54f19d731a991152074239830879216b6cd1c7c0a1e8fe4de`；完整审计见 [V0_2_ACCEPTANCE_REVIEW.md](V0_2_ACCEPTANCE_REVIEW.md)。
+
+Final Media SHA `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`；immutable Final Candidate SHA `52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`；current passed QA Attempt 2 SHA `ab520249af764b3f8823bee8aea066e22b152309785e06379205ca4acb1746ce`。209 个原 run 内容文件保持 byte-identical；Candidate 内 pending 字段是冻结的创建快照，当前 approved 状态由独立正式 review 表达。
+
+本轮没有 production 改动。新增 focused 6 passed；此前 generic focused 57 passed、safe non-integration 1018 passed / 3 skipped / 0 failures/errors 的代码未变，未重跑全量。Registry 72 nodes 无环，审批上游 56 artifacts current；未重跑 QA。
+
+限制保留：pause-refined sentence timing、静态 SVG + 程序 motion、项目本地媒体工具、非一键 final-render CLI，以及获批画面的审阅标签。`docs/` 更新仍为 **DEFERRED_REPARSE_POINT_ENVIRONMENT**。BLS final 保持本地，未 merge/push/tag/release/upload/publication；V0.1.0 冻结。
+
+Exact next action：由人工决定是否整合 V0.2 分支和/或准备 Release，并在安全环境完成 deferred project docs reconciliation。本轮到此停止。
+
+## Historical Phase 3C.6B3 — Final QA recovery passed, human final review pending
 
 **V0.2_PHASE_3C6B3_WAITING_FOR_FINAL_VIDEO_REVIEW**
 
@@ -57,10 +73,10 @@ Offline replay 审计：184 个原 run 文件中，183 个内容文件 byte-iden
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **`V0.2_PHASE_3C6B3_WAITING_FOR_FINAL_VIDEO_REVIEW`**. 现有 Final 已登记，immutable Candidate 不变；QA Attempt 2 passed/current，Human Final Review entry ready。HUMAN FINAL VIDEO REVIEW = PENDING；V0.2 ACCEPTANCE = PENDING。旧失败 QA 与所有 Preview 历史保留。
+- Status: **`V0.2_ACCEPTED`**. Case 2 production COMPLETE；Human Final Video Review APPROVED；独立验收审计已 accepted。Final/Candidate 不变、QA Attempt 2 passed/current；旧失败 QA 与所有 Preview 历史保留。Final 本地未发布。
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Audio Candidate 1's formal rejection and media are archived; audio Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; its recovered candidate was approved for visual generation. Visual Candidates 1 and 2 are formally `CHANGES_REQUIRED`; Candidate 3 is approved for Timeline. See [VISUAL_REVIEW.md](VISUAL_REVIEW.md) for preserved candidate history and [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md) for the current review packet. 本 BLS run 已有 immutable Final Candidate MP4，等待人工终审；未发布。
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Audio Candidate 1's formal rejection and media are archived; audio Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; its recovered candidate was approved for visual generation. Visual Candidates 1 and 2 are formally `CHANGES_REQUIRED`; Candidate 3 is approved for Timeline. See [VISUAL_REVIEW.md](VISUAL_REVIEW.md) and [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md) for preserved review history. 本 BLS run 的 immutable Final Candidate MP4 已通过正式人工终审；V0.2 工作流验收通过，视频未发布。
 
 ## Locked research question
 
