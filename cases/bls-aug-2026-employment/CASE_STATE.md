@@ -1,6 +1,29 @@
 # BLS August 2026 Employment Situation — Case State
 
-## Current Phase 3C.6A — Final Render contract ready, export not started
+## Current Phase 3C.6B3 — Final QA recovery passed, human final review pending
+
+**V0.2_PHASE_3C6B3_WAITING_FOR_FINAL_VIDEO_REVIEW**
+
+没有重新渲染或修改既有 `final.mp4`。通用 QA 修复由显式配置 / 项目本地 ffprobe 读取技术属性，浏览器继续执行完整播放与 Preview 比较。新 QA Attempt 2 保留并绑定旧失败 Attempt 1。
+
+- Final Media SHA：`5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`；3,579,255 bytes，1080×1920，30 FPS，1761 frames，H.264 / AAC，容器 58.710s。
+- Final Candidate QA 前 / 后 SHA：`52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`，byte-identical。
+- 历史 QA：`final_video_qa.json` · FAILED · `f59839e21966de3901121c71147b32b32669ac306f0652d5f0c4ac0100783a01`，保留原 bytes。
+- Current QA：`final_video_qa_attempt_2.json` · PASSED · `ab520249af764b3f8823bee8aea066e22b152309785e06379205ca4acb1746ce`；20/20 checks pass，9/9 scene、12/12 cues。
+- 208 个既有 run 文件 hash 保持不变；仅 run manifest 登记和新 QA attempt 写入。
+- Human Final Review entry：`ready_for_human_review`。
+- 终审包：[FINAL_VIDEO_REVIEW.md](FINAL_VIDEO_REVIEW.md)。
+- Focused：57 passed；safe non-integration：1018 passed、3 skipped、0 failures / errors。
+- Generic fix：`da7b855ad2777983a5febdb33e1bad734e40d421`；未 push。
+- `docs/`：DEFERRED_REPARSE_POINT_ENVIRONMENT。
+
+CAUTION：Final 保留获批 Preview 的审阅标签；字幕词组分行、整段音画体验及是否最终批准仍交给人工。没有发布、上传、Release / tag 操作，没有将 V0.2 标记完成。
+
+**HUMAN FINAL VIDEO REVIEW = PENDING · V0.2 ACCEPTANCE = PENDING**
+
+Exact next action：人工观看当前 Candidate 并审阅上述终审包，显式做出绑定 Candidate / current QA hash 的决定。不要自动批准。
+
+## Historical Phase 3C.6A — Final Render contract ready, export not started
 
 **`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
 
@@ -34,10 +57,10 @@ Offline replay 审计：184 个原 run 文件中，183 个内容文件 byte-iden
 
 - Case ID: `bls-aug-2026-employment`
 - Run ID: `2026-09-27-001-bls-august-2026-employment-situation`
-- Status: **`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**. Preview Candidate 3 已正式批准进入 Final Render，离线 request 与独立 final package/manifest current。Final Render 未开始，Final Candidate 未生成；Human Final Video Review 未开始，V0.2 acceptance pending。Preview 1 的 human changes-required 和 Preview 2 的 technical failure 历史保留。
+- Status: **`V0.2_PHASE_3C6B3_WAITING_FOR_FINAL_VIDEO_REVIEW`**. 现有 Final 已登记，immutable Candidate 不变；QA Attempt 2 passed/current，Human Final Review entry ready。HUMAN FINAL VIDEO REVIEW = PENDING；V0.2 ACCEPTANCE = PENDING。旧失败 QA 与所有 Preview 历史保留。
 - Target: BLS Employment Situation — August 2026.
 - Comparison source: BLS Employment Situation — July 2026 archive.
-- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Audio Candidate 1's formal rejection and media are archived; audio Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; its recovered candidate was approved for visual generation. Visual Candidates 1 and 2 are formally `CHANGES_REQUIRED`; Candidate 3 is approved for Timeline. See [VISUAL_REVIEW.md](VISUAL_REVIEW.md) for preserved candidate history and [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md) for the current review packet. No final MP4 exists for this BLS run.
+- Five BLS angle candidates were generated and `angle_001` was explicitly selected. The Script received explicit human approval for TTS and remains unchanged. Audio Candidate 1's formal rejection and media are archived; audio Candidate 2 is human-approved for Storyboard. See [AUDIO_REVIEW.md](AUDIO_REVIEW.md). Alignment and subtitles remain current. The original 9-scene Storyboard was reviewed as `CHANGES_REQUIRED`; its recovered candidate was approved for visual generation. Visual Candidates 1 and 2 are formally `CHANGES_REQUIRED`; Candidate 3 is approved for Timeline. See [VISUAL_REVIEW.md](VISUAL_REVIEW.md) for preserved candidate history and [PREVIEW_REVIEW.md](PREVIEW_REVIEW.md) for the current review packet. 本 BLS run 已有 immutable Final Candidate MP4，等待人工终审；未发布。
 
 ## Locked research question
 
