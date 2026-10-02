@@ -1,6 +1,26 @@
 # V0.2 Workflow Generalization Plan
 
-## Purpose and scope
+## Current closeout — V0.2_ACCEPTED
+
+**Case 2 production COMPLETE · Human Final Video Review APPROVED · Public packaging complete**
+
+2026-10-02 的 [BLS 工作流验收](../../cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md) 确认第二真实案例使用同一生产链路，无 BLS 专用 production branch；A–J 为 PASS，测试条件 K 为非阻塞 CAUTION，已知限制 L 已接受。Phases 1 / 2 及第二案例的内容、声音、视觉、预览、Final Render、独立 QA 和人工终审均已完成。本文后续 phase results、migration rows 与 blocked/waiting 状态是历史记录，不再授权或指示重复执行那些阶段。
+
+### Definition of Done closeout
+
+| 既定目标 | 当前验收依据 |
+|---|---|
+| 第二真实案例，同一生产 pipeline | BLS 官方获批 captures → 9 eligible facts → human-selected angle → approved Script / Audio / Storyboard / Visual / Preview → Final；无案例专用生产分支 |
+| 明确资格与人工选择 | 共享 `verified + allowed_downstream=true` 规则；hash-bound human selection / approvals；推荐不等于选择 |
+| 通用视频与证据追溯 | generic Storyboard / Visual、确定性 render clock、immutable Final Candidate、独立 QA / review；来源、claim、attribution、scope 保持绑定 |
+| Legacy / Fed 兼容及测试 | V0.1.0 Release 冻结；最新 MP4/QA focused 57 passed，safe non-integration 1018 passed / 3 skipped / 0 failures/errors，skips 不算通过且不含 integration |
+| 真实限制公开 | pause-refined sentence timing；静态 SVG + motion；provider / 媒体工具配置；人工门禁；无自动社交发布 |
+
+当前分支为 `v0.2/generalize-video-workflow`，验收基线 `6a697d9c7d7790daf1da2fd0b02d6460487900bb`。README 已由 Fed-only MVP 展示更新为两个真实案例验证；docs 当前状态已通过正常安全写入同步，未改历史审批/验收 packets。准备状态见 [RELEASE_READINESS.md](RELEASE_READINESS.md)。
+
+**Next action：human merge decision。** V0.2 acceptance 不等于发布；尚未 merge / tag / 创建 V0.2 Release / 发布 BLS 视频，本次不 push。Phase 4/5 的视觉升级与词级对齐保留为未来选项，不是当前 V0.2 的阻塞项或已交付能力。
+
+## Historical Phase 0 purpose and scope
 
 V0.2 will turn the proven Fed Case 2 video MVP into a reusable economic short-video workflow. This is a bounded generalization effort, not a rewrite. V0.1.0 remains frozen and publicly available; its release, tag, and verified Fed video are not changed by this plan.
 
@@ -62,7 +82,9 @@ The offline/mock fallback now starts with the selected angle hook and its suppor
 | Timeline | Bind scene/sentence timing to audio and alignment artifacts. Clearly label proportional estimates versus measured alignment. |
 | Renderer | Build and validate a reproducible video artifact from approved upstream artifacts. Document the actual entry point and side effects; do not imply an unsupported one-command CLI. |
 
-## 4. Human gates
+## 4. Historical initial human-gate plan
+
+以下为初始计划。当前已验收 V0.2 路径的门禁以顶部 closeout、README 与验收报告为准，含必要的术语审核及 Script / Audio / Storyboard / Visual / Preview / Final 分阶段决定。
 
 ### Must be explicitly human-confirmed
 
@@ -81,7 +103,9 @@ The offline/mock fallback now starts with the selected angle hook and its suppor
 
 The system may recommend an angle and may recommend visual treatments. It must preserve the recommendation as a suggestion, provide an explicit override path, and not represent a default recommendation as human approval. Policy thresholds can identify risk; they cannot approve facts or content on a person's behalf.
 
-## 5. Migration plan
+## 5. Historical migration plan and phase records
+
+表内 pending / blocked / next-action wording 保留阶段当时状态；当前完成度以顶部 closeout 为准。
 
 Each phase has a narrow artifact boundary, focused tests, a safe non-integration regression run before integration, and a rollback by reverting that phase's commit. Do not combine phase commits merely to reduce commit count.
 
@@ -112,7 +136,7 @@ Each phase has a narrow artifact boundary, focused tests, a safe non-integration
 | Phase 3C.5 — Human visual approval, Timeline composition, and review preview | **Timeline and preview generated; human preview review pending.** Generic Candidate 3 review owner recorded approval bound to current Storyboard and upstream dependencies. Timeline 5.1 preserves 9 scenes/12 subtitle cues and 58,679 ms timing; deterministic per-object fade-ins are presentation-only. The local HTML preview is marked non-final; structural QA passed. Timing remains estimated proportional sentence timing, and browser visual playback was not inspected because local `file://` navigation was blocked by browser policy. No final subtitle burn-in or MP4 export occurred. | Review `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`; record a separate human decision before any final render. |
 | Phase 4 — remaining visual/timing generalization | Review the remaining GDP-specific subtitle/alignment compatibility behavior and evaluate word-level alignment as an optional adapter. Keep proportional sentence timing as an explicit fallback. | Revert the adapter/compatibility owner while retaining existing rendered Fed media. |
 
-## 6. Definition of Done
+## 6. Original Definition of Done — met at V0.2 acceptance
 
 V0.2 is complete when:
 
@@ -128,7 +152,7 @@ V0.2 is complete when:
 
 Phases 1A, 1B, 1C, 2A, 2B, 3A.1, 3A.2, 3B.1, 3B.2, 3C.1.2–3C.1.5, 3C.3D, 3C.4A, and 3C.4B are complete. Phase 3C.5 has generated a current Timeline and non-final local preview and is waiting for human preview review. Phase 3C.1 / 3C.1.1 remain historical blocked checkpoints. The recovered Storyboard canonical SHA-256 is `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded`; Candidate 3 bundle SHA-256 is `5786ac2a2fd1627159969e3fba10a92e4d51822ba611d601c4a2c17e45806355`.
 
-**Historical Phase 3C.5 state: `V0.2_PHASE_3C5_WAITING_FOR_PREVIEW_REVIEW`; `HUMAN PREVIEW REVIEW = PENDING`.** At that checkpoint, the hash-bound Candidate 3 visual approval and Timeline were current. The local preview was `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project/review-preview.html`; human inspection was the next action through `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`. Final render, MP4 export, and publication were not approved at that time. The current Phase 3C.6A approval and next phase are recorded below. V0.1.0 remains frozen; V0.2 is incomplete.
+**Historical Phase 3C.5 state: `V0.2_PHASE_3C5_WAITING_FOR_PREVIEW_REVIEW`; `HUMAN PREVIEW REVIEW = PENDING`.** At that checkpoint, the hash-bound Candidate 3 visual approval and Timeline were current. The local preview was `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project/review-preview.html`; human inspection was the next action through `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`. Final render, MP4 export, and publication were not approved at that time. The subsequent historical Phase 3C.6A approval is recorded below. V0.1.0 remained frozen; V0.2 was incomplete at that checkpoint.
 
 
 ## Historical Phase 3C.5C — corrected preview review checkpoint
@@ -147,7 +171,9 @@ Actual QA covered 9 scene interiors, 6 boundary frames, all 12 subtitle cues, an
 
 The generic change is confined to review composition/time authority, measured subtitle layout, and separately registered renderer/preview candidates. The Candidate 2 owner API remains a compatibility wrapper; it is not replaced or overwritten. Revert the renderer helper, adapter integration, candidate-owner/graph extension and tests together to roll back the implementation, while preserving local preview audit history. A rollback does not grant any human approval.
 
-## Current Phase 3C.6A — Final Render contract ready, export not started
+## Historical Phase 3C.6A — Final Render contract ready, export not started
+
+以下为当时的阶段记录，后续 Final Render、QA 和人工终审已完成；其中的 pending / not started 不代表当前状态。
 
 **`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
 

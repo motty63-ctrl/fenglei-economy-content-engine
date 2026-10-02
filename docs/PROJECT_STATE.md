@@ -1,6 +1,31 @@
 # Project State
 
-## Current Phase 3C.6A — Final Render contract ready, export not started
+## 当前状态 — V0.2_ACCEPTED
+
+**Case 2 production COMPLETE · Human Final Video Review APPROVED · Public packaging complete**
+
+V0.2 已在 BLS August 2026 Employment Situation 第二真实案例上完成通用工作流验收。Fed V0.1.0 的初始 Video MVP 保持冻结；BLS 使用同一套泛化后的生产链路，没有新增 BLS/case-ID 专用 production branch。详细依据见 [V0_2_ACCEPTANCE_REVIEW.md](../cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)。下方的历史阶段描述保留当时语义，不代表当前制作进度。
+
+| 当前验收对象 | 状态 / 身份 |
+|---|---|
+| 分支与验收基线 | `v0.2/generalize-video-workflow`；`6a697d9c7d7790daf1da2fd0b02d6460487900bb`，不是后续包装 commit 的 HEAD |
+| BLS Final Media | `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`；58.710s、1080×1920、30 FPS、H.264/AAC、9 scenes、12 cues |
+| Immutable Final Candidate | `52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`；不覆写创建快照中的 pending 字段 |
+| 独立 Final QA Attempt 2 | `ab520249af764b3f8823bee8aea066e22b152309785e06379205ca4acb1746ce`；PASSED、20/20；失败 Attempt 1 保留 |
+| Human Final Video Review | `3605deaa54caa24d5048fe5e8dce0b96c853b52741489661253beeb9b23fa910`；APPROVED |
+| 工作流验收 | `V0_2_ACCEPTANCE.json`：`e5360ced3bbfc1c54f19d731a991152074239830879216b6cd1c7c0a1e8fe4de`；ACCEPTED |
+
+已验收 V0.2 路径：Facts → Research Focus → Research → Angle Candidates → Human Selection → Script → Human Script Approval → TTS → Human Audio Approval → Storyboard → Human Storyboard Approval → Visual Assets → Human Visual Approval → Timeline → Preview → Human Preview Approval → Final Render → Final Video QA → Human Final Video Approval。来源审批和必要的跨语言术语审核另有显式、hash-bound 记录。这是 opt-in V0.2 路径，不重新解释 legacy/default API 的行为。
+
+最新已记录测试：相关 MP4/QA focused **57 passed**；safe non-integration **1018 passed、3 skipped、0 failures/errors**。3 个 skips 要求显式本地 renderer-level 工具配置，未当作通过；不包含 integration suite。本次包装没有生产/test/schema 变更，不重复全量回归。
+
+当前限制：pause-refined sentence timing，不是词级强制对齐；静态 SVG + programmatic motion；在线 providers / 媒体工具需配置；需要人工内容决策；无社交自动发布。Final media 保留获批 renderer 的审阅标识，未借包装阶段改写视频。完整限制保留在验收材料中。
+
+公开包装已更新 [README](../README.md)、当前状态与 [发布准备清单](v0.2/RELEASE_READINESS.md)。本次 docs 路径可正常安全写入，状态 reconciliation 已完成。V0.2 分支尚未合并到 main，尚未创建 tag / Release 或发布 BLS MP4；本次包装 commit 不 push。V0.1.0 Release 与既有媒体保持不变。下一步是人工 merge 决策，不是继续开发或重新生成视频。
+
+## Historical Phase 3C.6A — Final Render contract ready, export not started
+
+以下为当时的阶段记录，后续 Final Render、QA 和人工终审已完成；其中的 pending / not started 不代表当前状态。
 
 **`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
 

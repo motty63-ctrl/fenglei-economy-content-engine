@@ -1,6 +1,22 @@
 # Current Handoff
 
-## Current Phase 3C.6A — Final Render contract ready, export not started
+## 当前交接 — V0.2 已验收，公开包装完成
+
+**`V0.2_ACCEPTED` · Case 2 production COMPLETE · Human Final Video Review APPROVED**
+
+截至 2026-10-02，BLS 第二真实案例已完成 canonical Final Render、immutable Final Candidate、独立 Final Video QA 与人工终审。正式验收记录在 [V0_2_ACCEPTANCE_REVIEW.md](../cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)，视频审阅记录在 [FINAL_VIDEO_REVIEW.md](../cases/bls-aug-2026-employment/FINAL_VIDEO_REVIEW.md)。下面的 Phase 3C.6A / 3C.5 等记录描述当时状态，不再是当前下一步。
+
+- 当前分支：`v0.2/generalize-video-workflow`；验收基线 commit：`6a697d9c7d7790daf1da2fd0b02d6460487900bb`。包装前与远端同分支同步，相对 `main` 为 ahead 47 / behind 0；包装 commit 仅在本地，具体 HEAD 以 Git 为准。
+- BLS Final：58.710s、1080×1920、30 FPS、H.264/AAC、9 scenes、12 subtitle cues；SHA-256 `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`。Final QA Attempt 2 为 PASSED、20/20，失败 Attempt 1 保留；人工终审 APPROVED。
+- 最新已记录验证：相关 MP4/QA focused **57 passed**；safe non-integration **1018 passed、3 skipped、0 failures/errors**。3 个 renderer-level 配置相关 skips 不算通过，不包含 integration suite。
+- [README](../README.md) 已展示 Fed/BLS 两案例、V0.2 门禁、真实测试边界与当前限制。docs 路径在本次环境可正常安全写入，当前状态已同步；此前 deferred 记录仍保留在历史审计材料中。
+- V0.1.0 Fed Release 保持冻结且公开；BLS 视频仍是本地 ignored 产物，尚未合并、tag、创建 V0.2 Release 或发布 BLS 媒体。本次没有 push。
+
+**Exact next action：人工决定是否将包装完成的 V0.2 分支合并到 main。** 之后再单独决定 `v0.2.0` tag、Release 和 BLS asset 发布；本次验收和包装不授权这些操作。准备清单见 [RELEASE_READINESS.md](v0.2/RELEASE_READINESS.md)。
+
+## Historical Phase 3C.6A — Final Render contract ready, export not started
+
+以下为当时的阶段记录，后续 Final Render、QA 和人工终审已完成；其中的 pending / not started 不代表当前状态。
 
 **`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
 
@@ -80,4 +96,4 @@ The old checkpoint recovery remains closed. Do not repair, backfill, infer, defa
 
 ## Handoff boundary
 
-The current target is Preview Candidate 3, registered/current and awaiting explicit human review. Candidate 1's human rejection and Candidate 2's technical failure remain preserved. Approved upstream content and Timeline Candidate 2 remain unchanged. No final-render approval, final video export, publication or V0.2 completion is recorded. V0.1.0 and the old blocked Fed checkpoint remain unchanged.
+当前停止在 **V0.2_ACCEPTED → PUBLIC PACKAGING → HUMAN MERGE DECISION**。人工最终视频批准与工作流验收均已记录，公开包装只修改 README / 状态文档。不得把验收视为 merge、push、tag、Release 或媒体发布授权。历史失败候选、拒绝记录和旧 blocked Fed checkpoint 保留；不得修复或升级旧 checkpoint。
