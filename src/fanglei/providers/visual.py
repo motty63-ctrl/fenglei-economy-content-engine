@@ -1,24 +1,42 @@
 """Provider boundary for renderer-agnostic visual planning."""
 from __future__ import annotations
 
-import re
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fanglei.visual_models import VisualBeat, VisualBeatPlan
-
-
-_NUMERIC_VALUE = re.compile(r"\d+(?:[.,]\d+)?%?")
-_COMPARISON_MARKER = re.compile(r"(?:变化|从|到|由|至|→|->|\bfrom\b|\bto\b|\bchanged\b)", re.I)
-_PERIOD_MARKER = re.compile(r"(?:20\d{2}|\d{1,2}月|\bQ[1-4]\b|\b(?:year|quarter|period)\b|年)", re.I)
+from fanglei.visual_models import TimingAwareVisualContext, VisualBeat, VisualBeatPlan
+from fanglei.visual_semantics import extract_numeric_comparison, is_numeric_comparison
 
 
 class VisualPlanningRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     run_id: str
     script: dict[str, Any]
     allowed_claim_ids: set[str] = Field(default_factory=set)
+    timing_context: TimingAwareVisualContext | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def timing_context_matches_script(self) -> "VisualPlanningRequest":
+        if self.timing_context is None:
+            return self
+        context = self.timing_context
+        if (context.run_id != self.run_id
+                or context.script_id != self.script.get("script_id")):
+            raise ValueError("VISUAL_TIMING_IDENTITY_MISMATCH")
+        sentences = self.script.get("sentences", [])
+        if [row.get("sentence_id") for row in sentences] != [row.sentence_id for row in context.segments]:
+            raise ValueError("VISUAL_TIMING_SEGMENT_COVERAGE_MISMATCH")
+        for sentence, segment in zip(sentences, context.segments, strict=True):
+            if sentence.get("text") != segment.display_text:
+                raise ValueError("VISUAL_TIMING_DISPLAY_TEXT_MISMATCH")
+            if not set(sentence.get("claim_ids", [])) <= set(context.allowed_claim_ids):
+                raise ValueError("VISUAL_TIMING_SCRIPT_CLAIM_NOT_ALLOWED")
+        if self.allowed_claim_ids != set(context.allowed_claim_ids):
+            raise ValueError("VISUAL_TIMING_ALLOWLIST_MISMATCH")
+        return self
 
 
 class VisualPlanningProvider(Protocol):
@@ -35,6 +53,7 @@ class DeterministicVisualPlanningProvider:
     name = "deterministic"
     model = "visual-rules-v1"
     prompt_version = "visual-beats-v1"
+    requires_structured_comparison = True
 
     def plan(self, request: VisualPlanningRequest) -> VisualBeatPlan:
         sentences = request.script.get("sentences", [])
@@ -45,8 +64,6 @@ class DeterministicVisualPlanningProvider:
             if unknown:
                 raise ValueError("VISUAL_CLAIM_NOT_ALLOWED:" + ",".join(sorted(unknown)))
 
-        script_text = "".join(sentence["text"] for sentence in sentences)
-        normalized_script_text = self._normalize_percentages(script_text)
         def section_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             result: list[list[dict[str, Any]]] = []
             current: list[dict[str, Any]] = []
@@ -67,11 +84,11 @@ class DeterministicVisualPlanningProvider:
                 result.append(current)
             return result
 
-        comparison_indexes = [index for index, sentence in enumerate(sentences)
-                              if sentence.get("sentence_type") == "verified_fact"
-                              and len(_NUMERIC_VALUE.findall(sentence["text"])) >= 2
-                              and _COMPARISON_MARKER.search(sentence["text"])
-                              and _PERIOD_MARKER.search(sentence["text"])]
+        comparison_indexes = [
+            index for index, sentence in enumerate(sentences)
+            if sentence.get("sentence_type") == "verified_fact"
+            and self._is_comparison_sentence(sentence["text"])
+        ]
         groups: list[list[dict[str, Any]]] = []
         if comparison_indexes:
             cursor = 0
@@ -94,11 +111,25 @@ class DeterministicVisualPlanningProvider:
 
         beats: list[VisualBeat] = []
         for index, (group, duration) in enumerate(zip(groups, durations), start=1):
-            key = "checklist" if group[0]["section"] == "mechanism" and group[0]["text"].startswith("下次") else group[0]["section"]
+            if (len(group) == 1 and group[0].get("sentence_type") == "verified_fact"
+                    and self._is_comparison_sentence(group[0]["text"])):
+                key = "comparison"
+            else:
+                key = "checklist" if group[0]["section"] == "mechanism" and group[0]["text"].startswith("下次") else group[0]["section"]
             if group[-1]["section"] == "core_judgment":
                 key = "core_judgment"
-            relationship, objects, emphasis, renderer = self._visual_semantics(key, normalized_script_text)
-            role = "judgment" if key == "core_judgment" else key
+            comparison = (
+                extract_numeric_comparison(group[0]["text"])
+                if key == "comparison" and len(group) == 1 else None
+            )
+            if key == "comparison" and comparison is None and self.requires_structured_comparison:
+                # Keep exact-sentence rendering as the safe fallback when a broad
+                # comparison cue cannot be represented by the typed visual contract.
+                key = "phenomenon"
+            relationship, objects, emphasis, renderer = self._visual_semantics(key)
+            role = "judgment" if key == "core_judgment" else (
+                "phenomenon" if key == "comparison" else key
+            )
             if role == "checklist":
                 role = "mechanism"
             beats.append(VisualBeat(
@@ -108,6 +139,7 @@ class DeterministicVisualPlanningProvider:
                 narration_summary="".join(row["text"] for row in group),
                 core_visual_relationship=relationship,
                 key_objects=objects, emphasis_objects=emphasis,
+                comparison=comparison,
                 claim_ids=list(dict.fromkeys(cid for row in group for cid in row.get("claim_ids", []))),
                 recommended_renderer=renderer, estimated_duration_seconds=max(duration, 0.01),
             ))
@@ -119,24 +151,58 @@ class DeterministicVisualPlanningProvider:
         return {
             "hook": "提出脚本中的核心问题",
             "phenomenon": "并列呈现脚本中的已核验信息",
+            "comparison": "按原句呈现脚本中的数值比较",
             "mechanism": "按脚本顺序展开事实与说明",
             "checklist": "按脚本明确给出的检查步骤逐项呈现",
             "core_judgment": "用脚本中的结论完成视觉收束",
         }[key]
 
     @staticmethod
-    def _visual_semantics(key: str, script_text: str) -> tuple[str, list[str], list[str], str]:
-        is_gdp_precision = all(token in script_text for token in ("2.8%", "2.7932%")) and (
-            "BEA" in script_text and ("世界银行" in script_text or "World Bank" in script_text)
+    def _visual_semantics(key: str) -> tuple[str, list[str], list[str], str]:
+        return {
+            "hook": ("提出脚本中的核心视觉问题", ["topic", "contrast_marker"], ["contrast_marker"], "program_animation"),
+            "phenomenon": ("并列呈现脚本中的已验证对象", ["topic", "verified_fact_objects"], ["verified_fact_objects"], "program_animation"),
+            "comparison": (
+                "按脚本原句并列呈现输入中的指标与数值变化",
+                ["metric_label", "before_value", "after_value", "change"],
+                ["after_value"], "program_animation",
+            ),
+            "mechanism": ("按脚本顺序展开解释关系", ["verified_fact_objects", "mechanism_marker"], ["mechanism_marker"], "program_animation"),
+            "checklist": ("把脚本中的检查方法排成顺序", ["method_steps"], ["method_steps"], "program_animation"),
+            "core_judgment": ("用脚本的核心判断完成视觉收束", ["conclusion_object"], ["conclusion_object"], "program_animation"),
+        }[key]
+
+    @staticmethod
+    def _is_comparison_sentence(text: str) -> bool:
+        return is_numeric_comparison(text)
+
+class LegacyGDPCalibrationVisualPlanningProvider(DeterministicVisualPlanningProvider):
+    """Explicit adapter for the historical GDP precision calibration fixture."""
+
+    requires_structured_comparison = False
+
+    def plan(self, request: VisualPlanningRequest) -> VisualBeatPlan:
+        script_text = "".join(row.get("text", "") for row in request.script.get("sentences", []))
+        if not ("2.8%" in script_text and "2.7932%" in script_text and "BEA" in script_text
+                and ("世界银行" in script_text or "World Bank" in script_text)):
+            raise ValueError("LEGACY_GDP_CALIBRATION_PROVIDER_REQUIRES_GDP_FIXTURE")
+        return super().plan(request)
+
+    @staticmethod
+    def _is_comparison_sentence(text: str) -> bool:
+        import re
+
+        numeric_value = re.compile(r"\d+(?:[.,]\d+)?%?")
+        comparison_marker = re.compile(r"(?:变化|从|到|由|至|→|->|\bfrom\b|\bto\b|\bchanged\b)", re.I)
+        period_marker = re.compile(r"(?:20\d{2}|\d{1,2}月|\bQ[1-4]\b|\b(?:year|quarter|period)\b|年)", re.I)
+        return bool(
+            len(numeric_value.findall(text)) >= 2
+            and comparison_marker.search(text)
+            and period_marker.search(text)
         )
-        if not is_gdp_precision:
-            return {
-                "hook": ("提出脚本中的核心视觉问题", ["topic", "contrast_marker"], ["contrast_marker"], "program_animation"),
-                "phenomenon": ("并列呈现脚本中的已验证对象", ["topic", "verified_fact_objects"], ["verified_fact_objects"], "program_animation"),
-                "mechanism": ("按脚本顺序展开解释关系", ["verified_fact_objects", "mechanism_marker"], ["mechanism_marker"], "program_animation"),
-                "checklist": ("把脚本中的检查方法排成顺序", ["method_steps"], ["method_steps"], "program_animation"),
-                "core_judgment": ("用脚本的核心判断完成视觉收束", ["conclusion_object"], ["conclusion_object"], "program_animation"),
-            }[key]
+
+    @staticmethod
+    def _visual_semantics(key: str) -> tuple[str, list[str], list[str], str]:
         values = {
             "hook": ("同一个美国实际 GDP 增长率出现 2.8% 与 2.7932% 两种显示",
                      ["gdp_topic", "bea_value", "world_bank_value"], ["bea_value", "world_bank_value"], "program_animation"),
@@ -154,13 +220,3 @@ class DeterministicVisualPlanningProvider:
                               ["decimal_point", "hidden_digits"], "program_animation"),
         }
         return values[key]
-
-    @staticmethod
-    def _normalize_percentages(text: str) -> str:
-        replacements = {
-            "百分之二点七九三二": "2.7932%",
-            "百分之二点八": "2.8%",
-        }
-        for source, target in replacements.items():
-            text = text.replace(source, target)
-        return text

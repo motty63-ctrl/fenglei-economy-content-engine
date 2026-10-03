@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_bytes, sha256_text
 from fanglei.errors import ArtifactConflictError
+from fanglei.evidence_policy import is_claim_eligible_for_content
 from fanglei.models import ArtifactState, RunManifest, StageError, StageState
 from fanglei.paths import resolve_run_dir
 from fanglei.providers.search import SearchProvider, SearchRequest
@@ -37,6 +38,11 @@ from fanglei.publication_metadata import (
 )
 from fanglei.security import safe_error_message, sanitize_url
 from fanglei.evidence_policy import gate_evidence
+from fanglei.evidence_targets import (
+    EvidenceTargetSetV1,
+    build_authority_claim_proposals,
+    parse_evidence_target_set,
+)
 
 
 class DocumentFetcher(Protocol):
@@ -47,9 +53,21 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _load(run_dir: Path) -> tuple[RunManifest, ArtifactRegistry]:
+def _load(
+    run_dir: Path,
+    *,
+    human_angle_selection_mode: bool = False,
+    evidence_targets_mode: bool = False,
+    timing_aware_storyboard_mode: bool | None = None,
+) -> tuple[RunManifest, ArtifactRegistry]:
     manifest = RunManifest.model_validate(read_json(run_dir / "run.json"))
-    registry = ArtifactRegistry(run_dir, manifest)
+    registry = ArtifactRegistry(
+        run_dir,
+        manifest,
+        human_angle_selection_mode=human_angle_selection_mode,
+        evidence_targets_mode=evidence_targets_mode,
+        timing_aware_storyboard_mode=timing_aware_storyboard_mode,
+    )
     for name, owner in (("source.md", "ingest"), ("questions.json", "analyze")):
         path = run_dir / name
         state = manifest.artifacts[name]
@@ -89,10 +107,23 @@ STAGE_ARTIFACT = {
     "search": "search_results.json",
     "source_fetch": "source_documents/index.json",
     "source_selection": "sources.json",
+    "evidence_targets": "evidence_targets.json",
     "factcheck": "facts.json",
     "research_synthesis": "research.md",
     "angle_generation": "angles.json",
     "angle_selection": "angle.md",
+    "human_angle_selection": "angle_selection.json",
+    "human_script_recovery": "human_script_edit.json",
+    "human_storyboard_review": "storyboard_review.json",
+    "human_storyboard_recovery": "human_storyboard_candidate.json",
+    "human_storyboard_approval": "human_storyboard_approval.json",
+    "human_visual_asset_review": "human_visual_asset_review_candidate_1.json",
+    "human_visual_asset_review_candidate_2": "human_visual_asset_review_candidate_2.json",
+    "human_visual_asset_review_candidate_3": "human_visual_asset_review_candidate_3.json",
+    "visual_asset_recovery": "visual_asset_recovery.json",
+    "visual_asset_recovery_candidate_3": "visual_asset_recovery_candidate_3.json",
+    "visual_asset_generation": "visual_assets",
+    "human_script_approval": "human_script_approval.json",
     "script_generation": "script.json",
     "script_render": "script.md",
     "visual_planning": "visual_beats.json",
@@ -110,6 +141,11 @@ STAGE_ARTIFACT = {
 }
 
 STAGE_ARTIFACTS = {
+    "human_storyboard_recovery": ("human_storyboard_edit.json", "human_storyboard_candidate.json"),
+    "visual_asset_recovery": ("visual_asset_recovery.json", "visual_assets_candidate_2"),
+    "visual_asset_recovery_candidate_3": (
+        "visual_asset_recovery_candidate_3.json", "visual_assets_candidate_3",
+    ),
     "narration_generation": ("narration.json", "narration.txt"),
     "audio_generation": ("audio/narration.wav", "audio/metadata.json", "audio/quality.json"),
     "voice_review": ("audio/review.json",),
@@ -301,37 +337,50 @@ def rebuild_source_selection_from_index(
 
 
 def _search_requests(questions: dict[str, Any]) -> list[SearchRequest]:
-    claims = [item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])]
-    queries = [claim for claim in claims if claim] or _question_texts(questions)
-    context = " ".join([questions.get("core_topic", ""), *queries])
-    domain_map = {
-        "bea": ("bea.gov", "BEA"),
-        "world bank": ("data.worldbank.org", "World Bank"),
-        "imf": ("imf.org", "IMF"),
-        "oecd": ("oecd.org", "OECD"),
-    }
-    named_authorities = [value for marker, value in domain_map.items() if marker in context.lower()]
-    requests: list[SearchRequest] = []
-    for query in queries:
-        core_topic = questions.get("core_topic", "").strip() or query
-        target_year = next(iter(re.findall(r"(?:19|20)\d{2}", core_topic)), "")
-        authority_focus = {
-            "BEA": f"fourth quarter and year {target_year}",
-            "World Bank": "GDP growth (annual %) United States",
-            "IMF": "World Economic Outlook United States",
-            "OECD": "Economic Outlook United States",
-        }
-        if named_authorities:
-            requests.extend(
-                SearchRequest(
-                    query=f"{core_topic} {authority} annual real GDP growth rate {authority_focus[authority]} official data",
-                    max_results=6,
-                    include_domains=[domain],
-                )
-                for domain, authority in named_authorities
-            )
+    def values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, (list, tuple)):
+            candidates = [item for item in value if isinstance(item, str)]
         else:
-            requests.append(SearchRequest(query=f"{core_topic} annual real GDP growth rate official data", max_results=12))
+            candidates = []
+        return [item.strip() for item in candidates if item.strip()]
+
+    shared_context = [
+        *values(questions.get("core_topic")),
+        *values(questions.get("entities")),
+        *values(questions.get("measures")),
+        *values(questions.get("periods")),
+    ]
+    intents: list[list[str]] = []
+    for claim in questions.get("claims_requiring_external_verification", []):
+        if not isinstance(claim, dict):
+            continue
+        intents.append([*values(claim.get("claim")), *values(claim.get("reason"))])
+    for question in questions.get("research_questions", []):
+        if not isinstance(question, dict):
+            continue
+        intents.append([
+            *values(question.get("question")),
+            *values(question.get("purpose")),
+            *values(question.get("expected_source_types")),
+        ])
+    intents.extend([[item] for item in values(questions.get("subquestions"))])
+    if not intents:
+        intents = [[question] for question in _question_texts(questions)]
+    if not intents:
+        intents = [[]]
+
+    requests: list[SearchRequest] = []
+    seen_queries: set[str] = set()
+    for intent in intents:
+        query_parts = list(dict.fromkeys([*shared_context, *intent]))
+        query = " ".join(query_parts).strip()
+        normalized = " ".join(query.casefold().split())
+        if not normalized or normalized in seen_queries:
+            continue
+        seen_queries.add(normalized)
+        requests.append(SearchRequest(query=query, max_results=12))
     return requests
 
 
@@ -341,9 +390,20 @@ def _fetch_context(questions: dict[str, Any]) -> FetchContext:
         *[item.get("claim", "") for item in questions.get("claims_requiring_external_verification", [])],
         *_question_texts(questions),
     ])
-    country = "USA" if re.search(r"\bUS\b|United States|美国", text, re.I) else None
-    years = tuple(sorted(set(re.findall(r"(?:19|20)\d{2}", text))))
-    indicators = ("real_gdp_growth",) if re.search(r"real\s+GDP|实际GDP|实际国内生产总值", text, re.I) else ()
+    def values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, (list, tuple)):
+            candidates = [item for item in value if isinstance(item, str)]
+        else:
+            candidates = []
+        return [item.strip() for item in candidates if item.strip()]
+
+    explicit_country = questions.get("country")
+    country = explicit_country.strip() if isinstance(explicit_country, str) and explicit_country.strip() else None
+    explicit_years = values(questions.get("years"))
+    years = tuple(sorted(set(explicit_years or re.findall(r"(?:19|20)\d{2}", text))))
+    indicators = tuple(dict.fromkeys(values(questions.get("indicators"))))
     return FetchContext(country=country, years=years, indicators=indicators, questions=tuple(_question_texts(questions)))
 
 
@@ -365,6 +425,7 @@ def _fetch_failure_code(error: BaseException) -> str:
 
 
 def _render_research(run_id: str, questions: list[str], sources: list[dict[str, Any]], facts: dict[str, Any]) -> str:
+    """Render legacy Research output with its historical verified-only rule."""
     source_by_id = {s["source_id"]: s for s in sources}
     lines = ["# 多源研究报告", "", f"Run: `{run_id}`", "", "## 研究问题", ""]
     lines.extend(f"- {q}" for q in questions)
@@ -385,33 +446,6 @@ def _render_research(run_id: str, questions: list[str], sources: list[dict[str, 
     return "\n".join(lines)
 
 
-def _focus_evidence_layer(
-    claim: dict[str, Any], approved_documents: dict[str, dict[str, str]]
-) -> str | None:
-    attestation = claim.get("authority_attestation")
-    if not isinstance(attestation, dict):
-        return None
-    source_ids = attestation.get("source_ids", [])
-    metadata = [approved_documents[source_id] for source_id in source_ids if source_id in approved_documents]
-    if len(metadata) != len(source_ids) or not metadata:
-        return None
-    descriptors = [
-        f"{row.get('document_identity', '')} {row.get('evidence_role', '')}".casefold()
-        for row in metadata
-    ]
-    if attestation.get("kind") == "deterministic_document_comparison" and all(
-        "sep" in value or "projection" in value for value in descriptors
-    ):
-        return "sep"
-    if attestation.get("kind") == "document_report" and any(
-        ("statement" in value or ("meeting" in value and "context" in value))
-        and "target" in value
-        for value in descriptors
-    ):
-        return "statement"
-    return None
-
-
 def _render_research_focus(
     run_id: str,
     focus: ResearchFocusV1,
@@ -421,21 +455,60 @@ def _render_research_focus(
     """Render a focused, deterministic brief from allowed facts only."""
     sources = source_artifact.get("sources", [])
     policy = source_artifact.get("source_policy", {})
-    approved_documents = {
-        row["source_id"]: row
-        for row in policy.get("approved_documents", [])
+    document_metadata = {
+        row["source_id"]: dict(row)
+        for row in sources
         if isinstance(row, dict) and isinstance(row.get("source_id"), str)
-    } if isinstance(policy, dict) else {}
-    allowed_claims = [
-        claim for claim in facts.get("claims", [])
-        if isinstance(claim, dict)
-        and claim.get("verification_status") == "verified"
-        and claim.get("allowed_downstream") is True
-    ]
-    sep_claims = [claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "sep"]
-    statement_claims = [
-        claim for claim in allowed_claims if _focus_evidence_layer(claim, approved_documents) == "statement"
-    ]
+    }
+    source_order = {
+        row["source_id"]: index
+        for index, row in enumerate(sources)
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    approved_documents = policy.get("approved_documents", []) if isinstance(policy, dict) else []
+    document_order: dict[str, int] = {}
+    for index, row in enumerate(approved_documents):
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str):
+            source_id = row["source_id"]
+            document_order[source_id] = index
+            document_metadata.setdefault(source_id, {}).update(row)
+    claim_records = facts.get("claims", [])
+    allowed_claims = [claim for claim in claim_records if is_claim_eligible_for_content(claim)]
+
+    def role_group(claim: dict[str, Any]) -> tuple[str, ...]:
+        attestation = claim.get("authority_attestation")
+        source_ids = attestation.get("source_ids", []) if isinstance(attestation, dict) else []
+        if not source_ids:
+            source_ids = claim.get("source_ids", [])
+        if not source_ids:
+            source_ids = [
+                evidence.get("source_id")
+                for evidence in claim.get("evidence", [])
+                if isinstance(evidence, dict) and isinstance(evidence.get("source_id"), str)
+            ]
+        source_ids = list(dict.fromkeys(source_id for source_id in source_ids if isinstance(source_id, str)))
+        source_ids.sort(
+            key=lambda source_id: (
+                0,
+                document_order[source_id],
+                source_id,
+            ) if source_id in document_order else (
+                1,
+                source_order.get(source_id, len(source_order)),
+                source_id,
+            )
+        )
+        roles: list[str] = []
+        for source_id in source_ids:
+            metadata = document_metadata.get(source_id, {})
+            role = metadata.get("evidence_role") or metadata.get("source_type") or metadata.get("title")
+            role = " ".join(role.split()) if isinstance(role, str) else ""
+            roles.append(role or f"source:{source_id}")
+        return tuple(dict.fromkeys(roles)) or ("source role not recorded",)
+
+    grouped_claims: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for claim in allowed_claims:
+        grouped_claims.setdefault(role_group(claim), []).append(claim)
 
     def render_claim(claim: dict[str, Any]) -> list[str]:
         source_ids = list(dict.fromkeys(claim.get("source_ids", [])))
@@ -443,8 +516,19 @@ def _render_research_focus(
         for evidence in claim.get("evidence", []):
             if evidence.get("relation") != "supports" or not evidence.get("evidence_eligible", True):
                 continue
+            evidence_text = evidence.get("evidence_text", "")
+            proposition_span = evidence.get("proposition_span")
+            if proposition_span is not None:
+                from fanglei.evidence_targets import validate_proposition_span
+
+                parsed_span = validate_proposition_span(evidence_text, proposition_span)
+                if parsed_span is None:
+                    # A malformed proposition binding cannot fall back to the
+                    # larger evidence excerpt in substantive Research output.
+                    continue
+                evidence_text = str(parsed_span["text"])
             locator = evidence.get("paragraph_locator") or evidence.get("source_section") or "source excerpt"
-            lines.append(f"  - Evidence ({evidence.get('source_id')}, {locator}): “{evidence.get('evidence_text', '')}”")
+            lines.append(f"  - Evidence ({evidence.get('source_id')}, {locator}): “{evidence_text}”")
         return lines
 
     lines = [
@@ -460,39 +544,29 @@ def _render_research_focus(
         "",
     ]
     lines.extend(f"{index}. {question}" for index, question in enumerate(focus.subquestions, start=1))
-    lines.extend(["", "## A. June-to-September SEP revisions", ""])
-    lines.extend(line for claim in sep_claims for line in render_claim(claim))
-    if not sep_claims:
-        lines.append("- No verified, downstream-allowed SEP comparison facts are available.")
-    lines.extend(["", "## B. September FOMC statement context", ""])
-    lines.extend(line for claim in statement_claims for line in render_claim(claim))
-    if not statement_claims:
-        lines.append("- No verified, downstream-allowed target-meeting statement facts are available.")
+    lines.extend(["", "## Evidence-grounded findings", ""])
+    if not grouped_claims:
+        lines.append("- No verified facts currently satisfy the downstream eligibility rule.")
+    for index, (roles, claims) in enumerate(grouped_claims.items(), start=1):
+        lines.extend([f"### Evidence group {index}", "", f"Document roles: {'; '.join(roles)}", ""])
+        lines.extend(line for claim in claims for line in render_claim(claim))
     lines.extend([
         "",
         "## Evidence boundary",
         "",
-        "The SEP records FOMC participants’ projections and assessments; it is not a unified Federal Reserve commitment. "
-        "The FOMC statement records the Committee’s public meeting statement. "
-        "These evidence layers are presented side by side as documented context; this report does not infer a causal relationship.",
+        "Substantive findings below use only claim records with `verification_status=verified` and `allowed_downstream=true`. "
+        "Source-package approval does not itself verify a claim. Preserve each claim’s recorded attribution and scope; "
+        "do not infer causality beyond its evidence.",
         "",
         "## Framing constraints",
         "",
     ])
     lines.extend(f"- {constraint}" for constraint in focus.constraints)
-    excluded = [
-        claim for claim in facts.get("claims", [])
-        if not (
-            isinstance(claim, dict)
-            and claim.get("verification_status") == "verified"
-            and claim.get("allowed_downstream") is True
-            and _focus_evidence_layer(claim, approved_documents) in {"sep", "statement"}
-        )
-    ]
+    excluded = [claim for claim in claim_records if not is_claim_eligible_for_content(claim)]
     lines.extend(["", "## Excluded fact records", ""])
     lines.append(
-        f"{len(excluded)} records were not used as substantive assertions because they are unverified, "
-        "not allowed downstream, or outside the two focused evidence layers."
+        f"{len(excluded)} records were not used as substantive assertions because they are unverified "
+        "or not allowed downstream."
     )
     lines.extend(["", "## Source index", ""])
     for source in sources:
@@ -520,9 +594,32 @@ def run_v02_pipeline(
     force_stage: str | None = None,
     source_policy: Mapping[str, Any] | None = None,
     authority_claims: Mapping[str, Mapping[str, Any]] | None = None,
+    evidence_targets: EvidenceTargetSetV1 | Mapping[str, object] | None = None,
 ) -> Path:
     run_dir = resolve_run_dir(Path(runs_dir), run_id)
-    manifest, registry = _load(run_dir)
+    if evidence_targets is not None:
+        target_identity = evidence_targets.model_dump(mode="json") if isinstance(evidence_targets, EvidenceTargetSetV1) else evidence_targets
+        if not isinstance(target_identity, Mapping) or not isinstance(target_identity.get("case_id"), str):
+            raise ValueError("evidence targets require an explicit case_id")
+        parsed_targets = parse_evidence_target_set(
+            evidence_targets, run_id=run_id, case_id=target_identity["case_id"]
+        )
+    else:
+        parsed_targets = None
+    manifest, registry = _load(run_dir, evidence_targets_mode=parsed_targets is not None)
+
+    if parsed_targets is None and (run_dir / "evidence_targets.json").is_file():
+        target_state = manifest.artifacts.get("evidence_targets.json")
+        target_path = run_dir / "evidence_targets.json"
+        if target_state is None or target_state.status == "missing" or not target_state.content_hash:
+            raise ArtifactConflictError("existing evidence_targets.json is unregistered; refusing to load")
+        target_text = target_path.read_text(encoding="utf-8")
+        if sha256_text(target_text) != target_state.content_hash:
+            raise ArtifactConflictError("existing evidence_targets.json hash differs from its registry record")
+        raw_targets = json.loads(target_text)
+        parsed_targets = parse_evidence_target_set(
+            raw_targets, run_id=run_id, case_id=raw_targets.get("case_id")
+        )
 
     def search() -> None:
         questions = registry.read_json("questions.json")
@@ -664,6 +761,54 @@ def run_v02_pipeline(
     _execute(manifest, registry, "source_selection", select, force_source_selection)
     if stop_after == "source_selection": return run_dir
 
+    target_set_sha256: str | None = None
+    document_roles: dict[str, str] = {}
+    if parsed_targets is not None:
+        source_artifact = registry.read_json("sources.json")
+        parsed_sources = parse_sources_artifact(source_artifact)
+        source_policy_model = getattr(parsed_sources, "source_policy", None)
+        if isinstance(source_policy_model, AuthoritativePrimarySetPolicyV1):
+            if (
+                source_policy_model.run_id != parsed_targets.run_id
+                or source_policy_model.case_id != parsed_targets.case_id
+                or source_artifact.get("package_admissibility") != "admissible"
+            ):
+                raise ArtifactConflictError("evidence targets do not match the approved authority source package identity")
+            document_roles = {
+                document.source_id: document.evidence_role
+                for document in source_policy_model.approved_documents
+            }
+            allowed_roles = set(document_roles.values())
+            if any(not set(target.source_roles).issubset(allowed_roles) for target in parsed_targets.targets):
+                raise ArtifactConflictError("evidence target source_roles must match roles in the approved package")
+        else:
+            document_roles = {row["source_id"]: row["source_type"] for row in source_artifact["sources"]}
+
+        target_payload = parsed_targets.model_dump(mode="json")
+        target_path = run_dir / "evidence_targets.json"
+        target_state = manifest.artifacts["evidence_targets.json"]
+        target_force = force_stage == "evidence_targets"
+        if target_path.exists():
+            existing_text = target_path.read_text(encoding="utf-8")
+            if target_state.status == "missing" or not target_state.content_hash:
+                raise ArtifactConflictError("existing evidence_targets.json is unregistered; refusing to overwrite")
+            if sha256_text(existing_text) != target_state.content_hash:
+                raise ArtifactConflictError("existing evidence_targets.json hash differs from its registry record")
+            existing_target = json.loads(existing_text)
+            target_force = target_force or existing_target != target_payload or target_state.status != "valid"
+        else:
+            if target_state.status != "missing":
+                raise ArtifactConflictError("registered evidence_targets.json is missing; refusing to recreate")
+            target_force = True
+
+        def save_targets() -> None:
+            registry.write_json(
+                "evidence_targets.json", target_payload, "evidence_targets", force=target_force
+            )
+
+        _execute(manifest, registry, "evidence_targets", save_targets, target_force)
+        target_set_sha256 = manifest.artifacts["evidence_targets.json"].content_hash
+
     def factcheck() -> None:
         source_artifact = registry.read_json("sources.json")
         source_version = source_artifact.get("schema_version")
@@ -674,7 +819,13 @@ def run_v02_pipeline(
             raise ValueError("AUTHORITY_CLAIMS_REQUIRE_SOURCES_2_1: authority claims need a versioned approved source package")
         if source_artifact.get("schema_version") == "2.1" and source_artifact.get("package_admissibility") != "admissible":
             raise ValueError("SOURCE_PACKAGE_INADMISSIBLE: source package does not permit claim extraction")
-        evidence = RuleBasedEvidenceExtractor().extract(documents, _question_texts(registry.read_json("questions.json")))
+        evidence = RuleBasedEvidenceExtractor().extract(
+            documents,
+            _question_texts(registry.read_json("questions.json")),
+            evidence_targets=parsed_targets,
+            document_roles=document_roles if parsed_targets is not None else None,
+            target_set_sha256=target_set_sha256,
+        )
         if (
             authority_claims
             and parsed_source_artifact is not None
@@ -714,6 +865,23 @@ def run_v02_pipeline(
                 if hasattr(parsed_source_artifact.source_policy, "case_id")
                 else None
             )
+            resolved_authority_claims = {key: dict(value) for key, value in (authority_claims or {}).items()}
+            if (
+                parsed_targets is not None
+                and isinstance(parsed_source_artifact.source_policy, AuthoritativePrimarySetPolicyV1)
+            ):
+                target_evidence = gate_evidence(
+                    [item for item in evidence if item.get("evidence_target_id")], documents
+                )
+                generated = build_authority_claim_proposals(
+                    target_evidence,
+                    parsed_targets,
+                    institution_display_name=parsed_source_artifact.source_policy.institution.display_name,
+                )
+                collision = set(resolved_authority_claims) & set(generated)
+                if collision:
+                    raise ArtifactConflictError("authority claim proposal key collision: " + ", ".join(sorted(collision)))
+                resolved_authority_claims.update(generated)
             facts = verify_claims_v22(
                 evidence,
                 source_context,
@@ -722,7 +890,7 @@ def run_v02_pipeline(
                 registry.read_json("source_documents/index.json"),
                 run_id=run_id,
                 case_id=policy_case_id,
-                authority_claims={key: dict(value) for key, value in (authority_claims or {}).items()},
+                authority_claims=resolved_authority_claims,
                 checked_at=_now(),
             )
         registry.write_json("facts.json", facts, "factcheck", force=force_stage == "factcheck")

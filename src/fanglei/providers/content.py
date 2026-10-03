@@ -7,9 +7,15 @@ from pydantic import BaseModel, Field
 from fanglei.authority_safety import compact_authority_attribution
 from fanglei.content_models import AngleCandidate, AngleProposal, AngleProposalResult, ScriptDraft, ScriptReadyClaim, ScriptSentence
 from fanglei.content_style import FANGLEI_ECONOMY_STYLE_GUIDE
+from fanglei.evidence_policy import is_claim_eligible_for_content
 from fanglei.errors import ProviderError
 from fanglei.security import REDACTED, safe_error_message
 from fanglei.script_patch import ScriptPatchResult
+
+SCRIPT_MIN_SENTENCE_COUNT = 12
+SCRIPT_MAX_SENTENCE_COUNT = 15
+SCRIPT_HARD_MIN_DURATION_SECONDS = 60
+SCRIPT_HARD_MAX_DURATION_SECONDS = 90
 
 
 class AngleGenerationInput(BaseModel):
@@ -29,6 +35,27 @@ class ScriptGenerationInput(BaseModel):
     fact_palette: tuple[ScriptReadyClaim, ...]
     research_focus: dict[str, Any] | None = None
     authority_metadata: dict[str, Any] = Field(default_factory=dict)
+    target_language: str | None = None
+    target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    speaking_rate_chars_per_second: float = Field(default=4.0, ge=2.5, le=6.0)
+    terminology_map: dict[str, Any] | None = None
+
+
+def _supporting_claims(
+    selected_angle: AngleCandidate,
+    fact_palette: tuple[ScriptReadyClaim, ...],
+) -> tuple[ScriptReadyClaim, ...]:
+    claim_by_id = {claim.claim_id: claim for claim in fact_palette}
+    claim_ids = list(dict.fromkeys(selected_angle.supporting_claim_ids))
+    if not claim_ids:
+        raise ValueError("SCRIPT_ANGLE_HAS_NO_SUPPORTING_CLAIMS")
+    missing = [claim_id for claim_id in claim_ids if claim_id not in claim_by_id]
+    if missing:
+        raise ValueError("SCRIPT_ANGLE_SUPPORTING_CLAIMS_UNAVAILABLE")
+    selected = tuple(claim_by_id[claim_id] for claim_id in claim_ids)
+    if any(not is_claim_eligible_for_content(claim) for claim in selected):
+        raise ValueError("SCRIPT_ANGLE_SUPPORTING_CLAIM_INELIGIBLE")
+    return selected
 
 
 class RepairIssue(BaseModel):
@@ -41,6 +68,7 @@ class RepairIssue(BaseModel):
     current_type: str | None = None
     expected_constraint: str | None = None
     trigger_category: str | None = None
+    diagnostics: dict[str, Any] | None = None
 
 
 class ScriptRepairInput(BaseModel):
@@ -53,6 +81,13 @@ class ScriptRepairInput(BaseModel):
     allow_additions: bool = False
     fact_palette: tuple[ScriptReadyClaim, ...]
     issues: list[RepairIssue]
+    target_language: str | None = None
+    target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    speaking_rate_chars_per_second: float = Field(default=4.0, ge=2.5, le=6.0)
+    terminology_map: dict[str, Any] | None = None
+    clear_attribution_context_sentence_ids: list[str] = Field(default_factory=list)
+    closing_claim_bind_sentence_ids: list[str] = Field(default_factory=list)
+    allowed_closing_claim_ids: list[str] = Field(default_factory=list)
 
 
 class ContentPlanningProvider(Protocol):
@@ -69,7 +104,8 @@ class DeepSeekContentPlanningProvider:
     name = "deepseek"
     endpoint = "https://api.deepseek.com/chat/completions"
     angle_prompt_version = "angles-deepseek-v1"
-    script_prompt_version = "script-deepseek-v1"
+    script_prompt_version = "script-deepseek-v2"
+    script_target_language = "zh-Hans"
 
     def __init__(self, api_key: str, *, model: str = "deepseek-v4-pro",
                  transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -144,10 +180,24 @@ class DeepSeekContentPlanningProvider:
                 if key in seen:
                     continue
                 seen.add(key)
-                evidence.append({name: item.get(name) for name in (
+                evidence_row = {name: item.get(name) for name in (
                     "source_id", "evidence_text", "observation", "value", "published_at",
                     "original_url", "document_hash", "json_pointer",
-                ) if item.get(name) is not None})
+                ) if item.get(name) is not None}
+                explicit_values = item.get("explicit_values")
+                if isinstance(explicit_values, list):
+                    evidence_row["explicit_values"] = [
+                        {key: value.get(key) for key in ("value", "unit") if value.get(key) is not None}
+                        for value in explicit_values if isinstance(value, dict)
+                    ]
+                revision_values = item.get("revision_values")
+                if isinstance(revision_values, dict):
+                    evidence_row["revision_values"] = {
+                        key: revision_values[key]
+                        for key in ("previous_value", "revised_value", "revision_amount", "direction")
+                        if revision_values.get(key) is not None
+                    }
+                evidence.append(evidence_row)
             claims.append({
                 "claim_id": claim.claim_id,
                 "claim_text": claim.claim_text,
@@ -170,7 +220,13 @@ class DeepSeekContentPlanningProvider:
         return result
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
-        facts = self._fact_payload(request.fact_palette)
+        eligible_claims = tuple(
+            claim for claim in request.fact_palette
+            if is_claim_eligible_for_content(claim)
+        )
+        if not eligible_claims:
+            raise ValueError("NO_ALLOWED_CLAIMS_FOR_ANGLE_PLANNING")
+        facts = self._fact_payload(eligible_claims)
         system = (
             "你是风雷经济的内容策划。只允许使用输入 JSON 中的 verified claims，不得创造数字、日期、机构结论或政策事实。"
             "生成 JSON，不要输出 Markdown。候选角度必须真正不同；叙事框架应由输入证据自然决定，不要求固定主题集合。"
@@ -215,83 +271,131 @@ class DeepSeekContentPlanningProvider:
         return AngleProposalResult.model_validate(raw)
 
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
-        facts = self._fact_payload(request.fact_palette)
+        supporting_claims = _supporting_claims(request.selected_angle, request.fact_palette)
+        facts = self._fact_payload(supporting_claims)
+        target_language = request.target_language or self.script_target_language
         system = (
-            "你是风雷经济的中文短视频编剧。只消费输入 JSON 中的 verified claims。不得创造数字、日期、机构行为、"
-            "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定支持它的 claim_ids，即使 sentence_type 写成"
-            " explanation 或 interpretation。没有 claim 支持时，只能写成明确的个人判断或比喻。输出纯 JSON，不要 Markdown。"
-            "脚本目标60到90秒，总口播字符严格控制在260到310个，必须先自行核对字数；第一句 hook 最多20个口播字符。"
-            "按现象、机制、核心判断推进，语言口语化。不要把 selected_angle 中未经 verified claims 支持的内容当作事实。"
-            "绑定 claim_ids 的句子只能陈述该 claim 及 evidence 明确包含的数字、机构和指标；不要给纯观点或比喻绑定 claim。"
-            "对authoritative_primary_attestation，必须保留claim的机构/文件归因、attestation scope和certainty；projection不能改写成承诺或政策决定。"
-            "不得添加原文未直接支持的因果、动机或市场影响；document_report必须保留来源归因并逐字保留被引用的attested evidence。"
-            "请输出12到15句，每句推动当前问题向答案前进。事实句可有多句，但每句都必须忠实复述对应 claim 或 evidence，"
-            "并绑定支持它的 claim_ids。API observation 后不要擅自添加百分号，必须按 evidence 中的原始值表达。"
-            "若 hook 包含已验证数字或机构名，hook 本身也必须标为 verified_fact 并绑定 claim。"
-            "对 angle_001，叙事只围绕同一 GDP 数值的两种精度写法：先呈现 BEA 的2.8%与 World Bank API 的"
-            "2.79318715363841（不加百分号），再写‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%’，"
-            "最后教观众先核对来源、指标、"
-            "年份和精度。四舍五入机制句也必须绑定支持它的 claim_id，并标为 verified_fact。"
-            "不要引入政策沟通需求、媒体行为、统计误差或任何 claims 未支持的原因。"
+            "你是风雷经济的短视频编剧。必须使用本次请求指定的 target_language 生成旁白；该值是唯一的目标语言依据。"
+            "把 selected_angle 作为叙事切入点，并使用 Research / Research Focus"
+            "组织表达。事实 whitelist 是 selected_angle.supporting_claim_ids 对应的 verified_claims_only；"
+            "Research 只能用于理解问题与结构，不能作为新增事实来源。不得创造输入没有提供的数字、日期、机构行为、"
+            "数据口径、历史事件或因果事实。任何可外部验证的句子都必须绑定直接支持它的 claim_ids；"
+            "没有 claim 支持时，只能写非事实性的表达或建议。输出符合 output_contract 的 JSON，不要 Markdown。"
+            "每条绑定 claim_ids 的句子只能忠实表达该 claim 与对应 evidence；数字、对象、时间、单位、统计口径、"
+            "certainty、attribution 和 authority scope 均不得扩大或省略。对权威文件 attestation 必须保留文件归因；"
+            "projection 不得改写为承诺、政策决定或现实结果。不得添加输入未支持的 causality、motive 或 market effect。"
+            "只在输入 claim 直接支持时解释机制；否则呈现证据边界，不要编造机制。不要把同时发生的变化写成因果关系。"
+            f"脚本目标约{request.target_duration_seconds}秒，硬范围{SCRIPT_HARD_MIN_DURATION_SECONDS}到"
+            f"{SCRIPT_HARD_MAX_DURATION_SECONDS}秒；时长是目标优化项，不得为凑时长改变事实。"
+            "第一句 hook 最多20个口播字符。"
+            f"输出{SCRIPT_MIN_SENTENCE_COUNT}到{SCRIPT_MAX_SENTENCE_COUNT}句，每句推动当前问题向答案前进；"
+            "事实句必须绑定支持它的 claim_ids，纯观点或比喻不得绑定 claim。"
+            "凡 hook 含有可核验的数字、日期、机构行为或具体事实，也必须绑定相应 claim 并标为 verified_fact。"
             "section 只能使用 hook、phenomenon、mechanism、core_judgment，最后一句必须是 core_judgment。"
             "sentence_type 只能使用 verified_fact、explanation、interpretation、analogy。"
+            "若提供已审核 terminology_map，只能使用其中 approved_target_terms；不得使用 proposed_target_terms。"
             "凡是包含“打个比方、好比、就像、仿佛、这像”的句子，sentence_type 必须是 analogy。"
             + FANGLEI_ECONOMY_STYLE_GUIDE
+            + "机制与因果说明必须有 supporting claim 直接支持；风格要求不能覆盖此事实边界。"
         )
         user = json.dumps({
-            "task": "生成约300个中文口播字符的结构化脚本 JSON",
+            "task": "根据本次 run 的 Research、选定角度和 supporting facts，以 target_language 指定的语言生成短视频脚本",
+            "run_id": request.run_id,
+            "research_summary": request.research_md,
+            "research_focus": request.research_focus,
+            "authority_metadata": request.authority_metadata,
+            "target_language": target_language,
+            "target_duration_seconds": request.target_duration_seconds,
+            "speaking_rate_chars_per_second": request.speaking_rate_chars_per_second,
+            "duration_character_guidance": {
+                "hard_minimum": round(60 * request.speaking_rate_chars_per_second),
+                "target": round(request.target_duration_seconds * request.speaking_rate_chars_per_second),
+                "hard_maximum": round(90 * request.speaking_rate_chars_per_second),
+            },
+            "approved_terminology_map": request.terminology_map,
             "selected_angle": request.selected_angle.model_dump(mode="json"),
+            "selected_supporting_claim_ids": request.selected_angle.supporting_claim_ids,
             "verified_claims_only": facts,
-            "minimum_sentence_count": 12,
-            "minimum_spoken_character_count": 240,
-            "required_narrative_beats": [
-                "hook：原样使用‘同一个美国GDP，怎么会有两种答案？’，不含数字与机构名",
-                "phenomenon：BEA的2024年美国实际GDP增长率2.8%，绑定claim",
-                "phenomenon：World Bank API原始观察值2.79318715363841，不加百分号，绑定claim",
-                "mechanism：原样使用‘2.79318715363841四舍五入到一位小数，就是GDP增长率2.8%。’，绑定claim",
-                "explanation：直接点明算完这一步，表面反差已经消失",
-                "interpretation：不要把小数位差别直接理解成机构争论",
-                "explanation：把本题答案收束为同一数值的不同精度展示",
-                "advice：以后比较经济数据，第一步先看来源",
-                "advice：第二步确认指标名称是否相同",
-                "advice：第三步确认年份是否相同",
-                "advice：第四步检查数值精度",
-                "interpretation：完成核对后再判断差异是否真实",
-                "core_judgment：用来源、指标、年份、精度这一可复用方法收尾",
+            "narrative_guidance": [
+                "从 hook 引出 selected_angle 的问题",
+                "呈现 supporting claims 直接支持的事实",
+                "只解释证据支持的背景；否则清楚保留 scope boundary",
+                "以不超出 evidence 的结论收尾",
             ],
+            "output_contract": {
+                "schema_version": "3.0",
+                "target_language": target_language,
+                "minimum_sentence_count": SCRIPT_MIN_SENTENCE_COUNT,
+                "maximum_sentence_count": SCRIPT_MAX_SENTENCE_COUNT,
+                "minimum_spoken_character_count": round(
+                    SCRIPT_HARD_MIN_DURATION_SECONDS * request.speaking_rate_chars_per_second),
+                "maximum_spoken_character_count": round(
+                    SCRIPT_HARD_MAX_DURATION_SECONDS * request.speaking_rate_chars_per_second),
+                "target_duration_seconds": request.target_duration_seconds,
+                "speaking_rate_chars_per_second": request.speaking_rate_chars_per_second,
+                "hard_duration_range_seconds": {
+                    "min": SCRIPT_HARD_MIN_DURATION_SECONDS,
+                    "max": SCRIPT_HARD_MAX_DURATION_SECONDS,
+                },
+                "allowed_sections": ["hook", "phenomenon", "mechanism", "core_judgment"],
+                "allowed_sentence_types": ["verified_fact", "explanation", "interpretation", "analogy"],
+            },
             "output_schema": {
                 "angle_id": request.selected_angle.angle_id,
                 "title": request.selected_angle.title,
-                "target_duration_seconds": 75,
+                "target_duration_seconds": request.target_duration_seconds,
                 "sentences": [{
                     "sentence_id": "sentence_001", "section": "hook",
                     "sentence_type": "interpretation", "text": "", "claim_ids": [],
+                    "attribution_context_id": None,
                 }],
             },
         }, ensure_ascii=False)
         raw = self._request_json(system, user, max_tokens=2600, temperature=self.script_temperature)
-        return self._normalize_script(raw)
+        return self._normalize_script(
+            raw,
+            allow_bound_interpretation=request.terminology_map is not None,
+            target_language=target_language,
+        )
 
     @staticmethod
-    def _normalize_script(raw: dict[str, Any]) -> ScriptDraft:
+    def _normalize_script(raw: dict[str, Any], *, allow_bound_interpretation: bool = False,
+                          target_language: str | None = None) -> ScriptDraft:
         for sentence in raw.get("sentences", []):
             if isinstance(sentence, dict) and sentence.get("section") == "core_insight":
                 sentence["section"] = "core_judgment"
             if isinstance(sentence, dict) and sentence.get("sentence_type") == "core_judgment":
                 sentence["sentence_type"] = "interpretation"
-            if isinstance(sentence, dict) and sentence.get("sentence_type") != "verified_fact":
+            if (isinstance(sentence, dict) and sentence.get("sentence_type") != "verified_fact"
+                    and not (allow_bound_interpretation and sentence.get("section") == "core_judgment")):
                 sentence["claim_ids"] = []
+        if target_language is not None:
+            returned_language = raw.get("target_language")
+            if (returned_language is not None
+                    and (not isinstance(returned_language, str)
+                         or returned_language.casefold() != target_language.casefold())):
+                raise ValueError("SCRIPT_TARGET_LANGUAGE_MISMATCH")
+            raw["target_language"] = target_language
         return ScriptDraft.model_validate(raw)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:
         system = (
             "你只生成风雷经济脚本的 sentence-level patches，不得返回、重写或覆盖整篇 script。"
+            "严格保留本次请求 target_language 指定的目标语言，不得切换为 provider 默认语言。"
             "本地 lint 和 patch applier 是最终裁判。只能修改 editable_sentence_ids；protected_sentence_ids 禁止修改。"
-            "不得修改 claim 状态、claim_ids、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
+            "不得修改 claim 状态、已通过的 verified_fact，也不得靠改变 sentence_type 绕过事实检查。"
+            "claim_ids 默认不可修改；只有当 repair_permissions 明确列出 closing_claim_bind_sentence_ids，"
+            "且问题为 CORE_JUDGMENT_WEAK 时，才可为对应最后结尾句提交 new_claim_ids；"
+            "new_claim_ids 必须是 selected_angle.supporting_claim_ids 的非空子集并保留已有绑定。"
+            "只有 repair_permissions.clear_attribution_context_sentence_ids 明确授权的句子，"
+            "才能设置 clear_attribution_context=true。"
+            "verified_claims_only 仅包含 selected_angle.supporting_claim_ids 对应的事实；不得使用其他记忆或补充事实。"
+            "保持选定角度的主题、对象、范围和来源归因，不引入当前输入未提供的案例、机构或指标。"
             "不得新增数字、日期、机构结论、数据口径、历史事件或因果事实。只修 structured_issues 指向的问题，"
             "保持其他内容不变，不重新设计 selected_angle。输出纯 JSON，顶层只能是 patches。"
-            "遇到 DURATION_TOO_SHORT 时，必须按缺口一次提交足够数量、文本互不重复的 add_after patches，"
-            "使完整脚本至少达到240个口播字符；不得靠重复句凑时长。"
+            f"把时长优化到约{request.target_duration_seconds}秒，同时保持60到90秒硬范围；"
+            "不得靠新增或重复事实凑时长。可以压缩事实句的冗余措辞，但必须保留原 claim_ids、来源归因、统计范围和数值语义，"
+            "修订后的全文仍须通过本地 lint。"
             "replace patch 使用 sentence_id、operation=replace、new_text；只有 SENTENCE_TYPE_MISMATCH 或"
             " ANALOGY_OVERUSE 明确授权时"
             "才可附 new_sentence_type。add_after 仅在 allow_additions=true 时使用，并必须附 new_sentence_id、"
@@ -308,8 +412,12 @@ class DeepSeekContentPlanningProvider:
                 "不得修改verified_fact、已通过的hook或结论，不得重复事实或建议凑时长。"
             ),
             "DURATION_TOO_LONG": (
-                "只压缩授权的explanation或analogy句；不得删除核心verified_fact，"
-                "不得修改已通过的hook或结论，也不得破坏现象、机制、判断结构。"
+                "优先压缩授权的事实句及 explanation / analogy 中的冗余措辞；保留事实句 claim_ids、"
+                " attribution_context_id、数字、单位、归因和范围。不得删除核心事实或改变 angle。"
+            ),
+            "DURATION_TARGET_MISSED": (
+                f"将时长向{request.target_duration_seconds}秒目标靠近。可改写授权事实句以删去重复修饰，"
+                "必须保留 claim_ids、归因上下文、范围、数值角色与精确数值；不得改变 angle 或加入新事实。"
             ),
             "COMPLEX_LONG_SENTENCE": "每句不超过48个口播字符，逗号、分号和冒号合计不超过3个。",
             "UNSUPPORTED_FACT": "仅保留一条忠实翻译claim_text的verified_fact并绑定对应claim_id，不扩写；其他句子不绑定claim。",
@@ -320,12 +428,48 @@ class DeepSeekContentPlanningProvider:
             ),
             "SENTENCE_TYPE_MISMATCH": "含明确比喻标记的句子必须标为analogy；不得靠改类型掩盖事实断言。",
             "CORE_JUDGMENT_MISSING": (
-                "最后一句section必须是core_judgment，并用不含新事实的明确主观判断收束。"
-                "可直接使用：‘所以，理解数据的精度，比记住一个数字更重要。’"
+                "最后一句section必须是core_judgment，并用不含新事实的清晰陈述句收束；"
+                "回到选定角度的问题，并保留输入证据所限定的结论范围。"
             ),
             "CORE_JUDGMENT_WEAK": (
-                "最后一句必须是明确陈述句，不能是问句。请把该句精确替换为："
-                "‘所以，理解数据的精度，比记住一个数字更重要。’"
+                "最后一句必须是清晰陈述句，不能是问句；请回到选定角度的问题收束，"
+                "不要补入输入没有支持的新事实或结论。若为跨维度事实综合，必须只绑定覆盖这些维度的选定角度 claims；"
+                "仅在 repair_permissions 授权时使用 new_claim_ids。不得加入因果、预测或政策判断。"
+            ),
+            "AUTHORITY_SCOPE_EXPANSION": (
+                "删除超出绑定证据的因果、动机、预测、市场影响或政策判断；只陈述来源直接支持的范围。"
+            ),
+            "TERMINOLOGY_TERM_MISSING": (
+                "只修复 diagnostics 指出的语义角色：若该概念被句子明确表达，使用该 claim 对应的 approved_target_terms；"
+                "不得跨 metric/unit 等角色借用术语。reporting_scope/source_section 默认是结构性 provenance，"
+                "除非句子明确声称该范围，否则不要强行加入口播。"
+            ),
+            "REVISION_ROLE_MISMATCH": (
+                "按 diagnostics 中的结构化 previous/revised/delta 值逐个保留数值，并用明确的通用修订表达标记每个值的角色；"
+                "不得根据数值顺序猜角色，也不得把修订幅度写成修订后的最终值。"
+            ),
+            "UNSUPPORTED_NUMERIC_FORMAT": (
+                "只使用 facts payload 支持且本地 numeric parser 可精确识别的数字表达；"
+                "避免无法确定数值或单位的中文数字写法，不得新增或近似改写数值。"
+            ),
+            "UNSUPPORTED_NUMERIC_VALUE": (
+                "对照 diagnostics 的 expected_values，仅保留精确支持的数值和单位；不得添加、四舍五入或换算出未列出的值。"
+            ),
+            "UNIT_SCOPE_MISMATCH": (
+                "保留 diagnostics 中的精确数值及 expected_unit，并使用该 claim 已批准的 unit 表达；"
+                "不得把 unit alias 当作 metric alias。"
+            ),
+            "ATTRIBUTION_CONTEXT_INVALID": (
+                "核对 diagnostics 的句子类型和上下文重置原因。claimless 过渡/编辑句必须清除旧 attribution context；"
+                "若该句仍是 authority-backed fact，则保留 claim binding 并使用有效归因锚点。"
+            ),
+            "ATTRIBUTION_CONTEXT_CONFLICT": (
+                "diagnostics 表示当前可见归因与绑定来源冲突。只保留该句 claims 获批的 attribution；"
+                "若句子不再是来源事实，应改写为无事实断言的过渡句并清除获准句子的旧 context。"
+            ),
+            "ATTRIBUTION_CONTEXT_ANCHOR_REQUIRED": (
+                "authority-backed factual sentence 必须显式保留 claim 对应的已批准 attribution；"
+                "若句子转为 claimless transition/editorial/closing，则移除其事实断言并清除归因上下文。"
             ),
             "FORMULAIC_REPETITION": "同一种话语开头最多使用两次；改写成自然口语，避免连续使用‘你可以/你不妨/我的判断是’。",
             "REPORT_STYLE_LANGUAGE": "删掉报告式套话，直接进入问题或答案；不得新增事实。",
@@ -342,22 +486,23 @@ class DeepSeekContentPlanningProvider:
         }
         current_rules = []
         safe_methodology_replacements = (
-            "读到两种写法，先别急着判断谁对谁错。",
-            "比较之前，先把指标名称和年份放在一起。",
-            "真正要问的，是两种写法传达的方向是否一致。",
-            "看经济新闻时，多追问一句来源在哪里。",
-            "先确认讨论的是不是同一个指标，再理解差别。",
+            "先把问题说清楚，再比较对应材料。",
+            "比较之前，先确认讨论对象和范围。",
+            "先看材料直接记录了什么，再谈理解。",
+            "遇到不同说法时，可以先回到各自出处。",
+            "先区分原文记录与自己的理解。",
             "先把看到的写法和自己的理解分开。",
-            "不妨先列出疑问，再一项一项核对。",
+            "把问题拆开，再一项一项核对。",
             "可以把这次比较当成一次阅读检查。",
             "别急着解释差别，先确认双方说的是同一件事。",
-            "先看结论方向，再决定细节是否值得深究。",
-            "遇到相近写法时，先问它们能不能直接比较。",
+            "先看记录本身，再说明它能回答什么。",
+            "阅读相关材料时，给自己留一个核对步骤。",
+            "先判断问题出在内容，还是表达方式。",
             "把比较步骤放慢一点，再说出自己的理解。",
-            "先追到出处，再回头理解新闻里的简短说法。",
-            "阅读这类数字时，给自己留一个核对步骤。",
-            "先判断问题出在内容，还是出在表达方式。",
-            "不要只看末尾差别，也要看它回答了什么问题。",
+            "先追到出处，再回头理解简短说法。",
+            "不要只看结论，也要看它回答了什么问题。",
+            "先把现象和解释分开，再决定如何表述。",
+            "先确认输入信息是否足以支持这个说法。",
         )
         for issue in request.issues:
             code = issue.code
@@ -390,7 +535,7 @@ class DeepSeekContentPlanningProvider:
                 elif signal == "causal_fact" and locator:
                     suffix += (
                         " 必须删除无claim支持的因果判断。可直接改为不含外部事实的建议："
-                        "‘你不妨把注意力放在趋势上，不必只盯着末尾几位。’"
+                        "‘你可以把观察到的内容与可能的解释分开。’"
                     )
                 current_rules.append(issue_rules["SEMANTIC_FACTUALITY_UNSUPPORTED"] + suffix)
         current_spoken_character_count = len(re.findall(
@@ -408,7 +553,13 @@ class DeepSeekContentPlanningProvider:
             "repair_attempt": request.repair_attempt,
             "current_spoken_character_count": current_spoken_character_count,
             "existing_sentence_texts": [sentence.text for sentence in request.current_script.sentences],
-            "valid_duration_character_range": {"min": 240, "max": 360, "target": 300},
+            "valid_duration_character_range": {
+                "min": round(60 * request.speaking_rate_chars_per_second),
+                "max": round(90 * request.speaking_rate_chars_per_second),
+                "target": round(request.target_duration_seconds * request.speaking_rate_chars_per_second),
+            },
+            "target_language": request.target_language,
+            "approved_terminology_map": request.terminology_map,
             "structured_issues": [issue.model_dump(mode="json", exclude_none=True) for issue in request.issues],
             "rules_for_current_issue_codes": current_rules,
             "selected_angle": request.selected_angle.model_dump(mode="json"),
@@ -416,10 +567,17 @@ class DeepSeekContentPlanningProvider:
             "editable_sentences": editable_sentences,
             "protected_sentence_ids": request.protected_sentence_ids,
             "allow_additions": request.allow_additions,
-            "verified_claims_only": self._fact_payload(request.fact_palette),
+            "repair_permissions": {
+                "clear_attribution_context_sentence_ids": request.clear_attribution_context_sentence_ids,
+                "closing_claim_bind_sentence_ids": request.closing_claim_bind_sentence_ids,
+                "allowed_closing_claim_ids": request.allowed_closing_claim_ids,
+            },
+            "verified_claims_only": self._fact_payload(_supporting_claims(
+                request.selected_angle, request.fact_palette)),
             "patch_contract": {
                 "operations": ["replace", "add_after"],
-                "replace_fields": ["sentence_id", "operation", "new_text", "new_sentence_type(optional)"],
+                "replace_fields": ["sentence_id", "operation", "new_text", "new_sentence_type(optional)",
+                                   "clear_attribution_context(optional)", "new_claim_ids(optional)"],
                 "add_after_fields": ["sentence_id", "operation", "new_sentence_id", "new_text",
                                      "new_sentence_type", "new_section"],
             },
@@ -442,19 +600,8 @@ class MockContentPlanningProvider:
     name = "mock-content"
     model = None
     angle_prompt_version = "offline-generic-angles-v1"
-    script_prompt_version = "offline-evidence-script-v2"
-
-    @staticmethod
-    def _spoken_fact(claim_text: str) -> str:
-        match = re.search(
-            r"United States real GDP grew\s+(\d+(?:\.\d+)?)%\s+in\s+((?:19|20)\d{2})",
-            claim_text,
-            re.I,
-        )
-        if match:
-            value, year = match.groups()
-            return f"美国{year}年实际GDP增长{value}%。"
-        return claim_text
+    script_prompt_version = "offline-evidence-script-v3"
+    script_target_language = "zh-Hans"
 
     def generate_angles(self, request: AngleGenerationInput) -> AngleProposalResult:
         from fanglei.offline_angle_planner import plan_offline_angles
@@ -466,18 +613,6 @@ class MockContentPlanningProvider:
         return len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
 
     @staticmethod
-    def _authority_subject(scope: dict[str, Any]) -> str:
-        subject = str(scope.get("subject", "")).strip()
-        labels = {
-            "change in real gdp": "实际GDP增速",
-            "unemployment rate": "失业率",
-            "pce inflation": "PCE通胀",
-            "core pce inflation": "核心PCE通胀",
-            "federal funds rate": "联邦基金利率",
-        }
-        return labels.get(subject.casefold(), subject)
-
-    @staticmethod
     def _authority_scope_term(value: str) -> str:
         labels = {
             "projection": "预测",
@@ -486,6 +621,18 @@ class MockContentPlanningProvider:
             "report": "记录",
         }
         return labels.get(value.casefold(), value)
+
+    @staticmethod
+    def _legacy_fed_v01_subject_label(subject: str) -> str:
+        """Retain compact labels for historical Fed V0.1 fixture comparisons only."""
+        labels = {
+            "change in real gdp": "实际GDP增速",
+            "unemployment rate": "失业率",
+            "pce inflation": "PCE通胀",
+            "core pce inflation": "核心PCE通胀",
+            "federal funds rate": "联邦基金利率",
+        }
+        return labels.get(subject.casefold(), subject)
 
     @staticmethod
     def _approved_source_ids(request: ScriptGenerationInput) -> set[str]:
@@ -544,7 +691,7 @@ class MockContentPlanningProvider:
             period = period + "年"
         statistic = "中位数" if scope["statistic"].casefold() == "median" else scope["statistic"]
         unit = "%" if scope["unit"].casefold() in {"percent", "%"} else scope["unit"]
-        subject = cls._authority_subject(scope)
+        subject = cls._legacy_fed_v01_subject_label(str(scope.get("subject", "")).strip())
         scope_terms = list(dict.fromkeys(
             cls._authority_scope_term(scope[key]) for key in ("measure", "certainty")
         ))
@@ -641,27 +788,44 @@ class MockContentPlanningProvider:
                            title=request.selected_angle.title, sentences=sentences)
 
     def generate_script(self, request: ScriptGenerationInput) -> ScriptDraft:
+        supporting_claims = _supporting_claims(request.selected_angle, request.fact_palette)
         authority_draft = self._generate_authority_script(request)
         if authority_draft is not None:
             return authority_draft
-        claim = request.fact_palette[0]
-        texts = [
-            ("hook", "interpretation", "同一个增长率，为什么会出现两种写法？"),
-            ("phenomenon", "verified_fact", self._spoken_fact(claim.claim_text)),
-            ("mechanism", "explanation", "先别急着判断谁对谁错，第一步是把指标、年份和计算范围对齐。"),
-            ("mechanism", "interpretation", "在这个例子里，可以把差别理解成显示精度不同。"),
-            ("mechanism", "analogy", "这就像同一段距离，一个人说大约三公里，另一个人写到具体米数。"),
-            ("mechanism", "explanation", "接着把两种写法放在一起，看看它们回答的是不是同一个问题。"),
-            ("mechanism", "interpretation", "真正值得追问的不是小数点后多了几位，而是口径有没有变化。"),
-            ("mechanism", "explanation", "还要看数据是否来自同一年度，是否经过修订，以及增长率是不是实际口径。"),
-            ("mechanism", "interpretation", "末尾写得更细，并不会自动改变前面共同表达的方向。"),
-            ("mechanism", "interpretation", "普通人看到两个数字时，最容易把显示差异误读成机构分歧。"),
-            ("mechanism", "explanation", "避免误读的方法很简单，先对口径，再看精度，最后才比较结论。"),
-            ("core_judgment", "interpretation", "所以核心判断是，小数位不同未必是矛盾，口径不同才需要真正警惕。"),
+        def claim_text(claim: ScriptReadyClaim) -> str:
+            text = claim.claim_text.strip()
+            attestation = claim.authority_attestation or {}
+            attribution = attestation.get("attribution")
+            if (claim.verification_basis == "authoritative_primary_attestation"
+                    and isinstance(attribution, str) and attribution.strip()
+                    and attribution.casefold() not in text.casefold()):
+                text = f"{compact_authority_attribution(attribution)}：{text}"
+            return text
+
+        rows: list[tuple[str, str, str, list[str]]] = [
+            ("hook", "interpretation", request.selected_angle.hook.strip(), []),
         ]
-        sentences = [ScriptSentence(sentence_id=f"sentence_{n:03d}", section=section,
-            sentence_type=kind, text=text, claim_ids=[claim.claim_id] if kind == "verified_fact" else [])
-            for n, (section, kind, text) in enumerate(texts, 1)]
+        rows.extend(("phenomenon", "verified_fact", claim_text(claim), [claim.claim_id])
+                    for claim in supporting_claims)
+        framing = [
+            ("phenomenon", "explanation", "本条围绕已选角度提出的问题展开，表达范围也由这一问题限定。"),
+            ("phenomenon", "explanation", "事实部分只使用随请求提供的已核验内容，不从其他内容补充数字。"),
+            ("mechanism", "explanation", "每个事实句都对应随请求传入的 claim 编号。"),
+            ("mechanism", "explanation", "引用事实时保留 claim 已记录的来源归因和适用范围。"),
+            ("mechanism", "explanation", "没有证据支持的数字不会补入脚本。"),
+            ("mechanism", "interpretation", "材料没有直接说明的原因，不改写为因果结论。"),
+            ("mechanism", "interpretation", "同时出现的记录可以并列展示，但不据此推断彼此原因。"),
+            ("mechanism", "explanation", "未列入所选角度的事实，不作为本条事实句。"),
+            ("mechanism", "explanation", "观众可以根据对应 claim 编号回查证据与来源。"),
+            ("mechanism", "interpretation", "表达内容不超出事实及来源直接支持的范围。"),
+        ]
+        needed = max(0, 12 - len(rows) - 1)
+        rows.extend((section, kind, text, []) for section, kind, text in framing[:needed])
+        rows.append(("core_judgment", "interpretation",
+                     "结论：本条表达范围不超过已核验事实所能支持的内容。", []))
+        sentences = [ScriptSentence(sentence_id=f"sentence_{index:03d}", section=section,
+                                    sentence_type=kind, text=text, claim_ids=claim_ids)
+                     for index, (section, kind, text, claim_ids) in enumerate(rows, start=1)]
         return ScriptDraft(angle_id=request.selected_angle.angle_id, title=request.selected_angle.title, sentences=sentences)
 
     def repair_script(self, request: ScriptRepairInput) -> ScriptPatchResult:

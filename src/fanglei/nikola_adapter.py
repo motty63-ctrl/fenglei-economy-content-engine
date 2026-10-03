@@ -4,9 +4,14 @@ from __future__ import annotations
 import json
 import math
 from html import escape
+import hashlib
+import re
+import xml.etree.ElementTree as ET
+from pathlib import PurePosixPath
 
 from fanglei.artifacts import sha256_bytes, sha256_text
 from fanglei.v05_models import TimelineDocument
+from fanglei.preview_composition import review_composition_html
 
 
 SUPPORTED_ANIMATION_DIRECTIVES = {
@@ -230,8 +235,96 @@ def _full_composition_html(project_scenes: list[dict], duration_ms: int, fps: in
     )
 
 
-def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
-                         narration_audio: bytes) -> tuple[dict[str, str | bytes], dict]:
+def _review_preview_html(timeline: TimelineDocument, visual_asset_files: dict[str, bytes]) -> str:
+    composition = timeline.composition
+    if composition is None:
+        raise ValueError("REVIEW_PREVIEW_REQUIRES_COMPOSED_TIMELINE")
+    expected_paths = {row.asset_path for row in composition.scene_visuals}
+    if set(visual_asset_files) != expected_paths:
+        raise ValueError("REVIEW_PREVIEW_ASSET_SET_MISMATCH")
+
+    scene_markup: list[str] = []
+    scene_schedule: list[dict[str, object]] = []
+    for scene in composition.scene_visuals:
+        payload = visual_asset_files.get(scene.asset_path)
+        if payload is None or hashlib.sha256(payload).hexdigest() != scene.asset_sha256:
+            raise ValueError("REVIEW_PREVIEW_ASSET_HASH_MISMATCH")
+        try:
+            root = ET.fromstring(payload)
+            svg_markup = payload.decode("utf-8")
+        except (ET.ParseError, UnicodeDecodeError) as error:
+            raise ValueError("REVIEW_PREVIEW_SVG_INVALID") from error
+        if root.tag.rsplit("}", 1)[-1].lower() != "svg":
+            raise ValueError("REVIEW_PREVIEW_SVG_INVALID")
+        for node in root.iter():
+            local_name = node.tag.rsplit("}", 1)[-1].lower()
+            if local_name in {
+                "script", "foreignobject", "iframe", "object", "embed",
+                "animate", "animatemotion", "animatetransform", "set",
+            }:
+                raise ValueError("REVIEW_PREVIEW_ACTIVE_SVG_CONTENT_REJECTED")
+            if local_name == "style" and (
+                "@import" in (node.text or "").lower()
+                or re.search(r"url\(\s*['\"]?(?!#)[^)]", node.text or "", flags=re.IGNORECASE)
+            ):
+                raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+            for key, value in node.attrib.items():
+                if key.rsplit("}", 1)[-1].lower().startswith("on"):
+                    raise ValueError("REVIEW_PREVIEW_ACTIVE_SVG_CONTENT_REJECTED")
+                if key.lower() == "{http://www.w3.org/XML/1998/namespace}base":
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+                if key.rsplit("}", 1)[-1].lower() in {"href", "src"} and not value.startswith("#"):
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+                if "@import" in value.lower() or re.search(
+                    r"url\(\s*['\"]?(?!#)[^)]", value, flags=re.IGNORECASE
+                ):
+                    raise ValueError("REVIEW_PREVIEW_EXTERNAL_SVG_REFERENCE_REJECTED")
+        actual_ids = {
+            node.attrib["data-object-id"] for node in root.iter()
+            if "data-object-id" in node.attrib
+        }
+        if actual_ids != set(scene.object_ids):
+            raise ValueError("REVIEW_PREVIEW_OBJECT_MAPPING_MISMATCH")
+        scene_markup.append(
+            f'<section class="visual-scene" id="{escape(scene.scene_id, quote=True)}" '
+            f'data-scene-id="{escape(scene.scene_id, quote=True)}" '
+            f'data-start-ms="{scene.start_ms}" data-end-ms="{scene.end_ms}">{svg_markup}</section>'
+        )
+        scene_schedule.append({
+            "scene_id": scene.scene_id,
+            "start_ms": scene.start_ms,
+            "end_ms": scene.end_ms,
+            "motion": [row.model_dump(mode="json") for row in scene.motion],
+        })
+
+    subtitle_data = [{
+        "cue_id": cue.cue_id, "sentence_id": cue.sentence_id,
+        "text": cue.text, "lines": cue.lines,
+        "start_ms": cue.start_ms, "end_ms": cue.end_ms,
+        "font_size_px": cue.font_size_px,
+    } for cue in composition.subtitle_cues]
+    layout = composition.subtitle_layout.model_dump(mode="json")
+    timing_status = (
+        "本地暂停点细化的句级字幕时间；仍不是词级对齐"
+        if composition.alignment_method == "pause_refined_from_proportional"
+        else "字幕时间来自句级估算对齐"
+    )
+    return review_composition_html(
+        scene_markup,
+        {"scenes": scene_schedule, "subtitles": subtitle_data,
+         "duration_ms": timeline.audio["duration_ms"]},
+        layout,
+        timing_status,
+    )
+
+
+def build_nikola_project(
+    storyboard: dict,
+    timeline: TimelineDocument,
+    narration_audio: bytes,
+    *,
+    visual_asset_files: dict[str, bytes] | None = None,
+) -> tuple[dict[str, str | bytes], dict]:
     gate = storyboard.get("quality_gate") or {}
     if gate.get("passed") is not True:
         raise ValueError("NIKOLA_STORYBOARD_INVALID")
@@ -239,6 +332,10 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
         raise ValueError("NIKOLA_TIMELINE_INVALID")
     if sha256_bytes(narration_audio) != timeline.audio.get("sha256"):
         raise ValueError("NIKOLA_AUDIO_HASH_MISMATCH")
+    if timeline.composition is not None and visual_asset_files is None:
+        raise ValueError("REVIEW_PREVIEW_APPROVED_VISUAL_ASSETS_REQUIRED")
+    if timeline.composition is None and visual_asset_files is not None:
+        raise ValueError("REVIEW_PREVIEW_TIMELINE_COMPOSITION_REQUIRED")
     time_by_scene = {row.scene_id: row for row in timeline.scenes}
     project_scenes: list[dict] = []
     factual_count = 0
@@ -372,4 +469,28 @@ def build_nikola_project(storyboard: dict, timeline: TimelineDocument,
             "JSON.parse(fs.readFileSync('project-manifest.json','utf8'));\n"
         ),
     }
+    if timeline.composition is not None and visual_asset_files is not None:
+        files["review-preview.html"] = _review_preview_html(timeline, visual_asset_files)
+        for asset_path, payload in visual_asset_files.items():
+            safe_path = PurePosixPath(asset_path) if isinstance(asset_path, str) else None
+            if (
+                safe_path is None or safe_path.is_absolute() or "\\" in asset_path
+                or any(part in {"", ".", ".."} for part in safe_path.parts)
+            ):
+                raise ValueError("REVIEW_PREVIEW_ASSET_PATH_INVALID")
+            files[f"assets/visual/{safe_path.as_posix()}"] = payload
+        manifest["renderer"].update({
+            "preview_only": True,
+            "preview_entry": "review-preview.html",
+            "preview_review_status": "pending_human_preview_review",
+            "timeline_composition_sha256": sha256_text(_canonical_json(
+                timeline.composition.model_dump(mode="json")
+            )),
+            "visual_bundle_sha256": timeline.composition.visual_bundle_sha256,
+            "visual_review_sha256": timeline.composition.visual_review_sha256,
+            "subtitle_sha256": timeline.composition.subtitle_sha256,
+            "timing_method": timeline.composition.alignment_method,
+            "timing_quality": timeline.composition.timing_quality,
+            "full_render_requested": False,
+        })
     return files, manifest

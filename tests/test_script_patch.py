@@ -131,3 +131,63 @@ def test_analogy_overuse_can_authorize_removing_analogy_type() -> None:
 
     assert not result.rejected
     assert result.draft.sentences[4].sentence_type == "explanation"
+
+
+def test_attribution_context_can_only_be_cleared_when_that_sentence_has_attribution_issue() -> None:
+    draft = _draft()
+    sentence = draft.sentences[1].model_copy(update={"attribution_context_id": "ctx_authority"})
+    draft = draft.model_copy(update={"sentences": [draft.sentences[0], sentence, *draft.sentences[2:]]})
+
+    denied_scope = build_repair_scope(draft, [RepairIssue(code="REPEATED_SENTENCE", sentence_id="sentence_002")])
+    denied = apply_script_patches(draft, denied_scope, [ScriptPatch(
+        sentence_id="sentence_002", operation="replace", new_text="改写句子。",
+        clear_attribution_context=True,
+    )])
+    assert denied.rejected[0].reason == "ATTRIBUTION_CONTEXT_CLEAR_NOT_AUTHORIZED"
+    assert denied.draft.sentences[1].attribution_context_id == "ctx_authority"
+
+    authorized_scope = build_repair_scope(draft, [RepairIssue(
+        code="ATTRIBUTION_CONTEXT_INVALID", sentence_id="sentence_002",
+        diagnostics={"claimless": False, "reset_reason": "source changed"},
+    )])
+    authorized = apply_script_patches(draft, authorized_scope, [ScriptPatch(
+        sentence_id="sentence_002", operation="replace", new_text="改写句子。",
+        clear_attribution_context=True,
+    )])
+    assert not authorized.rejected
+    assert authorized.draft.sentences[1].attribution_context_id is None
+
+
+def test_closing_claim_bindings_are_only_authorized_for_selected_angle_claims() -> None:
+    from fanglei.providers.content import RepairIssue
+
+    draft = _draft()
+    scope = build_repair_scope(
+        draft,
+        [RepairIssue(code="CORE_JUDGMENT_WEAK", sentence_id=draft.sentences[-1].sentence_id)],
+        allowed_claim_ids=["claim_007", "claim_008"],
+    )
+    assert scope.closing_claim_bind_sentence_ids == [draft.sentences[-1].sentence_id]
+    assert scope.allowed_closing_claim_ids == ["claim_007", "claim_008"]
+
+    valid = apply_script_patches(draft, scope, [ScriptPatch(
+        sentence_id=draft.sentences[-1].sentence_id, operation="replace",
+        new_text="结尾回到两个已核对的维度。", new_claim_ids=["claim_007", "claim_008"],
+    )])
+    assert not valid.rejected
+    assert valid.draft.sentences[-1].claim_ids == ["claim_007", "claim_008"]
+
+    outside = apply_script_patches(draft, scope, [ScriptPatch(
+        sentence_id=draft.sentences[-1].sentence_id, operation="replace",
+        new_text="越权绑定。", new_claim_ids=["claim_007", "claim_outside"],
+    )])
+    assert outside.rejected[0].reason == "INVALID_CLOSING_CLAIM_BINDING"
+
+    unauthorized_scope = build_repair_scope(draft, [RepairIssue(
+        code="REPEATED_SENTENCE", sentence_id=draft.sentences[-1].sentence_id,
+    )], allowed_claim_ids=["claim_007"])
+    unauthorized = apply_script_patches(draft, unauthorized_scope, [ScriptPatch(
+        sentence_id=draft.sentences[-1].sentence_id, operation="replace",
+        new_text="越权绑定。", new_claim_ids=["claim_007"],
+    )])
+    assert unauthorized.rejected[0].reason == "CLAIM_BINDING_NOT_AUTHORIZED"

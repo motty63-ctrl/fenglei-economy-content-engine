@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 
 class ScriptReadyClaim(BaseModel):
     claim_id: str
     claim_text: str
+    verification_status: Literal["verified", "conflicted", "unverified"]
+    allowed_downstream: StrictBool
     source_ids: list[str] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     verification_basis: Literal[
@@ -45,6 +47,9 @@ class AngleCandidate(AngleProposal):
 
 class AngleProposalResult(BaseModel):
     candidates: list[AngleProposal]
+    # Optional planning audit metadata is stored beside candidate rows so it
+    # cannot widen the frozen checkpoint AngleCandidate contract.
+    quality_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AngleDiversityResult(BaseModel):
@@ -64,6 +69,7 @@ class ScriptSentence(BaseModel):
     sentence_type: Literal["verified_fact", "explanation", "interpretation", "analogy"]
     text: str = Field(min_length=1)
     claim_ids: list[str] = Field(default_factory=list)
+    attribution_context_id: str | None = None
 
     @model_validator(mode="after")
     def claims_match_type(self) -> "ScriptSentence":
@@ -78,6 +84,7 @@ class ScriptDraft(BaseModel):
     angle_id: str
     title: str
     target_duration_seconds: int = Field(default=75, ge=60, le=90)
+    target_language: str | None = None
     sentences: list[ScriptSentence]
 
 
@@ -86,6 +93,7 @@ class LintIssue(BaseModel):
     message: str
     sentence_id: str | None = None
     severity: Literal["error", "warning"] = "error"
+    diagnostics: dict[str, Any] | None = None
 
 
 class ScriptLintResult(BaseModel):

@@ -5,6 +5,13 @@ from fanglei.content_models import AngleCandidate, ScriptDraft, ScriptLintResult
 def render_script_json(draft: ScriptDraft, lint: ScriptLintResult) -> dict:
     if not lint.passed: raise ValueError("script quality gate failed")
     payload = draft.model_dump(mode="json")
+    # Keep the historical script artifact shape when the optional V0.2
+    # language/attribution contract is unused.
+    if draft.target_language is None:
+        payload.pop("target_language", None)
+    for row, sentence in zip(payload.get("sentences", []), draft.sentences):
+        if sentence.attribution_context_id is None:
+            row.pop("attribution_context_id", None)
     payload.update({
         "speaking_rate_chars_per_second": lint.speaking_rate_chars_per_second,
         "spoken_character_count": lint.spoken_character_count,

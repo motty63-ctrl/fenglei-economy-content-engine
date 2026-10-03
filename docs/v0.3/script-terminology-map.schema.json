@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "ScriptTerminologyEntryV1": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_target_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Approved Target Terms",
+          "type": "array"
+        },
+        "claim_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "entry_id": {
+          "minLength": 1,
+          "title": "Entry Id",
+          "type": "string"
+        },
+        "proposed_target_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Proposed Target Terms",
+          "type": "array"
+        },
+        "review_status": {
+          "enum": [
+            "pending",
+            "approved"
+          ],
+          "title": "Review Status",
+          "type": "string"
+        },
+        "semantic_role": {
+          "enum": [
+            "subject",
+            "metric",
+            "population",
+            "reporting_scope",
+            "industry_category",
+            "unit",
+            "period",
+            "statistic",
+            "direction",
+            "revision_previous",
+            "revision_revised",
+            "revision_delta",
+            "source_attribution"
+          ],
+          "title": "Semantic Role",
+          "type": "string"
+        },
+        "source_field": {
+          "enum": [
+            "authority_attestation.scope.subject",
+            "authority_attestation.scope.measure",
+            "authority_attestation.scope.population",
+            "authority_attestation.scope.reporting_scope",
+            "authority_attestation.scope.period",
+            "authority_attestation.scope.unit",
+            "authority_attestation.scope.statistic",
+            "authority_attestation.scope.certainty",
+            "authority_attestation.attribution",
+            "evidence.source_section",
+            "evidence.evidence_period_matches",
+            "evidence.evidence_target_concept",
+            "evidence.explicit_values.unit",
+            "evidence.revision_values.previous_value",
+            "evidence.revision_values.revised_value",
+            "evidence.revision_values.revision_amount",
+            "evidence.revision_values.direction"
+          ],
+          "title": "Source Field",
+          "type": "string"
+        },
+        "source_term": {
+          "minLength": 1,
+          "title": "Source Term",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "claim_ids",
+        "source_term",
+        "source_field",
+        "semantic_role",
+        "proposed_target_terms",
+        "approved_target_terms",
+        "review_status"
+      ],
+      "title": "ScriptTerminologyEntryV1",
+      "type": "object"
+    }
+  },
+  "$id": "script-terminology-map.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A review proposal or a human-approved, facts-hash-bound term map.",
+  "properties": {
+    "case_id": {
+      "minLength": 1,
+      "title": "Case Id",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/ScriptTerminologyEntryV1"
+      },
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+    },
+    "facts_sha256": {
+      "title": "Facts Sha256",
+      "type": "string"
+    },
+    "review_status": {
+      "enum": [
+        "pending",
+        "approved"
+      ],
+      "title": "Review Status",
+      "type": "string"
+    },
+    "reviewed_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reviewed At"
+    },
+    "reviewer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reviewer"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "script-terminology-map/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_language": {
+      "minLength": 2,
+      "title": "Source Language",
+      "type": "string"
+    },
+    "target_language": {
+      "minLength": 2,
+      "title": "Target Language",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "run_id",
+    "facts_sha256",
+    "source_language",
+    "target_language",
+    "review_status",
+    "reviewer",
+    "reviewed_at",
+    "entries"
+  ],
+  "title": "Human-reviewed script terminology map 1.0",
+  "type": "object"
+}

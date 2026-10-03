@@ -4,7 +4,7 @@ import pytest
 
 from fanglei.artifact_registry import ArtifactRegistry
 from fanglei.models import RunManifest
-from fanglei.content_pipeline import _repair_issues, run_content_pipeline
+from fanglei.content_pipeline import _repair_issues, run_content_pipeline, run_legacy_content_pipeline
 from fanglei.content_models import AngleCandidate, ScriptReadyClaim
 from fanglei.providers.content import MockContentPlanningProvider, ScriptGenerationInput
 from fanglei.script_patch import ScriptPatch, ScriptPatchResult
@@ -47,7 +47,7 @@ def _prepared_run(tmp_path: Path) -> Path:
 def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
     provider = MockContentPlanningProvider()
-    run_content_pipeline(run.name, tmp_path, provider, angle_id="angle_003", speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, angle_id="angle_003", speaking_rate=4.0)
     angles = json.loads((run / "angles.json").read_text(encoding="utf-8"))
     assert 3 <= len(angles["candidates"]) <= 5
     assert angles["recommended_angle_id"] in {item["angle_id"] for item in angles["candidates"]}
@@ -56,7 +56,7 @@ def test_pipeline_separates_recommendation_selection_and_clean_script(tmp_path: 
     assert script["speaking_rate_chars_per_second"] == 4.0
     assert 60 <= script["estimated_duration_seconds"] <= 90
     assert script["sentences"][1]["claim_ids"] == ["claim_007"]
-    assert script["sentences"][1]["text"] == "美国2024年实际GDP增长2.8%。"
+    assert script["sentences"][1]["text"] == "United States real GDP grew 2.8% in 2024."
     spoken = (run / "script.md").read_text(encoding="utf-8")
     assert "claim_" not in spoken and "sentence_" not in spoken
     assert manifest_status(run, "script.md") == "valid"
@@ -95,6 +95,7 @@ def _authority_script_inputs():
         }
         palette.append(ScriptReadyClaim(
             claim_id=claim_id, claim_text=claim_text, source_ids=["src_002", "src_001"],
+            verification_status="verified", allowed_downstream=True,
             evidence=evidence, verification_basis="authoritative_primary_attestation",
             authority_attestation=attestation,
         ))
@@ -118,6 +119,7 @@ def _authority_script_inputs():
     statement_text = f'Federal Reserve September FOMC statement says: "{excerpt}"'
     palette.append(ScriptReadyClaim(
         claim_id="claim_037", claim_text=statement_text, source_ids=["src_003"],
+        verification_status="verified", allowed_downstream=True,
         evidence=statement_evidence, verification_basis="authoritative_primary_attestation",
         authority_attestation=statement_attestation,
     ))
@@ -166,6 +168,7 @@ def test_mock_script_uses_selected_authority_facts_and_research_statement_contex
     assert draft.angle_id == angle.angle_id
     assert "World Bank" not in "".join(sentence.text for sentence in draft.sentences)
     assert "round" not in "".join(sentence.text for sentence in draft.sentences).lower()
+    assert "实际GDP增速" in "".join(sentence.text for sentence in draft.sentences)
     assert lint.passed, [issue.model_dump() for issue in lint.issues]
 
 
@@ -184,6 +187,59 @@ def test_authority_script_uses_generic_evidence_framing_and_claim_attribution() 
     assert "FOMC" not in spoken
     assert "SEP" not in spoken
     assert "先按各自文件记录的时间和口径逐项比较。" in spoken
+
+
+def test_mock_script_uses_only_synthetic_angle_facts_and_preserves_attribution() -> None:
+    claim_text = "合成统计局表示，零售指数从100升至103。"
+    claim = ScriptReadyClaim(
+        claim_id="claim_retail_001", claim_text=claim_text, source_ids=["src_retail"],
+        verification_status="verified", allowed_downstream=True,
+        evidence=[{
+            "source_id": "src_retail", "original_url": "https://synthetic.example/release",
+            "evidence_text": claim_text, "evidence_eligible": True,
+        }], verification_basis="independent_corroboration",
+    )
+    angle = AngleCandidate(
+        angle_id="angle_retail_001", title="月度零售变化", hook="月度零售指数有什么变化？",
+        core_question="合成案例中零售指数如何变化？", core_insight="比较两个报告期的记录。",
+        supporting_claim_ids=[claim.claim_id], audience_relevance=3, novelty=3, hook_strength=3,
+        visual_potential=3, explainability=4, evidence_strength=4, controversy_risk=0,
+        total_score=75, eligibility="eligible",
+    )
+    unrelated = ScriptReadyClaim(
+        claim_id="claim_unselected", claim_text="GDP calibration text must not appear.",
+        verification_status="unverified", allowed_downstream=False,
+    )
+    request = ScriptGenerationInput(
+        run_id="synthetic-retail-run", selected_angle=angle,
+        research_md="A synthetic research summary about the selected periods.",
+        research_focus={
+            "primary_question": "How did the synthetic retail index change?",
+            "constraints": ["Do not infer a cause."],
+        }, fact_palette=(claim, unrelated),
+    )
+    raw_facts = {"claims": [{
+        "claim_id": claim.claim_id, "claim_text": claim.claim_text, "claim_type": "fact",
+        "verification_status": "verified", "allowed_downstream": True,
+        "verification_basis": "independent_corroboration", "source_ids": claim.source_ids,
+        "evidence": claim.evidence,
+    }]}
+
+    draft = MockContentPlanningProvider().generate_script(request)
+    lint = lint_script(draft, angle, raw_facts, "Synthetic capture contains unrelated supporting text.", speaking_rate=4.0)
+    spoken = "".join(sentence.text for sentence in draft.sentences)
+    factual = [sentence for sentence in draft.sentences if sentence.sentence_type == "verified_fact"]
+
+    assert draft.angle_id == angle.angle_id
+    assert len(factual) == 1
+    assert factual[0].text == claim_text
+    assert factual[0].claim_ids == [claim.claim_id]
+    assert draft.sentences[0].text == angle.hook
+    assert all(value in spoken for value in ("100", "103", "合成统计局"))
+    assert not any(term in spoken.casefold() for term in (
+        "fed", "fomc", "sep", "gdp", "因为", "导致", "增长率", "小数位", "显示精度", "四舍五入",
+    ))
+    assert lint.passed, [issue.model_dump() for issue in lint.issues]
 
 
 class _CapturingScriptProvider(MockContentPlanningProvider):
@@ -208,7 +264,7 @@ def test_content_pipeline_passes_research_focus_and_authority_metadata_to_script
     registry.save_manifest()
 
     provider = _CapturingScriptProvider()
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
 
     assert provider.script_request.research_focus["primary_question"] == focus["primary_question"]
     assert provider.script_request.authority_metadata["selection_status"] == "insufficient_sources"
@@ -275,8 +331,8 @@ def test_angle_generation_uses_legacy_questions_when_focus_is_absent(tmp_path: P
 def test_rate_change_rebuilds_script_and_stales_are_resolved(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
     provider = MockContentPlanningProvider()
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
-    run_content_pipeline(run.name, tmp_path, provider, speaking_rate=3.8)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=4.0)
+    run_legacy_content_pipeline(run.name, tmp_path, provider, speaking_rate=3.8)
     script = json.loads((run / "script.json").read_text(encoding="utf-8"))
     assert script["speaking_rate_chars_per_second"] == 3.8
     assert manifest_status(run, "script.json") == "valid"
@@ -314,13 +370,13 @@ class _RepairingProvider(MockContentPlanningProvider):
 
 def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
     before = json.loads((run / "run.json").read_text(encoding="utf-8"))
     angle_hash = before["artifacts"]["angles.json"]["content_hash"]
     angle_attempts = before["stages"]["angle_generation"]["attempts"]
     provider = _RepairingProvider(pass_on_attempt=2)
 
-    run_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
+    run_legacy_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
 
     after = json.loads((run / "run.json").read_text(encoding="utf-8"))
     script = json.loads((run / "script.json").read_text(encoding="utf-8"))
@@ -332,7 +388,11 @@ def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_pat
     assert audit["initial_issue_codes"] == ["HOOK_INVALID"]
     assert [row["attempt_number"] for row in audit["repairs"]] == [1, 2]
     assert audit["repairs"][0]["issue_codes_after"] == ["HOOK_INVALID"]
-    assert audit["repairs"][1]["issue_codes_after"] == []
+    second_repair = audit["repairs"][1]
+    assert second_repair["issue_codes_after"] == ["DURATION_TARGET_MISSED"]
+    assert not any(issue.get("code") in {"DURATION_OUT_OF_RANGE", "DURATION_TOO_SHORT", "DURATION_TOO_LONG"}
+                   for issue in second_repair["issues_after"])
+    assert 60 <= audit["final_estimated_duration_seconds"] <= 90
     assert audit["final_status"] == "passed"
     assert audit["repairs"][0]["issues_before"][0]["code"] == "HOOK_INVALID"
     first = audit["repairs"][0]
@@ -348,11 +408,11 @@ def test_script_repair_loop_passes_on_second_repair_and_preserves_angles(tmp_pat
 
 def test_script_repair_loop_stops_after_two_and_does_not_publish_failed_draft(tmp_path: Path) -> None:
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider(), stop_after="angle_selection")
     provider = _RepairingProvider(pass_on_attempt=None)
 
     with pytest.raises(ValueError, match="SCRIPT_REPAIR_EXHAUSTED"):
-        run_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
+        run_legacy_content_pipeline(run.name, tmp_path, provider, force_stage="script_generation")
 
     manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
     assert provider.angle_calls == 0

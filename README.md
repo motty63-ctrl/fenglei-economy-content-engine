@@ -1,128 +1,159 @@
 # 风雷经济内容引擎
 
 > **Fenglei Economy Content Engine**
-> Evidence-Grounded AI Economic Content & Video Generation Pipeline
+> Evidence-Grounded AI Economic Content & Video Workflow
 
-一套从官方原始资料、结构化证据、事实核验、研究与选题，到脚本、配音和短视频成品的端到端经济内容生产系统。
+一套经过两个真实经济案例验证的 Evidence-Grounded AI 经济短视频生产工作流。从官方原始资料出发，把事实、证据和适用范围结构化，再经过研究、选题、脚本、配音与视频制作，交付可以追溯和复核的竖屏视频。
 
-**真实 Fed Case 2 Demo：**从 2026 年 6 月与 9 月的 Federal Reserve 官方材料出发，完成事实核验、研究、选题、脚本、配音与视频渲染，交付 **1080×1920 竖屏 MP4**。
+**AI 可以参与研究、表达和创意，但不能自己决定未经验证的事实是否可以进入最终内容。** 系统在下游使用事实前检查资格，在关键制作节点记录人工决定，并用内容 hash 和依赖关系检查批准是否仍然有效。
 
-> **核心原则：**AI 可以参与研究、表达和创意，但不能自己决定未经验证的事实是否可以进入最终内容。
+**V0.2 已验证：**在 Federal Reserve 首个视频 MVP 的基础上，同一套通用工作流完成了 BLS 第二个真实经济案例，没有新增 BLS 专用生产分支。BLS 最终视频已获人工批准，工作流已验收；分支尚未合并，V0.2 尚未公开发布。
 
-这不是让 LLM 直接读网页然后写财经稿。Fed Case 2 展示了如何把来源身份、证据范围、claim 验证和下游资格记录为可追溯的检查。
+▶ [查看 / 下载 Fed 视频（v0.1.0 Release）](https://github.com/motty63-ctrl/fenglei-economy-content-engine/releases/tag/v0.1.0)
+📋 [BLS V0.2 验收记录](cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md) · [最终视频审阅记录](cases/bls-aug-2026-employment/FINAL_VIDEO_REVIEW.md)
 
-## Demo：从官方来源到短视频
+## 两个真实案例验证
 
-项目把内容生产组织成可审查的本地 run：保留来源与 capture provenance，人工审核 authoritative source package，只让通过资格检查的事实进入研究与内容流程。在 Fed Case 2 中，angle 候选由离线 planner 生成，再由用户人工选择；这描述的是本案例的流程，不代表所有 API 或执行路径都强制等待人工选题。
+| 案例 | 官方材料 | 验证目的 | 视频 | 当前状态 |
+|---|---|---|---|---|
+| Case 1：Federal Reserve | 2026 年 6 月与 9 月 SEP、对应 FOMC statements | 验证从证据到视频的初始端到端可行性 | 约 74.633s；8 场景、12 字幕片段 | V0.1.0 已公开发布 |
+| Case 2：BLS | August 2026 Employment Situation 与 July release archive | 验证同一生产工作流可用于第二个经济主题 | 58.710s；9 场景、12 字幕片段 | 最终视频已批准，V0.2 已验收；视频仍在本地 |
 
-Fed Case 2 对比 2026 年 6 月与 9 月的 SEP，并将预测变化与 9 月 FOMC statement 并列呈现。最终视频为 **1080×1920、30 FPS、H.264/AAC、8 个场景、12 个句级字幕片段**。字幕采用 sentence-level proportional timing，不是 WhisperX word-level forced alignment。
+这是两个不同的**项目案例**，不表示单条事实获得了两个独立机构的互证。每个案例的 authoritative source package 都保持真实的 independent source count。
 
-▶ [查看 / 下载 Fed Case 2 最终视频](https://github.com/motty63-ctrl/fenglei-economy-content-engine/releases/tag/v0.1.0)
+## 工作流
 
-视频通过 GitHub Release 提供；来源、事实、画面与验证记录见[完整案例记录](docs/FED_CASE_2_DEMO.md)。
-
-## 架构
+下图展示已验收的 V0.2 生产路径；legacy/default API 的兼容路径不一定要求其中每一个人工门禁。
 
 ```mermaid
-flowchart TD
-    A[官方来源] --> B[Capture 与来源溯源]
-    B --> C[结构化证据]
-    C --> D[Facts 与核验]
-    D --> E[Research Focus]
-    E --> F[Research 综合]
-    F --> G[Angle Planning]
-    G --> H[Fed Case 2：人工选择 Angle]
-    H --> I[Evidence-Grounded Script]
-    I --> J[TTS 配音]
-    J --> K[Timeline 与 Storyboard]
-    K --> L[MP4 Renderer]
-
-    X[Authority、范围与 attribution 检查] -. gate .-> D
-    X -. allowed_downstream .-> F
-    X -. supporting-claim 检查 .-> G
-    X -. script 范围检查 .-> I
+flowchart TB
+    subgraph E[来源与研究]
+        direction LR
+        A[Official Sources] --> B[Capture / Provenance]
+        B --> C[Facts / Verification]
+        C --> D[Research Focus] --> F[Research]
+    end
+    subgraph P[内容策划]
+        direction LR
+        G[Angle Candidates] --> H[Human Selection]
+        H --> I[Script] --> J[Human Script Approval]
+    end
+    subgraph M[声音与视觉制作]
+        direction LR
+        K[TTS] --> L[Human Audio Approval]
+        L --> N[Storyboard] --> O[Human Storyboard Approval]
+        O --> Q[Visual Assets] --> R[Human Visual Approval]
+    end
+    subgraph V[预览与交付]
+        direction LR
+        S[Timeline] --> T[Preview] --> U[Human Preview Approval]
+        U --> W[Final Render] --> X[Final Video QA]
+        X --> Y[Human Final Video Approval]
+    end
+    F --> G
+    J --> K
+    R --> S
+    Z[Claim eligibility / Authority / Attribution / Scope] -.-> C
+    Z -.-> I
+    AA[ArtifactRegistry: hashes / freshness / fail-closed] -.-> E
+    AA -.-> V
 ```
 
-`ArtifactRegistry` 记录产物 owner、hash、依赖和 stale 状态。审批一个官方来源包，不等于自动验证每条 claim，也不会增加 independent source count。
+## 为什么要 Evidence-Grounded
 
-## Fed Case 2：真实案例
+财经内容的风险往往出现在“资料是真的，但表达扩大了事实范围”。项目把来源包审批、单条事实验证和内容审核分开：批准官方材料不等于批准所有未来 claims，更不等于批准因果、动机或市场影响解释。
 
-**研究问题：**从 2026 年 6 月到 9 月，美联储参与者对增长、失业率、通胀和利率路径的预测发生了什么变化？这些变化与 9 月会议公开表达的经济和通胀判断如何对应？
+在 V0.2 内容路径中，只有 `verification_status=verified` 且 `allowed_downstream=true` 的 claim 才能进入 Research、Angle 和 Script 的事实上下文。Facts 2.2 还区分独立互证与 `authoritative_primary_attestation`：后者证明获批官方文件记载了什么，不能把参与者预测变成政策承诺，也不能把相关信息写成因果解释。结构化检查和人工审核共同守住边界，不宣称自动证明任意自然语言命题。
 
-SEP 表示 **FOMC participants 的 projections / assessments**，不是委员会统一承诺。FOMC statement 是委员会的公开会议声明。案例将两类文件并列比较，不把它们之间的关系写成未经证实的因果解释。
+**一次真实的 fail-closed：**处理 SEP 时，表中数字肉眼可见，但最初没有正式绑定“指标行 → Median 列 → 2026 列 → 数值单元格”，五项比较因此未获 verified。建立结构化表格证据和可定位的绑定后，验证才通过。系统不会因为模型看起来知道答案就放行。
 
-| 2026 年中位数指标 | June SEP | September SEP | 已核验变化 |
-|---|---:|---:|---:|
-| 实际 GDP 增长 | 2.2% | 2.3% | +0.1 个百分点 |
-| 失业率 | 4.3% | 4.1% | −0.2 个百分点 |
-| PCE 通胀 | 3.6% | 3.7% | +0.1 个百分点 |
-| 核心 PCE 通胀 | 3.3% | 3.4% | +0.1 个百分点 |
-| 适当联邦基金利率评估 | 3.8% | 4.1% | +0.3 个百分点 |
+## V0.2：从单案例 MVP 到可复用工作流
 
-这些数值不是从 README 或案例说明中硬编码进 pipeline 的答案，而是从 June 与 September 官方 capture 中提取、绑定结构化表格证据并完成核验后得到的结果。9 月声明中的经济活动和通胀表述作为另一类官方文档事实单独处理。
+V0.1 证明了一条 Fed 视频链路可行；V0.2 将其中的主题假设移到输入，补齐通用合同，并在 BLS 实例上完成验收。
 
-## 为什么采用 Evidence-Grounded 设计
+- **统一事实资格：**Research、Angle、Script 共用资格判断；跨语言术语需要人工审核并绑定当前 Facts。
+- **明确人工决策：**推荐与选择分离，内容和媒体审批绑定具体产物及上游 hash。
+- **内容与声音分离：**保留已批准的显示文本，另行生成 TTS spoken text；数值读法不改写事实。
+- **按真实音频制作：**Storyboard 绑定时间和句段覆盖；支持人工视觉恢复、移动端排版与停顿细化的句级计时。
+- **独立交付验证：**渲染使用确定性时钟；Final Candidate 不可变，QA 单独保存，失败和后续 QA attempts 都可追溯，再进入人工终审与工作流验收。
 
-在 Fed Case 2 中，每条已核验事实都能回到具体文档、capture、证据片段和适用范围。人工批准的 authoritative source package 确定本案例可使用哪些官方材料；claim-level verification 再判断证据是否直接支持具体命题。`verification_basis` 区分独立来源互证与官方 primary document attestation；`allowed_downstream` 则由完整资格规则决定。
+## 案例摘要
 
-`research_focus` 将案例问题、子问题和表达边界独立记录。在 Fed Case 2 的 research-focus 路径中，Research synthesis 使用 `allowed_downstream=true` 的事实；这不是对 legacy renderer 或所有执行路径的统一描述。Angle planning 可离线、确定性运行；Fed Case 2 的候选 angle 由用户人工选择。脚本检查明确的 attribution 与 authority-scope 风险，帮助避免把参与者预测改写成委员会承诺，或把文件记载扩展成未经支持的因果判断；它不是对任意语义扩写的完整自动证明。
+### Federal Reserve：第一条真实视频链路
 
-## Fail-Closed 示例
+对比 2026 年 6 月与 9 月的参与者 SEP median projections，并与会议声明并排呈现。五项比较由获批 Federal Reserve captures 提取和核验，数字详情见 [Fed 案例记录](docs/FED_CASE_2_DEMO.md)。SEP 是 **FOMC participants 的 projections / assessments**，不是委员会统一承诺；FOMC statement 则是委员会的公开声明。
 
-第一次处理 SEP 数值时，数字虽然能在表格中看到，但还没有建立“指标行 → Median 列 → 2026 年列 → 数值单元格”的正式证据关系。Factcheck 因此拒绝把五项比较标记为 verified。
+成品：1080×1920、30 FPS、H.264/AAC、约 74.633s，Volcengine 配音。历史文档称其为 “Fed Case 2”；在本项目两案例验证中，它是第一个 Video MVP。旧的 blocked checkpoint 未被修复或升级。
 
-后来加入结构化 table evidence extraction，把指标、表头、统计口径、年份和值绑定到可定位的 capture evidence 后，这些比较才通过验证。系统宁可暂停，也不会因为模型“看起来知道答案”就放行事实进入视频。
+### BLS：第二个真实案例验证通用性
 
-## 视频成品
+以 August 2026 Employment Situation 为主题，保留 Household Survey 与 Establishment Survey 的统计边界，并区分当月变动与历史修订。下游使用 **9 条 eligible claims**，用户从候选角度中选择 `angle_001`，脚本、声音、视觉、预览和最终视频分别经过人工审阅。
 
-- **时长：**约 74.633 秒；旁白约 74.626 秒
-- **画幅与帧率：**1080×1920，30 FPS
-- **编码：**H.264 视频 + AAC 音频
-- **结构：**8 个场景、12 个句级字幕片段
-- **配音：**Volcengine TTS
-- **字幕计时：**sentence-level proportional timing；尚未使用 WhisperX word-level forced alignment
+| 最终产物 | 已验收结果 |
+|---|---|
+| 时长 / 画幅 / 帧率 | 58.710s / 1080×1920 / 30 FPS |
+| 视频 / 音频 | H.264 / AAC |
+| 场景 / 字幕 | 9 scenes / 12 subtitle cues |
+| Final Video QA | Attempt 2：20/20 passed；失败 Attempt 1 保留 |
+| 人工终审 / 工作流验收 | APPROVED / V0.2_ACCEPTED |
 
-最终 MP4 可从上方 GitHub Release 查看或下载。案例细节、验证记录及文件信息见[完整案例记录](docs/FED_CASE_2_DEMO.md)。
+Final media SHA-256：
 
-## 我的职责与贡献
+```text
+5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd
+```
 
-- 定义项目要解决的问题、目标和 Evidence-Grounded 工作流。
-- 设计来源审批、事实验证、人工审核节点和验收边界。
-- 负责 Fed Case 2 的来源选择与审核、选题决策，以及最终视频的事实和成品验收。
-- 使用 ChatGPT / Codex 辅助代码实现、测试、调试和文档整理；不将项目描述为独立手写全部代码。
-- 对产品决策、事实边界和最终交付结果负责。
+BLS MP4 仍是本地 ignored run 产物，**尚无公开下载地址**。可先查看 [V0.2 验收报告](cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md) 与 [Final Video Review](cases/bls-aug-2026-employment/FINAL_VIDEO_REVIEW.md)；公开发布需要另行决定。
+
+## 人工门禁是产品设计的一部分
+
+V0.2 生产路径要求明确的 Angle selection，并在需要时审核跨语言术语，随后分别批准 Script、Audio、Storyboard、Visual、Preview 和 Final Video。每项决定绑定被审阅对象和相关依赖 hash；相关上游变化会使下游审批 stale，不能沿用旧批准继续制作。
+
+来源审批只决定材料包是否可用；技术 QA 通过只打开人工终审；最终视频批准和 V0.2 工作流验收也不自动授权公开发布。离线生成、排序和规则检查可以自动运行，但系统推荐不代表人工选择。这里描述的是显式启用的 V0.2 路径，不改变 legacy API 的既有合同。
 
 ## 工程设计亮点
 
-- **来源溯源：**记录准确的 source identity、URL、capture hash、review metadata 和 artifact freshness。
-- **人工审核来源包：**审批绑定具体 run、case、文档身份和内容 hash。
-- **结构化表格证据：**明确关联 metric、表头、统计口径、年份和数值。
-- **Facts 2.2：**记录 verification status 与 basis，区分独立互证和 authoritative primary attestation。
-- **Fail-closed 下游门禁：**证据、attribution 或 scope 不满足要求时，不自动让 claim 进入内容。
-- **Research focus 分离：**把研究问题和范围约束作为明确输入保存。
-- **离线 Angle Planning：**确定性生成候选内容角度，再通过人工决策选择。
-- **Script authority safety：**保留来源归属与适用范围，阻止不受支持的动机、因果或承诺表达。
-- **确定性视频链路：**生成可检查的 storyboard、timeline、caption 和 renderer project。
+- **可复核的证据链：**source identity、exact URL、capture hash、locator/excerpt、claim 与内容引用保持可追溯。
+- **ArtifactRegistry：**owner、hash、依赖和 freshness 分开记录；上游变更自然使下游 stale。
+- **范围安全：**attribution、统计口径、时期、单位和 revision role 参与检查；无资格或无法证明时拒绝进入内容。
+- **可审计的人工恢复：**脚本与视觉修改走正式 owner，不以直接编辑 JSON 跳过门禁；历史拒绝和技术失败保留。
+- **候选与评估分离：**Final Candidate 固定媒体身份，QA 与人工决定独立记录，不改写候选以伪装通过。
+
+## 我的职责与贡献
+
+- 定义问题、目标和工作流，设计事实与 authority 边界、人工门禁及验收标准。
+- 负责两个真实案例的选择、材料与内容审核、选题、QA 决策和交付验收。
+- 使用 ChatGPT / Codex 辅助代码实现、调试、测试和文档整理，对产品决策、事实边界和最终交付结果负责。
+
+这是 AI 辅助工程项目，不以“独立手写全部代码”作为成果描述。
 
 ## 技术栈
 
-Python 3.11+、Pydantic v2、Typer、pytest、jsonschema、pypdf、FFmpeg/FFprobe、HTML/CSS/JavaScript、HyperFrames 0.8.20，以及本案例使用的 Volcengine TTS。可选 Research/provider integrations 需要单独配置；它们不是本 Demo 的事实来源或离线 angle-planning 依赖。
+Python 3.11+、Pydantic v2、Typer、pytest、jsonschema、pypdf；Node.js、HTML/CSS/JavaScript、SVG、HyperFrames 0.8.20、FFmpeg/FFprobe。真实案例使用 Volcengine TTS；在线 Script provider 可使用 DeepSeek。Provider 输出仍须经过相应规则与人工门禁，不充当事实证据。
+
+## 测试证据
+
+最新已记录的 **safe non-integration regression：1018 passed、3 skipped、0 failures/errors**；最新相关 MP4/QA focused：**57 passed**。
+
+这不包含 integration suite。3 个 skipped tests 需要显式的本地 renderer-level 工具配置，未当作已通过。本次文档包装不改生产代码或 tests，沿用上述验证记录，不重复运行全量回归。详细边界见 [验收报告](cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)。
 
 ## 项目结构
 
 ```text
-src/fanglei/                  Python pipeline、models、providers、registry
-tests/                        unit / regression tests
-docs/                         contracts、runbook、project state、case study
-cases/fed-sep-revisions/      Fed SEP case identity 与状态
-runs/                         本地运行产物（不提交到 Git）
+src/fanglei/                      pipeline、models、providers、registry、media owners
+tests/                            focused / regression tests
+docs/                             contracts、runbook、project state、case studies
+cases/fed-sep-revisions/           冻结的 Fed MVP 与历史证据
+cases/bls-aug-2026-employment/     BLS review / approval / acceptance 审计记录
+tools/ffmpeg/                     项目本地 FFmpeg/FFprobe 依赖与配置
+runs/                            本地运行产物（ignored，不提交）
 ```
 
-对外品牌使用“风雷经济内容引擎 / Fenglei Economy Content Engine”；`src/fanglei/` 和 Python import 等名称是内部兼容标识，保持不变。
+`tools/ffmpeg/package-lock.json` 固定工具依赖；`node_modules/` 不跟踪。对外品牌是“风雷经济内容引擎 / Fenglei Economy Content Engine”；`src/fanglei/`、Python imports 和内部 identifiers 保持兼容命名。
 
 ## Quick Start
 
-需要 Python 3.11 或更高版本。Windows PowerShell：
+需要 Python 3.11+。Windows PowerShell 的开发环境与安全测试入口：
 
 ```powershell
 python -m venv .venv
@@ -130,28 +161,21 @@ python -m venv .venv
 ./.venv/Scripts/python.exe -m pytest tests --ignore=tests/integration -p no:cacheprovider --basetemp .venv/pytest-tmp -q
 ```
 
-macOS/Linux 可将解释器路径替换为 `.venv/bin/python`。网络检索、实时 provider、语音服务和完整媒体生成需要各自配置与批准；以上命令不运行 integration suite，也不承诺一条命令即可重建所有在线阶段。
-
-更多项目入口：
-
-- [运行手册](docs/RUNBOOK.md)
-- [项目状态](docs/PROJECT_STATE.md)
-- [当前交接](docs/CURRENT_HANDOFF.md)
-- [Fed Case 2 案例记录](docs/FED_CASE_2_DEMO.md)
-- [Authoritative Primary Evidence 合约](docs/AUTHORITATIVE_PRIMARY_EVIDENCE_CONTRACT.md)
-
-## 测试
-
-最近记录的 safe non-integration regression 为 **672 passed**。这是 `tests --ignore=tests/integration` 的结果，不代表 integration suite 也包含在该数字中。
+macOS/Linux 使用 `.venv/bin/python`。完整媒体链路还需要 Node.js、浏览器与媒体工具；参见 [本地 FFmpeg 配置](tools/ffmpeg/README.md) 和 [RUNBOOK](docs/RUNBOOK.md)。在线检索、Script provider、TTS 各需私密凭证与阶段授权，请勿把凭证写入仓库。以上不是一条命令复现所有在线阶段的承诺。
 
 ## 当前限制与后续方向
 
-- 当前 Demo 字幕使用句级比例计时，尚未采用 WhisperX 词级强制对齐。
-- 视觉部分满足 MVP 的数据卡片与对比表达，仍有进一步打磨空间。
-- 本案例 angle planning 离线、确定性完成；live LLM planning 不是演示链路的必要组成部分。
-- 视频通过 GitHub Release `v0.1.0` 公开提供；Release asset 的可用性和文件校验信息记录在案例文档中。
-- 网络检索、provider、TTS、字幕对齐和渲染各有配置与批准边界；项目目前没有社交平台自动发布功能。
+- BLS 字幕使用 **sentence-level pause-refined timing**，不是 word-level forced alignment；Fed V0.1 使用句级比例计时。
+- 视觉以静态 SVG 和程序化 motion 为主，尚不是完整动画设计系统。
+- 在线 providers 和媒体工具需配置，部分 renderer-level tests 依赖显式本地设置。
+- 流程需要人工内容与媒体判断，不是一次点击即可完成的全自动生产系统。
+- 尚无社交平台自动发布；词级对齐、视觉升级与交互入口属于后续方向，不是 V0.2 已交付能力。
 
-## Case Study
+## 延伸阅读
 
-查看 [Fed Case 2：从官方 SEP 对比到短视频](docs/FED_CASE_2_DEMO.md)，了解来源审批与发布日期 provenance、Facts 2.2、Research Focus、Research、5 个 eligible angles、人工选择的 `angle_001`、证据约束脚本、旁白以及最终视频验证记录。
+- [项目状态](docs/PROJECT_STATE.md) · [当前交接](docs/CURRENT_HANDOFF.md)
+- [V0.2 通用化计划及历史阶段](docs/v0.2/GENERALIZATION_PLAN.md)
+- [合并与发布准备](docs/v0.2/RELEASE_READINESS.md)
+- [Fed 案例记录](docs/FED_CASE_2_DEMO.md)
+- [BLS 工作流验收](cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)
+- [Authoritative Primary Evidence contract](docs/AUTHORITATIVE_PRIMARY_EVIDENCE_CONTRACT.md)

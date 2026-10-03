@@ -538,6 +538,232 @@ def test_table_authority_comparison_uses_reparsed_median_2026_cells() -> None:
     assert rejected_claim["allowed_downstream"] is False
 
 
+def test_generic_multilevel_table_target_can_verify_exact_attributed_document_report() -> None:
+    from fanglei.evidence_targets import (
+        build_authority_claim_proposals,
+        extract_targeted_evidence,
+        parse_evidence_target_set,
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    original = _documents()
+    table_text = "\n".join([
+        "Regional Economic Indicators",
+        "Table 1. Retail sales index",
+        "Unit: index points",
+        "| Region | 2025 | 2025 | 2026 | 2026 |",
+        "| Measure | Q1 | Q2 | Q1 | Q2 |",
+        "| North region retail sales | 101 | 104 | 107 | 109 |",
+    ])
+    documents = [
+        replace(original[0], text=table_text, document_hash=sha256_text(table_text)),
+        *original[1:],
+    ]
+    artifact, documents, index = _source_artifact(documents, source_policy=_policy(documents))
+    targets = parse_evidence_target_set({
+        "schema_version": "evidence-targets/1.0",
+        "run_id": RUN_ID,
+        "case_id": CASE_ID,
+        "targets": [{
+            "target_id": "north-retail-sales-q2",
+            "concept": "retail sales index for a region and quarter",
+            "aliases": ["North region retail sales"],
+            "periods": ["2026 Q2"],
+            "source_roles": ["june_sep"],
+            "statistic": None,
+            "expected_unit_family": "index",
+            "evidence_kinds": ["table_cell"],
+            "authority_scope": {
+                "subject": "North region retail sales",
+                "measure": "Retail sales index",
+                "period": "2026 Q2",
+                "unit": "index points",
+                "statistic": None,
+                "certainty": "reported",
+            },
+        }],
+    }, run_id=RUN_ID, case_id=CASE_ID)
+    targeted = extract_targeted_evidence(
+        documents, targets, document_roles={"src-1": "june_sep"}
+    )
+    assert len(targeted) == 1
+    gated = gate_evidence(targeted, documents)
+    candidates = build_authority_claim_proposals(
+        gated, targets, institution_display_name="Federal Reserve"
+    )
+    result = _verify_authority(gated, artifact, documents, index, candidates)
+    claim = result["claims"][0]
+    assert claim["verification_status"] == "verified"
+    assert claim["verification_basis"] == "authoritative_primary_attestation"
+    assert claim["authority_attestation"]["scope"]["period"] == "2026 Q2"
+
+
+def test_targeted_narrative_authority_requires_locator_to_reconstruct_exact_sentence() -> None:
+    from fanglei.evidence_targets import (
+        build_authority_claim_proposals,
+        extract_targeted_evidence,
+        parse_evidence_target_set,
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    original = _documents()
+    narrative = (
+        "Economic Indicators\n\n"
+        "Release overview. Retail sales increased by 2.4 percent in August 2026. "
+        "A separate sentence follows."
+    )
+    documents = [
+        replace(original[0], text=narrative, document_hash=sha256_text(narrative)),
+        *original[1:],
+    ]
+    artifact, documents, index = _source_artifact(documents, source_policy=_policy(documents))
+    targets = parse_evidence_target_set({
+        "schema_version": "evidence-targets/1.0",
+        "run_id": RUN_ID,
+        "case_id": CASE_ID,
+        "targets": [{
+            "target_id": "retail-sales-august",
+            "concept": "monthly retail sales change",
+            "aliases": ["Retail sales increased by"],
+            "periods": ["August 2026"],
+            "source_roles": ["june_sep"],
+            "statistic": None,
+            "expected_unit_family": "percent",
+            "evidence_kinds": ["narrative_sentence"],
+            "authority_scope": {
+                "subject": "Retail sales",
+                "measure": "retail sales",
+                "period": "August 2026",
+                "unit": "percent",
+                "statistic": None,
+                "certainty": "increased",
+            },
+        }],
+    }, run_id=RUN_ID, case_id=CASE_ID)
+    targeted = extract_targeted_evidence(
+        documents, targets, document_roles={"src-1": "june_sep"}
+    )
+    assert len(targeted) == 1
+    item = targeted[0]
+    assert item["evidence_text"] == "Retail sales increased by 2.4 percent in August 2026."
+    assert ";columns:" in item["paragraph_locator"]
+    assert item["source_section"] == "Economic Indicators"
+    assert item["source_section_locator"] == "line:1"
+    gated = gate_evidence(targeted, documents)
+    proposals = build_authority_claim_proposals(
+        gated, targets, institution_display_name="Federal Reserve"
+    )
+    result = _verify_authority(gated, artifact, documents, index, proposals)
+    assert result["claims"][0]["verification_status"] == "verified"
+
+    forged = deepcopy(gated)
+    forged[0]["paragraph_locator"] = "line:1"
+    rejected = _verify_authority(forged, artifact, documents, index, proposals)
+    assert rejected["claims"][0]["verification_status"] == "unverified"
+    assert rejected["claims"][0]["verification_basis"] == "none"
+
+    forged_section = deepcopy(gated)
+    forged_section[0]["source_section_locator"] = "line:3"
+    rejected_section = _verify_authority(forged_section, artifact, documents, index, proposals)
+    assert rejected_section["claims"][0]["verification_status"] == "unverified"
+
+
+def test_authority_verification_binds_only_the_targeted_atomic_proposition() -> None:
+    from fanglei.evidence_targets import (
+        build_authority_claim_proposals,
+        extract_targeted_evidence,
+        parse_evidence_target_set,
+    )
+    from fanglei.evidence_policy import gate_evidence
+
+    original = _documents()
+    text = "Metric A rose to 10 units in the reference period, while Metric B remained at 5 units in the reference period."
+    documents = [replace(original[0], text=text, document_hash=sha256_text(text)), *original[1:]]
+    artifact, documents, index = _source_artifact(documents, source_policy=_policy(documents))
+    targets = parse_evidence_target_set({
+        "schema_version": "evidence-targets/1.0",
+        "run_id": RUN_ID,
+        "case_id": CASE_ID,
+        "targets": [{
+            "target_id": target_id,
+            "concept": target_id,
+            "aliases": [alias],
+            "periods": ["the reference period"],
+            "source_roles": ["june_sep"],
+            "statistic": None,
+            "expected_unit_family": "units",
+            "evidence_kinds": ["narrative_sentence"],
+            "authority_scope": {
+                "subject": subject,
+                "measure": "units",
+                "period": "the reference period",
+                "unit": "units",
+                "statistic": None,
+                "certainty": certainty,
+            },
+        } for target_id, alias, subject, certainty in (
+            ("metric-a", "Metric A rose", "Metric A", "rose"),
+            ("metric-b", "Metric B remained", "Metric B", "remained"),
+        )],
+    }, run_id=RUN_ID, case_id=CASE_ID)
+    captured = extract_targeted_evidence(
+        documents, targets, document_roles={"src-1": "june_sep"}
+    )
+    gated = gate_evidence(captured, documents)
+    candidates = build_authority_claim_proposals(
+        gated, targets, institution_display_name="Federal Reserve"
+    )
+
+    facts = _verify_authority(gated, artifact, documents, index, candidates)
+    claims_by_subject = {
+        claim["authority_attestation"]["scope"]["subject"]: claim
+        for claim in facts["claims"]
+        if claim.get("authority_attestation")
+    }
+    assert set(claims_by_subject) == {"Metric A", "Metric B"}
+    assert all(claim["verification_status"] == "verified" for claim in claims_by_subject.values())
+    assert claims_by_subject["Metric A"]["evidence"][0]["evidence_text"] == text
+    assert claims_by_subject["Metric A"]["evidence"][0]["proposition_span"]["text"] == (
+        "Metric A rose to 10 units in the reference period"
+    )
+    assert claims_by_subject["Metric B"]["evidence"][0]["proposition_span"]["text"] == (
+        "Metric B remained at 5 units in the reference period."
+    )
+
+    metric_a_key = next(
+        key for key, value in candidates.items() if "Metric A" in value["claim_text"]
+    )
+    composite = deepcopy(candidates[metric_a_key])
+    composite["claim_text"] = f'Federal Reserve: "{text}"'
+    rejected = _verify_authority(
+        gated, artifact, documents, index, {metric_a_key: composite, **{
+            key: value for key, value in candidates.items() if key != metric_a_key
+        }}
+    )
+    rejected_a = next(
+        claim for claim in rejected["claims"]
+        if any(item.get("evidence_target_id") == "metric-a" for item in claim.get("evidence", []))
+    )
+    assert rejected_a["verification_status"] == "unverified"
+    assert rejected_a["verification_basis"] == "none"
+    assert rejected_a["allowed_downstream"] is False
+
+    mismatched_scope = deepcopy(candidates[metric_a_key])
+    mismatched_scope["authority_attestation"]["scope"]["certainty"] = "fell"
+    rejected_scope = _verify_authority(
+        gated, artifact, documents, index, {metric_a_key: mismatched_scope, **{
+            key: value for key, value in candidates.items() if key != metric_a_key
+        }}
+    )
+    rejected_scope_a = next(
+        claim for claim in rejected_scope["claims"]
+        if any(item.get("evidence_target_id") == "metric-a" for item in claim.get("evidence", []))
+    )
+    assert rejected_scope_a["verification_status"] == "unverified"
+    assert rejected_scope_a["verification_basis"] == "none"
+    assert rejected_scope_a["allowed_downstream"] is False
+
+
 def test_missing_attribution_outside_package_and_scope_expansion_stay_unverified() -> None:
     artifact, documents, index = _source_artifact(source_policy=_policy(_documents()))
     doc = documents[0]

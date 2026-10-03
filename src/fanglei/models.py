@@ -50,6 +50,7 @@ class RunManifest(BaseModel):
     updated_at: str
     status: Literal[
         "created", "analyzed", "scripted", "visual_planned", "voice_review_pending",
+        "voice_review_changes_required",
         "voice_approved", "renderer_ready", "failed"
     ] = "created"
     input: InputInfo | None = None

@@ -1,14 +1,14 @@
 from typer.testing import CliRunner
 
 from fanglei.cli import app
-from fanglei.content_pipeline import run_content_pipeline
+from fanglei.content_pipeline import run_legacy_content_pipeline
 from fanglei.providers.content import MockContentPlanningProvider
 from tests.test_content_pipeline import _prepared_run
 
 
 def _ready(tmp_path):
     run = _prepared_run(tmp_path)
-    run_content_pipeline(run.name, tmp_path, MockContentPlanningProvider())
+    run_legacy_content_pipeline(run.name, tmp_path, MockContentPlanningProvider())
     return run
 
 

@@ -58,7 +58,10 @@ def promote_alignment(
         or audio.sha256 != expected_audio_sha256
     ):
         raise ValueError("REVIEW_BINDING_MISMATCH")
-    validate_voice_approval(voice_review, actual_audio_sha)
+    validate_voice_approval(
+        voice_review, actual_audio_sha,
+        script_sha256=manifest.artifacts["script.json"].content_hash,
+    )
 
     candidate = AlignmentCandidateDocument.model_validate_json(candidate_text)
     narration = NarrationDocument.model_validate(registry.read_json("narration.json"))
@@ -67,7 +70,7 @@ def promote_alignment(
         raise ValueError("ALIGNMENT_REVIEW_COVERAGE_INVALID")
     gate = validate_real_alignment(
         candidate, expected_ids, audio.duration_ms, actual_audio_sha,
-        expected_texts={row.sentence_id: row.narration_text for row in narration.sentences},
+        expected_texts={row.sentence_id: row.spoken_text for row in narration.sentences},
     )
     if set(gate.issues) != {"ALIGNMENT_TEXT_MISMATCH"}:
         raise ValueError("ALIGNMENT_REVIEW_OVERRIDE_NOT_ALLOWED")

@@ -1,9 +1,9 @@
 from fanglei.audio_alignment import align_audio
 from fanglei.narration_normalization import normalize_script
 from fanglei.providers.alignment import FakeAlignmentProvider
-from fanglei.storyboard import build_storyboard
-from fanglei.storyboard_quality import lint_storyboard
-from fanglei.providers.visual import DeterministicVisualPlanningProvider, VisualPlanningRequest
+from fanglei.storyboard import build_legacy_gdp_calibration_storyboard
+from fanglei.storyboard_quality import lint_legacy_gdp_calibration_storyboard
+from fanglei.providers.visual import LegacyGDPCalibrationVisualPlanningProvider, VisualPlanningRequest
 from fanglei.timeline import compile_timeline
 from fanglei.v05_models import AudioMetadata
 from tests.test_visual_planning import _script
@@ -17,13 +17,13 @@ def _inputs(duration_ms=81234):
         provider="fake", voice_id="fake-voice",
     )
     alignment = align_audio(narration, audio, FakeAlignmentProvider())
-    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+    plan = LegacyGDPCalibrationVisualPlanningProvider().plan(VisualPlanningRequest(
         run_id=narration.run_id, script=script, allowed_claim_ids={"claim_007"},
     ))
     facts = {"claims": [{"claim_id": "claim_007", "verification_status": "verified",
                           "allowed_downstream": True}]}
-    board = build_storyboard(plan, script, facts)
-    board.quality_gate = lint_storyboard(board, script, facts)
+    board = build_legacy_gdp_calibration_storyboard(plan, script, facts)
+    board.quality_gate = lint_legacy_gdp_calibration_storyboard(board, script, facts)
     return alignment, board.model_dump(mode="json"), plan.model_dump(mode="json"), audio
 
 

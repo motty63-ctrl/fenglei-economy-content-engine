@@ -138,7 +138,9 @@ def _build_alignment_candidate(run_id: str, run_dir: Path, manifest, registry,
         raise ValueError("AUDIO_METADATA_HASH_MISMATCH")
     if quality.audio_sha256 != actual_sha or not quality.production_eligible:
         raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
-    validate_voice_approval(review, actual_sha)
+    validate_voice_approval(
+        review, actual_sha, script_sha256=manifest.artifacts["script.json"].content_hash,
+    )
     actual_duration_ms = _wav_duration_ms(audio_path)
     if actual_duration_ms != audio.duration_ms or quality.duration_ms != actual_duration_ms:
         raise ValueError("AUDIO_DURATION_MISMATCH")
@@ -155,7 +157,7 @@ def _build_alignment_candidate(run_id: str, run_dir: Path, manifest, registry,
         audio_duration_ms=actual_duration_ms,
         approved_review=review,
     ))
-    reference_text = "".join(row.narration_text for row in narration.sentences)
+    reference_text = "".join(row.spoken_text for row in narration.sentences)
     recognized_text = result.recognized_text or ""
     text_match = compare_alignment_text(reference_text, recognized_text)
     warnings = list(result.warnings)
@@ -186,7 +188,7 @@ def _build_alignment_candidate(run_id: str, run_dir: Path, manifest, registry,
         "audio_alignment", force=force,
     )
     expected_ids = [row.sentence_id for row in narration.sentences]
-    expected_texts = {row.sentence_id: row.narration_text for row in narration.sentences}
+    expected_texts = {row.sentence_id: row.spoken_text for row in narration.sentences}
     gate = validate_real_alignment(
         candidate, expected_ids, actual_duration_ms, actual_sha, expected_texts=expected_texts
     )
@@ -272,7 +274,9 @@ def run_proportional_sentence_timing(run_id: str, runs_dir: Path) -> Path:
             raise ValueError("PRODUCTION_AUDIO_QUALITY_REQUIRED")
         if audio.provider_type != "real":
             raise ValueError("PRODUCTION_AUDIO_REQUIRED")
-        validate_voice_approval(review, actual_sha)
+        validate_voice_approval(
+            review, actual_sha, script_sha256=manifest.artifacts["script.json"].content_hash,
+        )
         actual_duration_ms = _wav_duration_ms(audio_path)
         if actual_duration_ms != audio.duration_ms or quality.duration_ms != actual_duration_ms:
             raise ValueError("AUDIO_DURATION_MISMATCH")
@@ -293,7 +297,7 @@ def run_proportional_sentence_timing(run_id: str, runs_dir: Path) -> Path:
         for index, row in enumerate(result.sentences):
             expected = narration.sentences[index]
             if (
-                row.text != expected.narration_text
+                row.text != expected.spoken_text
                 or row.audio_sha256 != actual_sha
                 or row.provider != provider.name
                 or row.method != provider.method

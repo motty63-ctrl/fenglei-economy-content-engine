@@ -18,7 +18,7 @@ from fanglei.providers.http_fetch import HttpDocumentFetcher
 from fanglei.providers.search import TavilySearchProvider
 from fanglei.providers.mock_research import MockDocumentFetcher, MockSearchProvider
 from fanglei.security import safe_error_message
-from fanglei.content_pipeline import run_content_pipeline
+from fanglei.content_pipeline import record_human_angle_selection, run_content_pipeline
 from fanglei.providers.content import DeepSeekContentPlanningProvider, MockContentPlanningProvider
 from fanglei.providers.visual import DeterministicVisualPlanningProvider
 from fanglei.visual_pipeline import run_visual_pipeline
@@ -138,7 +138,8 @@ def research_command(
 
 def _content_run(ctx: typer.Context, run_id: str, provider_name: str, speaking_rate: float,
                  stop_after: str | None = None, angle_id: str | None = None,
-                 force_stage: str | None = None) -> Path:
+                 force_stage: str | None = None,
+                 legacy_auto_recommended: bool = False) -> Path:
     if provider_name == "mock":
         content_provider = MockContentPlanningProvider()
     elif provider_name == "deepseek":
@@ -158,7 +159,7 @@ def _content_run(ctx: typer.Context, run_id: str, provider_name: str, speaking_r
     try:
         return run_content_pipeline(run_id, ctx.obj["runs_dir"], content_provider,
             stop_after=stop_after, angle_id=angle_id, speaking_rate=speaking_rate,
-            force_stage=force_stage)
+            force_stage=force_stage, legacy_auto_recommended=legacy_auto_recommended)
     except FangleiError as error:
         _fail(error)
 
@@ -170,10 +171,20 @@ def angles_command(ctx: typer.Context, run_id: str, provider: str = "mock") -> N
 
 
 @app.command("select-angle")
-def select_angle_command(ctx: typer.Context, run_id: str, angle_id: str | None = None,
-                         provider: str = "mock") -> None:
-    run = _content_run(ctx, run_id, provider, 4.0, stop_after="angle_selection", angle_id=angle_id)
-    typer.echo(f"Artifact: {run / 'angle.md'}")
+def select_angle_command(
+    ctx: typer.Context,
+    run_id: str,
+    angle_id: Annotated[str, typer.Option("--angle-id", help="Eligible candidate selected by a human.")],
+    reviewer: Annotated[str | None, typer.Option("--reviewer")] = None,
+    rationale: Annotated[str | None, typer.Option("--rationale")] = None,
+) -> None:
+    try:
+        path = record_human_angle_selection(
+            run_id, ctx.obj["runs_dir"], angle_id, reviewer=reviewer, rationale=rationale
+        )
+    except FangleiError as error:
+        _fail(error)
+    typer.echo(f"Artifact: {path}")
 
 
 @app.command("script")
@@ -186,8 +197,12 @@ def script_command(ctx: typer.Context, run_id: str, provider: str = "mock",
 @app.command("plan-content")
 def plan_content_command(ctx: typer.Context, run_id: str, provider: str = "mock",
                          speaking_rate: float = 4.0, angle_id: str | None = None,
-                         force_stage: str | None = None) -> None:
-    run = _content_run(ctx, run_id, provider, speaking_rate, angle_id=angle_id, force_stage=force_stage)
+                         force_stage: str | None = None,
+                         legacy_auto_recommended: Annotated[
+                             bool, typer.Option("--legacy-auto-recommended", help="Use historical automatic recommendation fallback.")
+                         ] = False) -> None:
+    run = _content_run(ctx, run_id, provider, speaking_rate, angle_id=angle_id,
+                       force_stage=force_stage, legacy_auto_recommended=legacy_auto_recommended)
     typer.echo(f"Content pipeline current: {run_id}")
     typer.echo(f"Run directory: {run.resolve()}")
 

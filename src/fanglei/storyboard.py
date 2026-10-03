@@ -12,6 +12,7 @@ from fanglei.visual_models import (
     StoryboardScene,
     VisualBeatPlan,
 )
+from fanglei.visual_semantics import extract_numeric_comparison
 
 
 PLACEMENTS = {
@@ -51,26 +52,41 @@ def _derived_fact_object(object_id: str, content: str, source: StoryboardObject,
                    emphasis="primary" if object_type == "number" else "secondary")
 
 
-def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[str, Any]) -> Storyboard:
+def _validate_allowed_verified_sentences(script: dict[str, Any], facts: dict[str, Any]) -> None:
     allowed = {row["claim_id"] for row in facts.get("claims", [])
                if row.get("verification_status") == "verified" and row.get("allowed_downstream") is True}
-    by_id = {row["sentence_id"]: row for row in script.get("sentences", [])}
     verified = [row for row in script.get("sentences", []) if row.get("sentence_type") == "verified_fact"]
     if not verified:
         raise ValueError("STORYBOARD_REQUIRES_VERIFIED_SENTENCE")
-    bea_sentence = verified[0]
-    wb_sentence = verified[1] if len(verified) > 1 else verified[0]
-    rounding_sentence = verified[2] if len(verified) > 2 else verified[-1]
     for row in verified:
         if not row.get("claim_ids") or not set(row["claim_ids"]).issubset(allowed):
             raise ValueError("STORYBOARD_FACT_NOT_ALLOWED:" + row["sentence_id"])
+
+
+def build_storyboard(plan: VisualBeatPlan, script: dict[str, Any], facts: dict[str, Any]) -> Storyboard:
+    """Build the topic-neutral storyboard used by the normal visual pipeline."""
+    _validate_allowed_verified_sentences(script, facts)
+    return _build_generic_storyboard(plan, script)
+
+
+def build_legacy_gdp_calibration_storyboard(
+    plan: VisualBeatPlan, script: dict[str, Any], facts: dict[str, Any]
+) -> Storyboard:
+    """Render the historical GDP precision calibration fixture explicitly."""
+    _validate_allowed_verified_sentences(script, facts)
     normalized_text = "".join(row["text"] for row in script.get("sentences", []))
     normalized_text = normalized_text.replace("百分之二点七九三二", "2.7932%").replace("百分之二点八", "2.8%")
     is_gdp_precision = all(token in normalized_text for token in ("2.8%", "2.7932%")) and (
         "BEA" in normalized_text and ("世界银行" in normalized_text or "World Bank" in normalized_text)
     )
     if not is_gdp_precision:
-        return _build_generic_storyboard(plan, script)
+        raise ValueError("LEGACY_GDP_CALIBRATION_STORYBOARD_REQUIRES_GDP_FIXTURE")
+
+    by_id = {row["sentence_id"]: row for row in script.get("sentences", [])}
+    verified = [row for row in script.get("sentences", []) if row.get("sentence_type") == "verified_fact"]
+    bea_sentence = verified[0]
+    wb_sentence = verified[1] if len(verified) > 1 else verified[0]
+    rounding_sentence = verified[2] if len(verified) > 2 else verified[-1]
 
     fact_objects = {
         "bea_label": _fact_object("bea_label", "BEA", bea_sentence, "left", 1),
@@ -144,10 +160,41 @@ def _build_generic_storyboard(plan: VisualBeatPlan, script: dict[str, Any]) -> S
         start = elapsed / total
         elapsed += beat.estimated_duration_seconds
         sentence_rows = [by_id[sid] for sid in beat.sentence_ids]
-        fact_rows = [row for row in sentence_rows
-                     if row.get("sentence_type") == "verified_fact"]
         objects: list[StoryboardObject] = []
-        if sentence_rows:
+        comparison_row = (
+            sentence_rows[0]
+            if beat.comparison is not None and len(sentence_rows) == 1
+            and sentence_rows[0].get("sentence_type") == "verified_fact"
+            else None
+        )
+        if comparison_row is not None:
+            extracted = extract_numeric_comparison(comparison_row["text"])
+            declared = beat.comparison.model_dump()
+            if extracted is None or declared != extracted:
+                raise ValueError("STORYBOARD_COMPARISON_DOES_NOT_MATCH_SCRIPT")
+            source = comparison_row
+            prefix = f"comparison__{source['sentence_id']}"
+            objects.extend([
+                _fact_object(f"{prefix}__label", extracted["label"], source,
+                             Placement(x=.08, y=.16, width=.84, height=.12), 1),
+                _fact_object(f"{prefix}__before_value", extracted["before_value"], source,
+                             Placement(x=.08, y=.34, width=.30, height=.20), 2, "number"),
+                _fact_object(f"{prefix}__direction", "→", source,
+                             Placement(x=.43, y=.39, width=.14, height=.12), 3, "arrow"),
+                _fact_object(f"{prefix}__after_value", extracted["after_value"], source,
+                             Placement(x=.62, y=.34, width=.30, height=.20), 4, "number"),
+            ])
+            if extracted["change"] is not None:
+                objects.append(_fact_object(
+                    f"{prefix}__change", extracted["change"], source,
+                    Placement(x=.18, y=.58, width=.64, height=.12), 5, "number",
+                ))
+            objects.append(_fact_object(
+                f"{prefix}__statement", source["text"], source,
+                Placement(x=.08, y=.76, width=.84, height=.17), 6,
+            ))
+            layout = "将脚本中明确标注的比较拆成标签、前后值和原句；数值对象继续绑定原句与 claim"
+        elif sentence_rows:
             gap = .025
             height = min(.26, (.86 - gap * (len(sentence_rows) - 1)) / len(sentence_rows))
             used = len(sentence_rows) * height + (len(sentence_rows) - 1) * gap
@@ -185,10 +232,13 @@ def _build_generic_storyboard(plan: VisualBeatPlan, script: dict[str, Any]) -> S
             transition_out="hold" if beat.order == len(plan.beats) else "semantic_morph",
             renderer_directives=RendererDirectives(
                 primary_route=beat.recommended_renderer,
-                structure=("comparison" if len(fact_rows) > 1 and all(
-                    "六月" in row["text"] and "九月" in row["text"] for row in fact_rows
-                ) else "single_scene"),
-                animation_primitives=["reveal", "hold"], draw_order=ids,
+                structure=("comparison" if beat.comparison is not None
+                           else "single_scene"),
+                animation_primitives=(
+                    ["reveal", "highlight", "hold"]
+                    if beat.comparison is not None
+                    else ["reveal", "hold"]
+                ), draw_order=ids,
                 deterministic_overlay_object_ids=[obj.object_id for obj in objects if obj.deterministic_render],
             ),
         ))

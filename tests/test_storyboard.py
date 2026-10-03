@@ -1,7 +1,11 @@
-from fanglei.providers.visual import DeterministicVisualPlanningProvider, VisualPlanningRequest
-from fanglei.storyboard import build_storyboard
+from fanglei.providers.visual import (
+    DeterministicVisualPlanningProvider,
+    LegacyGDPCalibrationVisualPlanningProvider,
+    VisualPlanningRequest,
+)
+from fanglei.storyboard import build_legacy_gdp_calibration_storyboard, build_storyboard
 from fanglei.storyboard_quality import lint_storyboard
-from tests.test_visual_planning import _script
+from tests.test_visual_planning import _retail_facts, _retail_script, _script
 
 
 def _facts():
@@ -11,10 +15,10 @@ def _facts():
 
 def _board():
     script = _script()
-    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+    plan = LegacyGDPCalibrationVisualPlanningProvider().plan(VisualPlanningRequest(
         run_id="gdp", script=script, allowed_claim_ids={"claim_007"}
     ))
-    return build_storyboard(plan, script, _facts())
+    return build_legacy_gdp_calibration_storyboard(plan, script, _facts())
 
 
 def test_storyboard_separates_layout_from_semantic_beats() -> None:
@@ -129,14 +133,66 @@ def test_storyboard_never_adds_an_exact_fact_absent_from_script() -> None:
         assert forbidden not in payload
 
 
+def test_generic_storyboard_renders_synthetic_retail_comparison_and_passes_quality() -> None:
+    script = _retail_script()
+    facts = _retail_facts()
+    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+        run_id="synthetic-retail", script=script,
+        allowed_claim_ids={"claim_retail_synthetic"},
+    ))
+
+    board = build_storyboard(plan, script, facts)
+    comparison_scene = next(scene for scene in board.scenes
+                            if scene.renderer_directives.structure == "comparison")
+    objects_by_id = {obj.object_id: obj for obj in comparison_scene.objects}
+    gate = lint_storyboard(board, script, facts)
+
+    assert objects_by_id["comparison__retail_002__label"].content == "合成零售指数"
+    assert objects_by_id["comparison__retail_002__before_value"].content == "120"
+    assert objects_by_id["comparison__retail_002__after_value"].content == "135"
+    assert objects_by_id["comparison__retail_002__change"].content == "+12.5%"
+    exact_statement = objects_by_id["comparison__retail_002__statement"]
+    assert exact_statement.content == script["sentences"][1]["text"]
+    assert exact_statement.sentence_ids == ["retail_002"]
+    assert exact_statement.claim_ids == ["claim_retail_synthetic"]
+    assert all(objects_by_id[object_id].sentence_ids == ["retail_002"]
+               and objects_by_id[object_id].claim_ids == ["claim_retail_synthetic"]
+               for object_id in ("comparison__retail_002__label", "comparison__retail_002__before_value",
+                                 "comparison__retail_002__after_value", "comparison__retail_002__change"))
+    assert comparison_scene.renderer_directives.animation_primitives == ["reveal", "highlight", "hold"]
+    assert all(sentence_id in {sid for scene in board.scenes for sid in scene.sentence_ids}
+               for sentence_id in (row["sentence_id"] for row in script["sentences"]))
+    assert gate.passed, gate.issues
+    serialized = board.model_dump_json()
+    for forbidden in ("Federal Reserve", "FOMC", "SEP", "GDP", "2.2%", "4.3%", "3.6%", "3.8%"):
+        assert forbidden.casefold() not in serialized.casefold()
+
+
+def test_unstructured_numeric_sentence_falls_back_to_exact_fact_scene() -> None:
+    script = _retail_script()
+    script["sentences"][1]["text"] = "该指标在4月为120，5月为135，变化12.5%。"
+    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+        run_id="synthetic-retail", script=script,
+        allowed_claim_ids={"claim_retail_synthetic"},
+    ))
+
+    fact_beat = next(beat for beat in plan.beats if "retail_002" in beat.sentence_ids)
+    assert fact_beat.comparison is None
+    assert not {"before_value", "after_value"} & set(fact_beat.key_objects)
+    board = build_storyboard(plan, script, _retail_facts())
+    fact_scene = next(scene for scene in board.scenes if "retail_002" in scene.sentence_ids)
+    assert fact_scene.renderer_directives.structure == "single_scene"
+    assert [obj.content for obj in fact_scene.objects if obj.factual] == [script["sentences"][1]["text"]]
+
+
 def test_scene_structure_follows_semantic_role_not_fixed_beat_number() -> None:
     script = _script()
     script["sentences"][7]["text"] = "看到经济数据不一样先别急。"
-    plan = DeterministicVisualPlanningProvider().plan(VisualPlanningRequest(
+    plan = LegacyGDPCalibrationVisualPlanningProvider().plan(VisualPlanningRequest(
         run_id="gdp", script=script, allowed_claim_ids={"claim_007"}
     ))
     assert len(plan.beats) == 4
-    board = build_storyboard(plan, script, _facts())
+    board = build_legacy_gdp_calibration_storyboard(plan, script, _facts())
     assert board.scenes[-1].narrative_role == "judgment"
     assert board.scenes[-1].renderer_directives.structure == "numeric_animation"
     assert "closing_metaphor" in board.scenes[-1].introduced_objects
@@ -163,7 +219,7 @@ def test_generic_authority_storyboard_shows_each_allowed_fact_with_exact_provena
             "sentence_id": f"sentence_{index + 1:03d}",
             "section": section,
             "sentence_type": "verified_fact",
-            "text": f"美联储FOMC参与者SEP：2026年{metric}中位数预测变化，六月{june}到九月{september}。",
+            "text": f"FOMC participants' SEP 2026 median projection, {metric}: {june} → {september}.",
             "claim_ids": [claim_id],
         })
     sentences.append({
@@ -189,6 +245,10 @@ def test_generic_authority_storyboard_shows_each_allowed_fact_with_exact_provena
 
     assert gate.passed, gate.issues
     assert len(board.scenes) == 8
+    assert board.scenes[0].narrative_role == "hook"
+    assert board.scenes[1].narrative_role == "phenomenon"
+    assert all(scene.renderer_directives.structure == "comparison" for scene in board.scenes[2:7])
+    assert board.scenes[7].narrative_role == "judgment"
     assert [scene.sentence_ids for scene in board.scenes[2:7]] == [
         ["sentence_002"], ["sentence_003"], ["sentence_004"],
         ["sentence_005"], ["sentence_006"],
@@ -199,10 +259,14 @@ def test_generic_authority_storyboard_shows_each_allowed_fact_with_exact_provena
                                if row["sentence_type"] == "verified_fact"}
     assert {obj.sentence_ids[0] for obj in visible_facts} == expected_fact_sentences
     assert {obj.claim_ids[0] for obj in visible_facts} == claim_ids
-    assert {obj.content for obj in visible_facts} == {row["text"] for row in sentences
-                                                      if row["sentence_type"] == "verified_fact"}
+    visible_fact_content = {obj.content for obj in visible_facts}
+    assert {row["text"] for row in sentences if row["sentence_type"] == "verified_fact"} <= visible_fact_content
+    for metric, june, september, _ in comparisons:
+        assert any(metric in content for content in visible_fact_content)
+        assert june in visible_fact_content
+        assert september in visible_fact_content
     visible_text = {obj.content for scene in board.scenes for obj in scene.objects}
-    assert visible_text == {row["text"] for row in sentences}
+    assert {row["text"] for row in sentences} <= visible_text
     closing_text = {obj.content for obj in board.scenes[-1].objects}
     assert {sentences[index]["text"] for index in (7, 8)} <= closing_text
     assert all("四舍五入" not in beat.cognitive_purpose for beat in plan.beats)

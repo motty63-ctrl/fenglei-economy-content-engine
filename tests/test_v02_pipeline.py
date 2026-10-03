@@ -76,6 +76,74 @@ def test_explicit_sources_21_policy_produces_native_facts_22(tmp_path: Path) -> 
     assert all(claim["verification_basis"] in {"independent_corroboration", "none"} for claim in facts["claims"])
 
 
+def test_evidence_targets_are_run_bound_registered_fact_inputs_and_never_refetch(tmp_path: Path) -> None:
+    run = _analyzed_run(tmp_path)
+
+    class CountingFetcher(FakeFetcher):
+        calls = 0
+
+        def fetch(self, source_id: str, url: str, title: str) -> FetchedDocument:
+            self.calls += 1
+            return super().fetch(source_id, url, title)
+
+    fetcher = CountingFetcher()
+    targets = {
+        "schema_version": "evidence-targets/1.0",
+        "run_id": run.name,
+        "case_id": "synthetic-economy-case",
+        "targets": [{
+            "target_id": "retail-change",
+            "concept": "monthly retail sales change",
+            "aliases": ["retail sales"],
+            "periods": ["August 2026"],
+            "source_roles": ["official"],
+            "statistic": "month-over-month change",
+            "expected_unit_family": "percent",
+            "evidence_kinds": ["narrative_sentence", "table_cell", "revision"],
+            "authority_scope": {
+                "subject": "retail sales",
+                "measure": "monthly change",
+                "period": "August 2026",
+                "unit": "percent",
+                "statistic": "month-over-month change",
+                "certainty": "increased",
+            },
+        }],
+    }
+    source_policy = {"name": "independent_sources", "version": "1.0"}
+    run_v02_pipeline(
+        run.name, tmp_path, FakeSearch(), fetcher,
+        source_policy=source_policy, evidence_targets=targets,
+    )
+    assert fetcher.calls == 3
+    first_target_bytes = (run / "evidence_targets.json").read_bytes()
+    first_sources_bytes = (run / "sources.json").read_bytes()
+    manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["evidence_targets.json"]["status"] == "valid"
+    assert "evidence_targets.json" in manifest["artifacts"]["facts.json"]["dependencies"]
+
+    changed = json.loads(first_target_bytes.decode("utf-8"))
+    changed["targets"][0]["concept"] = "updated retrieval concept"
+    run_v02_pipeline(
+        run.name, tmp_path, FakeSearch(), fetcher,
+        force_stage="factcheck", evidence_targets=changed,
+    )
+    assert fetcher.calls == 3
+    assert (run / "sources.json").read_bytes() == first_sources_bytes
+    assert (run / "evidence_targets.json").read_bytes() != first_target_bytes
+    manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["facts.json"]["status"] == "valid"
+    assert manifest["artifacts"]["facts.json"]["dependencies"]["evidence_targets.json"] == manifest["artifacts"]["evidence_targets.json"]["content_hash"]
+
+    wrong_run = json.loads((run / "evidence_targets.json").read_text(encoding="utf-8"))
+    wrong_run["run_id"] = "different-run"
+    with pytest.raises(ValueError, match="run_id"):
+        run_v02_pipeline(
+            run.name, tmp_path, FakeSearch(), fetcher,
+            evidence_targets=wrong_run,
+        )
+
+
 def test_explicit_sources_21_policy_rebuilds_legacy_source_stage_only_when_requested(tmp_path: Path) -> None:
     run = _analyzed_run(tmp_path)
     search = FakeSearch()
@@ -235,33 +303,67 @@ def test_insufficient_run_sources_never_verify_high_risk_claim(tmp_path: Path) -
     assert all(c["verification_status"] == "unverified" for c in facts["claims"])
 
 
-def test_search_query_includes_verification_claim_and_named_authorities(tmp_path: Path) -> None:
-    run = ingest_text(
-        "2024 US Real GDP Growth\nWhat was the rate, and do BEA, World Bank, IMF, and OECD data agree?",
-        tmp_path,
-    )
-    analyze_run(run.name, tmp_path, MockAnalysisProvider())
+def test_search_queries_use_explicit_non_fed_research_inputs_without_topic_defaults() -> None:
+    from fanglei.pipeline import _search_requests
 
-    class CapturingSearch:
-        name = "capture"
-        def __init__(self):
-            self.requests = []
-        def search(self, request):
-            self.requests.append(request)
-            return SearchResponse(request.query, self.name, [])
-
-    provider = CapturingSearch()
-    run_v02_pipeline(run.name, tmp_path, provider, FakeFetcher(), stop_after="search")
-    assert all("2024 US Real GDP Growth" in request.query for request in provider.requests)
-    assert all("annual real GDP growth rate" in request.query for request in provider.requests)
-    assert all("The research question is:" not in request.query for request in provider.requests)
-    bea_request = next(request for request in provider.requests if request.include_domains == ["bea.gov"])
-    world_bank_request = next(request for request in provider.requests if request.include_domains == ["data.worldbank.org"])
-    assert "fourth quarter and year 2024" in bea_request.query
-    assert "GDP growth (annual %)" in world_bank_request.query
-    assert {tuple(request.include_domains) for request in provider.requests} == {
-        ("bea.gov",), ("data.worldbank.org",), ("imf.org",), ("oecd.org",)
+    questions = {
+        "core_topic": "Monthly retail sales",
+        "entities": ["Synthetic National Statistics Office"],
+        "measures": ["retail sales volume"],
+        "periods": ["month 1 to month 2"],
+        "subquestions": ["Which retail categories changed most?"],
+        "claims_requiring_external_verification": [{
+            "claim": "Synthetic retail sales volume rose between month 1 and month 2.",
+            "reason": "Verify the reported change against source data.",
+        }],
+        "research_questions": [{
+            "question": "How did monthly retail sales change?",
+            "purpose": "Compare the two periods using the published measure.",
+            "expected_source_types": ["official monthly statistical release"],
+        }],
     }
+
+    requests = _search_requests(questions)
+    assert requests
+    joined = " ".join(request.query for request in requests).casefold()
+    assert "monthly retail sales" in joined
+    assert "synthetic retail sales volume rose" in joined
+    assert "compare the two periods" in joined
+    assert "synthetic national statistics office" in joined
+    assert "retail sales volume" in joined
+    assert "month 1 to month 2" in joined
+    assert all(not request.include_domains for request in requests)
+    for topic_default in ("gdp", "federal reserve", "fomc", "sep", "june", "september", "inflation"):
+        assert topic_default not in joined
+
+
+def test_search_builder_preserves_case_specific_fed_inputs_without_adding_gdp_template() -> None:
+    from fanglei.pipeline import _search_requests
+
+    questions = {
+        "core_topic": "FOMC participants' SEP projections",
+        "entities": ["FOMC participants"],
+        "measures": ["2026 real GDP median projection"],
+        "periods": ["June 2026", "September 2026"],
+        "claims_requiring_external_verification": [{
+            "claim": "The June-to-September change in participants' 2026 real GDP median projection.",
+            "reason": "Compare the approved documents directly.",
+        }],
+        "research_questions": [{
+            "question": "How did the 2026 median projection change between June and September?",
+            "purpose": "Describe the documented comparison.",
+            "expected_source_types": ["official projection release"],
+        }],
+    }
+
+    requests = _search_requests(questions)
+    joined = " ".join(request.query for request in requests)
+    assert "FOMC participants' SEP projections" in joined
+    assert "2026 real GDP median projection" in joined
+    assert "June 2026" in joined and "September 2026" in joined
+    assert "How did the 2026 median projection change between June and September?" in joined
+    assert "annual real GDP growth rate official data" not in joined
+    assert all(not request.include_domains for request in requests)
 
 
 def test_pipeline_passes_deterministic_research_context_to_fetcher(tmp_path: Path) -> None:
@@ -280,6 +382,24 @@ def test_pipeline_passes_deterministic_research_context_to_fetcher(tmp_path: Pat
 
     fetcher = ContextFetcher()
     run_v02_pipeline(run.name, tmp_path, FakeSearch(), fetcher, stop_after="source_fetch")
-    assert fetcher.context.country == "USA"
+    assert fetcher.context.country is None
     assert fetcher.context.years == ("2024",)
-    assert fetcher.context.indicators == ("real_gdp_growth",)
+    assert fetcher.context.indicators == ()
+
+
+def test_fetch_context_uses_explicit_non_topic_specific_metadata() -> None:
+    from fanglei.pipeline import _fetch_context
+
+    context = _fetch_context({
+        "core_topic": "Synthetic monthly retail sales",
+        "country": "CA",
+        "years": ["2025", "2026"],
+        "indicators": ["retail_sales_volume"],
+        "research_questions": [{
+            "question": "How did monthly retail sales change?",
+            "purpose": "Compare two synthetic periods.",
+        }],
+    })
+    assert context.country == "CA"
+    assert context.years == ("2025", "2026")
+    assert context.indicators == ("retail_sales_volume",)

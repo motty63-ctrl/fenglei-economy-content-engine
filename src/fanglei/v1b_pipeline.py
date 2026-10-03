@@ -12,6 +12,7 @@ from .providers.mastering import AudioMasteringEngine
 from .subtitle_generation import compile_subtitle_track
 from .content_models import ScriptDraft
 from .v05_models import AlignmentDocument, AudioMetadata, VoiceReviewDocument
+from .voice_review import validate_voice_approval
 from .v1b_models import AudioMasteringDocument, SubtitleTrack
 from .visual_project_v1b import build_v1b_renderer_project
 
@@ -51,6 +52,10 @@ def run_audio_mastering(run_id: str, runs_dir: Path, engine: AudioMasteringEngin
         review = VoiceReviewDocument.model_validate(registry.read_json("audio/review.json"))
         if not quality.get("production_eligible") or quality.get("audio_sha256") != metadata.sha256:
             raise ValueError("MASTERING_INPUT_QUALITY_FAILED")
+        validate_voice_approval(
+            review, metadata.sha256,
+            script_sha256=manifest.artifacts["script.json"].content_hash,
+        )
         result = master_audio(run_dir / "audio" / "narration.wav", metadata, review, engine,
                               run_id=run_id)
         try:

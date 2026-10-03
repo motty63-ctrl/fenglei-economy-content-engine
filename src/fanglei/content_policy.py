@@ -1,12 +1,12 @@
 """Fact whitelist for V0.3 content generation."""
 from fanglei.content_models import ScriptReadyClaim
-from fanglei.evidence_policy import is_script_ready
+from fanglei.evidence_policy import is_claim_eligible_for_content
 
 
 def build_fact_palette(facts: dict) -> tuple[ScriptReadyClaim, ...]:
     ready = []
     for claim in facts.get("claims", []):
-        if claim.get("claim_type") != "fact" or not is_script_ready(claim):
+        if claim.get("claim_type") != "fact" or not is_claim_eligible_for_content(claim):
             continue
         source_ids = set(claim.get("source_ids", []))
         evidence = [item for item in claim.get("evidence", [])
@@ -19,6 +19,8 @@ def build_fact_palette(facts: dict) -> tuple[ScriptReadyClaim, ...]:
             continue
         ready.append(ScriptReadyClaim(
             claim_id=claim["claim_id"], claim_text=claim["claim_text"],
+            verification_status=claim["verification_status"],
+            allowed_downstream=claim["allowed_downstream"],
             source_ids=claim.get("source_ids", []), evidence=evidence,
             verification_basis=claim.get("verification_basis", "independent_corroboration"),
             authority_attestation=claim.get("authority_attestation"),

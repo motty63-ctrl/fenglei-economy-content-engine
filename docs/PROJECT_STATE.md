@@ -1,5 +1,87 @@
 # Project State
 
+## 当前状态 — V0.2_ACCEPTED
+
+**Case 2 production COMPLETE · Human Final Video Review APPROVED · Public packaging complete**
+
+V0.2 已在 BLS August 2026 Employment Situation 第二真实案例上完成通用工作流验收。Fed V0.1.0 的初始 Video MVP 保持冻结；BLS 使用同一套泛化后的生产链路，没有新增 BLS/case-ID 专用 production branch。详细依据见 [V0_2_ACCEPTANCE_REVIEW.md](../cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)。下方的历史阶段描述保留当时语义，不代表当前制作进度。
+
+| 当前验收对象 | 状态 / 身份 |
+|---|---|
+| 分支与验收基线 | `v0.2/generalize-video-workflow`；`6a697d9c7d7790daf1da2fd0b02d6460487900bb`，不是后续包装 commit 的 HEAD |
+| BLS Final Media | `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`；58.710s、1080×1920、30 FPS、H.264/AAC、9 scenes、12 cues |
+| Immutable Final Candidate | `52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`；不覆写创建快照中的 pending 字段 |
+| 独立 Final QA Attempt 2 | `ab520249af764b3f8823bee8aea066e22b152309785e06379205ca4acb1746ce`；PASSED、20/20；失败 Attempt 1 保留 |
+| Human Final Video Review | `3605deaa54caa24d5048fe5e8dce0b96c853b52741489661253beeb9b23fa910`；APPROVED |
+| 工作流验收 | `V0_2_ACCEPTANCE.json`：`e5360ced3bbfc1c54f19d731a991152074239830879216b6cd1c7c0a1e8fe4de`；ACCEPTED |
+
+已验收 V0.2 路径：Facts → Research Focus → Research → Angle Candidates → Human Selection → Script → Human Script Approval → TTS → Human Audio Approval → Storyboard → Human Storyboard Approval → Visual Assets → Human Visual Approval → Timeline → Preview → Human Preview Approval → Final Render → Final Video QA → Human Final Video Approval。来源审批和必要的跨语言术语审核另有显式、hash-bound 记录。这是 opt-in V0.2 路径，不重新解释 legacy/default API 的行为。
+
+最新已记录测试：相关 MP4/QA focused **57 passed**；safe non-integration **1018 passed、3 skipped、0 failures/errors**。3 个 skips 要求显式本地 renderer-level 工具配置，未当作通过；不包含 integration suite。本次包装没有生产/test/schema 变更，不重复全量回归。
+
+当前限制：pause-refined sentence timing，不是词级强制对齐；静态 SVG + programmatic motion；在线 providers / 媒体工具需配置；需要人工内容决策；无社交自动发布。Final media 保留获批 renderer 的审阅标识，未借包装阶段改写视频。完整限制保留在验收材料中。
+
+公开包装已更新 [README](../README.md)、当前状态与 [发布准备清单](v0.2/RELEASE_READINESS.md)。本次 docs 路径可正常安全写入，状态 reconciliation 已完成。V0.2 分支尚未合并到 main，尚未创建 tag / Release 或发布 BLS MP4；本次包装 commit 不 push。V0.1.0 Release 与既有媒体保持不变。下一步是人工 merge 决策，不是继续开发或重新生成视频。
+
+## Historical Phase 3C.6A — Final Render contract ready, export not started
+
+以下为当时的阶段记录，后续 Final Render、QA 和人工终审已完成；其中的 pending / not started 不代表当前状态。
+
+**`V0.2_PHASE_3C6A_READY_FOR_FINAL_RENDER`**
+
+已按用户既有决定记录 Preview Candidate 3 的 `approved_for_final_render`，reviewer 为 `motty63-ctrl`，时间 `2026-09-30T10:22:16+08:00`。本阶段没有再次请求审批，也没有启动 HyperFrames / FFmpeg、LLM、TTS 或外部服务。
+
+| 当前正式 artifact | SHA-256 / state |
+|---|---|
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/human_preview_review_candidate_3.json` | `9a746fe7dbfe6ff872dfaf1f11a98eabab3f80f7a0387fb9c18f8e8c2a954c55` · valid/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/final_render_request.json` | `1f5ea05edaadfb96bad0285382ed06fed671f22846f3db52781f012732a40269` · validated/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/render_manifest_final.json` | `ac70d8cd628e54aa14dc77ebdefe8bd82fec055cc7a528523cacff39a72a7703` · valid/current, ready_for_final_render |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/renderer_project_final` | `b073d8cef8d50c4bb1b7f443adfabcf2b3773579912c9b20ddafc5d846572d1d` · valid/current |
+| `runs/2026-09-27-001-bls-august-2026-employment-situation/final.mp4` / `final_video_candidate.json` | missing — not generated |
+
+Approval 绑定当前 Preview 3、Timeline 2、Visual Candidate 3、音频、Script、recovered Storyboard、两条字幕身份、timing refinement、上游审批和 renderer package/manifest 的完整 hash 链。决策记录的 `final_render_approved=true` 只有在 owner 重新验证完整 current 依赖后才可授权 export；stale approval 不能继续授权。旧 `changes_required` / `approved_for_review` 仍是非最终渲染批准。
+
+通用实现 commit：`e9b11c9379d882d52a46e3b1cf31e8afee0cd180`。新 owner APIs：`create_final_render_request()` → `validate_final_render_request()` → `prepare_final_render()`；后续真实 export 才可调用 `record_final_video_candidate()`。未注册的 source preview 不能仅凭文件存在或技术 QA 获得最终渲染许可。
+
+独立 final manifest 为 `preview_only=false`、`full_render_requested=true`。Final package 复制获批 renderer package 的原始 bytes，保留当前 composition、审阅标识、字幕、motion 和时钟行为；没有改写 Preview 3 manifest 或 Timeline 2。配置来自 pinned HyperFrames package 与既有 canvas/timing metadata：HyperFrames `0.8.20`、1080×1920、30 FPS、native H.264/AAC MP4 export profile，继承 renderer default quality，不增加 bitrate 策略。
+
+Final Render 未开始，Final Candidate 未生成。未来 candidate 的 contract 状态为 `pending_human_final_review`，technical QA / Human Final Video Review / workflow acceptance 是分别待完成的 gate；技术产物或最终视频审批都不自动代表 V0.2 acceptance。没有发布、上传、Release/tag、push 或 merge；V0.1.0 保持冻结。
+
+验证：focused **81 passed**；safe non-integration **990 passed, 0 failed, 0 skipped**，包括已安装本地浏览器上的 renderer 回归。新增直接回归保证 dependency map 键顺序不影响批准身份；采用唯一 review/media 直接依赖对识别授权 candidate。独立 review 未发现其余 blocker。新生产代码无 BLS/case ID、claim_063–071、当前数值/hash/timestamp 专用分支。`git diff --check` 通过。
+
+Offline replay 审计：184 个原 run 文件中，183 个内容文件 byte-identical，仅 owner 更新 `run.json`。原 Script、音频、Storyboard、Visual 3、Facts、Research、Timeline 2、Preview 1/2/3 与历史 reviews 均保持不变。Ignored run artifacts 按既有约定保留在本地，没有 force-add 二进制或 run 输出。
+
+**Exact next phase: Phase 3C.6B — Canonical Final Render + Final Media QA。** 使用上述 current approved request/manifest 与不变的 Timeline 2，完成真实 export、decode / actual-frame / subtitle / Preview→Final QA 后，停在人工 Final Video Review；本阶段没有执行这一步。
+
+**FINAL RENDER = NOT STARTED · HUMAN FINAL VIDEO REVIEW = NOT STARTED · V0.2 ACCEPTANCE = PENDING**
+
+## Historical Phase 3C.5C — corrected preview review checkpoint
+
+**`V0.2_PHASE_3C5C_WAITING_FOR_PREVIEW_REVIEW` · `HUMAN PREVIEW REVIEW = PENDING`**
+
+Preview Candidate 1 has the explicit human `CHANGES_REQUIRED / SUBTITLE_OCCLUSION_AND_TIMING_SYNC` decision. Preview Candidate 2 is `TECHNICAL_RENDER_FAILURE / RENDER_TIME_AND_SUBTITLE_LAYOUT`, never registered for human review; it is not a human rejection. Both videos and old renderer packages are preserved.
+
+Generic renderer fix `0e587cc` binds scenes, motion and captions to requested HyperFrames frame time, independently of audio playback. Full subtitle text is measured after browser font resolution; compact panels adapt to actual wrapping and safe free bands without clipping or covering measured critical objects/footers. No BLS/Fed-specific rendering branches or added font files are used.
+
+The formal owner reused Timeline Candidate 2 unchanged (SHA-256 `3e60ff14724751cef59d252e013c76950db37cacc30f99f515aa4e1db9da6642`) and generated renderer/preview Candidate 3. All previously existing run files except owner-updated `run.json` remain byte-identical. Current MP4: `runs/2026-09-27-001-bls-august-2026-employment-situation/review-preview-candidate-3.mp4`; SHA-256 `0421363e620e56429e8b14b3dead33b5fbdbf99f1b0eda1ecece917b9738f4fe`. It is NON-FINAL, 3,889,121 bytes, 1080×1920, 30 FPS, H.264/AAC, 58.700 s video / 58.679 s audio.
+
+Actual QA covered 9 scene interiors, 6 boundary frames, all 12 subtitle cues, and opening/ending. The 27 scene/boundary/cue frames match the compiled DOM; scene_003 is correct and scene_008's three lines are visible. Both DOM probes report zero clipping/footer/critical-object collision. Focused tests: 49 passed; safe non-integration: 958 passed (zero failures/skips); diff check passed. Font fallback and large-HTML lint messages remain documented non-blocking limitations. Timing remains pause-refined sentence timing, not word-level forced alignment.
+
+**Exact next action: human review of Preview Candidate 3 and `cases/bls-aug-2026-employment/PREVIEW_REVIEW.md`.** No preview approval, final render, publication, push, merge, or V0.2 completion is authorized by this phase.
+
+## Historical V0.2 status through Phase 3C.5
+
+- V0.1.0 remains frozen and publicly available. Its Release and Fed Case 2 video are unchanged.
+- V0.2 development continues on `v0.2/generalize-video-workflow`.
+- Phases 1A, 1B, 1C, 2A, 2B, 3A.1, 3A.2, 3B.1, 3B.2, and 3C.1.2–3C.1.5 are complete. Phase 3C.1 / 3C.1.1 remain historical blocked checkpoints; subsequent generic validation work addressed those gaps.
+- For BLS Case 2, the approved Script and hash-bound `approved_for_tts` record remain current and unchanged. Candidate 1 received the formal human decision `changes_required / NUMERIC_PRONUNCIATION`; its WAV, metadata, quality record, and review are preserved under the run's `artifacts/audit/audio-candidate-1/`.
+- Phase 3C.2B added generic deterministic zh-CN spoken-number normalization while preserving Script/display text, then made one Volcengine regeneration request using the same voice and settings. Candidate 2 is registered/current and its WAV, metadata, and technical quality gate pass. Reviewer `motty63-ctrl` approved Candidate 2 for Storyboard; the current registered review is bound to the Script and Candidate 2 audio hashes.
+- **Historical Phase 3C.5 state: `V0.2_PHASE_3C5_WAITING_FOR_PREVIEW_REVIEW`.** The original BLS Storyboard 5.0 (SHA-256 `a649b81656193ffbac7898361d9c6b7227b9bd2411cf1208756c1b1e6b85e9e6`) remains historical with human decision `CHANGES_REQUIRED / VISUAL_DIFFERENTIATION_AND_HIERARCHY`. Its recovered candidate was approved for visual generation and remains bound by `human_storyboard_approval.json` to canonical SHA-256 `9bea77de9cf78eb0398a57bf67d0e728a4ddda3cb2cdaf1ae16e6e1448aacded` and current upstream hashes. Visual Candidate 1 and Candidate 2 retain their formal `CHANGES_REQUIRED` reviews; Candidate 2 review SHA-256 is `cc5fde5310560a213ff237b5e6ee150b243aabf8ca204bce8070e17d55d036c6` and bundle SHA-256 is `2b8034e9dfcaaf1330077e1a3403442cdca7232242dc9518214bde6dbfa35d2c`.
+- Visual Candidate 3 bundle SHA-256 `5786ac2a2fd1627159969e3fba10a92e4d51822ba611d601c4a2c17e45806355` received a hash-bound `approved_for_timeline` decision; its formal review SHA-256 is `a92d5d010c2ae2389ca8cd8c85da3bb5614dfaae684326e2e3390505004c11b3`. Timeline 5.1 SHA-256 is `87730bfc54d84e5c1d2a10cdade67c9bea11dc4559a7915d5df6b19af8526d3a`, with nine unchanged scenes, 12 canonical subtitle cues, and the approved 58,679 ms audio. The local renderer project contains a preview-only `review-preview.html` marked `PREVIEW · NOT FINAL` / `HUMAN REVIEW REQUIRED`; its SHA-256 is `0b77b76ded4713644e3d0dbd665a2c137e16516586535883db7e4a4d554bc31f`. Timing remains estimated proportional sentence timing. Static structural QA passed; the local browser preview could not be opened under the browser URL security policy, so appearance and playback remain for human review. See [PREVIEW_REVIEW.md](../cases/bls-aug-2026-employment/PREVIEW_REVIEW.md). **HUMAN PREVIEW REVIEW = PENDING.** No final MP4, final-render approval, or V0.2 acceptance is recorded. V0.1.0 remains frozen and V0.2 remains incomplete.
+- Plan: [docs/v0.2/GENERALIZATION_PLAN.md](v0.2/GENERALIZATION_PLAN.md).
+
+Phase 1C keeps the generic default free of Fed/SEP/GDP values and source identities. Numeric-comparison grouping is presentation-only: typed labels and values are emitted only from supported deterministic parses of the script sentence, remain bound to that sentence and its claims, and the exact source sentence remains visible. Unsupported formats fall back to an exact-sentence fact scene. Historical GDP calibration remains available only through `LegacyGDPCalibrationVisualPlanningProvider`, `build_legacy_gdp_calibration_storyboard`, and `lint_legacy_gdp_calibration_storyboard`; `run_visual_pipeline()` uses the generic path. Phase 1C did not change the Fed run, renderer, audio, alignment, or V0.1.0 release.
+
 ## Verified implementation baseline
 
 Approved Checkpoint Authoring Workflow V1 was implemented at commit `75436e1994ffe037f15f6eda706f98408fd3179e` on `main`. This is a historical implementation baseline, not the current HEAD or a self-updating requirement for later documentation commits.
@@ -18,7 +100,7 @@ The native pipeline is artifact-first:
 
 Research is divided into search, source fetch, source selection, factcheck, and research synthesis. Content planning creates and selects angles and validates a structured script against verified facts. Visual planning checks sentence coverage and storyboard quality. The artifact registry enforces stage ownership and hashes; changing an upstream artifact marks dependent artifacts stale.
 
-The ordinary artifact dependency graph is `ARTIFACT_GRAPH` in `src/fanglei/artifact_registry.py`. Run status values currently include `created`, `analyzed`, `scripted`, `visual_planned`, `voice_review_pending`, `voice_approved`, `renderer_ready`, and `failed`.
+The ordinary artifact dependency graph is `ARTIFACT_GRAPH` in `src/fanglei/artifact_registry.py`. Run status values currently include `created`, `analyzed`, `scripted`, `visual_planned`, `voice_review_pending`, `voice_review_changes_required`, `voice_approved`, `renderer_ready`, and `failed`.
 
 ## Approved-checkpoint authoring and import
 
@@ -46,7 +128,8 @@ The final MP4 is `runs/2026-09-24-001-fed-sep-case-2-source-inventory/final.mp4`
 
 The original Fed approved checkpoint remains blocked by `ANGLE_FORMAL_FIELDS_MISSING`. The missing 12 formal `AngleCandidate` fields were not recovered from approved source material. Do not repair, backfill, infer, default, copy, or upgrade that checkpoint. GDP artifacts and test fixtures are prohibited recovery sources.
 
-V0.1.0 implementation and video release are public on `main`. Only the current documentation-only closeout commit is local and awaits separate push authorization. Read actual Git state for current HEAD and ahead/behind; hashes in documentation record snapshots and are not self-updating HEAD requirements. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
+V0.1.0 implementation and video release are public on `main`. V0.2 work remains isolated on `v0.2/generalize-video-workflow`, originally created from main baseline `148d2ebdaee1437c038ead4631a5953d42b9a392`. That hash is branch history, not the current V0.2 HEAD. Read Git for current branch, HEAD, remote tracking, and working-tree state before further work. See `docs/CURRENT_HANDOFF.md` for the handoff boundary.
+
 ## Voice, alignment, and renderer boundaries
 
 Production narration is a separate audio-only operation. `generate-voice` supports Azure and Volcengine provider adapters, validates canonical WAV audio and signal quality, writes narration audio/metadata/quality artifacts, and stops at `voice_review_pending`. Human approval is bound to the current audio hash. The CLI's `prepare-renderer` path accepts only fake narration, alignment, and probe providers; its outputs are engineering fixtures, not production speech or measured timings.

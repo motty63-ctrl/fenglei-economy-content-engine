@@ -1,0 +1,43 @@
+{
+  "schema_version": "phase3a-human-review/1.0",
+  "case_id": "bls-aug-2026-employment",
+  "run_id": "2026-09-27-001-bls-august-2026-employment-situation",
+  "decision": "approved_for_angle_planning",
+  "reviewer": "motty63-ctrl",
+  "approved_at": "2026-09-28T01:53:21+08:00",
+  "rationale": "The current Facts 2.2 and deterministic Research were reviewed and approved as inputs to angle planning for this run.",
+  "approval_scope": [
+    "angle_planning"
+  ],
+  "approved_claim_ids": [
+    "claim_063",
+    "claim_064",
+    "claim_065",
+    "claim_066",
+    "claim_067",
+    "claim_068",
+    "claim_069",
+    "claim_070",
+    "claim_071"
+  ],
+  "dependency_hashes": {
+    "facts.json": "f7cdd59bcfa962201ae031eba20ea6c6bc46ed25229805877089a9f7bfc65882",
+    "research.md": "ce8cc78eda8f630386c410c39e170d6f393704534415f4612acaf21da2d99862",
+    "research_focus.json": "fe638d26622e271951365188f9fe0ba0b474ee2fb3bde3c544e0e91f4098b32a",
+    "sources.json": "4163bdf1be4bd77e5a5ffe88a2dc69743c9d19232a9b4902943e9da2ceb14761",
+    "source_documents/index.json": "2901f2883e95b819675b4a69f812f7ed2e437f1bf994dbb566900cecdf8564a7"
+  },
+  "freshness_rule": "This approval is valid only while every current SHA-256 listed in dependency_hashes exactly matches its recorded value. Any mismatch makes this record stale and requires renewed human review.",
+  "known_limitations": [
+    "Only the nine listed claims are approved for angle planning; unverified claims must not enter angle content.",
+    "Industry coverage is partial: two named increases and one decline; it is not a complete industry ranking.",
+    "Authority approval covers document-attested propositions and deterministic comparisons only; it does not approve causal, motive, market-impact, or policy-implication claims.",
+    "Household Survey and Establishment Survey scopes must remain distinct."
+  ],
+  "not_authorized": [
+    "human angle selection",
+    "script generation or repair",
+    "TTS or voice approval",
+    "storyboard, timeline, or rendering"
+  ]
+}

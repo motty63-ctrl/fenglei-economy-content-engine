@@ -8,6 +8,14 @@ from fanglei.visual_models import Storyboard, StoryboardGateIssue, StoryboardGat
 
 
 def lint_storyboard(storyboard: Storyboard, script: dict[str, Any], facts: dict[str, Any]) -> StoryboardGateResult:
+    """Run topic-neutral storyboard quality and provenance checks."""
+    return _lint_storyboard(storyboard, script, facts, include_legacy_gdp_text=False)
+
+
+def _lint_storyboard(
+    storyboard: Storyboard, script: dict[str, Any], facts: dict[str, Any], *,
+    include_legacy_gdp_text: bool,
+) -> StoryboardGateResult:
     issues: list[StoryboardGateIssue] = []
     script_rows = {row["sentence_id"]: row for row in script.get("sentences", [])}
     expected = list(script_rows)
@@ -73,54 +81,19 @@ def lint_storyboard(storyboard: Storyboard, script: dict[str, Any], facts: dict[
                     issues.append(_issue("MICRO_ANIMATION_TARGET_UNKNOWN",
                                          "micro animation targets an object outside the scene",
                                          scene.scene_id, oid))
-        if scene.renderer_directives.structure == "numeric_animation" and any(
-            obj.object_id == "rounding_arrow" for obj in scene.objects
-        ):
-            source_badges = {"bea_label", "world_bank_label"}
-            if not source_badges.issubset(current) or not source_badges.issubset(
-                set(scene.inherited_objects)
-            ):
-                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_MISSING",
-                                     "source badges must persist through the rounding merge",
-                                     scene.scene_id))
-            merge_index = next((i for i, step in enumerate(micro_steps)
-                                if "merge" in step.actions), None)
-            fade_index = next((i for i, step in enumerate(micro_steps)
-                               if "fade_out" in step.actions and
-                               source_badges == set(step.target_object_ids)), None)
-            if merge_index is None or fade_index is None or fade_index <= merge_index:
-                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_SEQUENCE_INVALID",
-                                     "source badges may fade only after the numeric merge",
-                                     scene.scene_id))
-        if scene.renderer_directives.structure == "process_flow":
-            node_ids = ["source_check", "indicator_check", "year_check", "precision_check"]
-            valid_sequence = len(micro_steps) == len(node_ids) + 1
-            if valid_sequence:
-                for index, (step, node_id) in enumerate(zip(micro_steps[:4], node_ids)):
-                    expected_actions = ["appear", "focus", "check"] + (
-                        ["move_focus_next"] if index < len(node_ids) - 1
-                        else []
-                    )
-                    if step.target_object_ids != [node_id] or step.actions != expected_actions:
-                        valid_sequence = False
-                        break
-            if valid_sequence:
-                connect_step = micro_steps[-1]
-                valid_sequence = (
-                    connect_step.target_object_ids == node_ids + ["check_flow"]
-                    and connect_step.actions == ["connect_complete_flow"]
-                )
-            if not valid_sequence:
-                issues.append(_issue("PROCESS_FLOW_SEQUENCE_INVALID",
-                                     "process flow must animate source, indicator, year, then precision",
-                                     scene.scene_id))
         for obj in scene.objects:
             identity = (obj.object_type, obj.content)
             if obj.object_id in known_objects and known_objects[obj.object_id] != identity:
                 issues.append(_issue("OBJECT_IDENTITY_CHANGED", "stable object ID changed meaning",
                                      scene.scene_id, obj.object_id))
             known_objects.setdefault(obj.object_id, identity)
-            looks_factual = obj.factual or _looks_like_exact_fact(obj.content, obj.object_type)
+            looks_factual = (
+                obj.factual
+                or _looks_like_exact_fact(obj.content, obj.object_type)
+                or (include_legacy_gdp_text and _looks_like_legacy_gdp_fact(obj.content))
+                or any(script_rows.get(sentence_id, {}).get("sentence_type") == "verified_fact"
+                       for sentence_id in obj.sentence_ids)
+            )
             if looks_factual:
                 if not obj.factual or not obj.sentence_ids:
                     issues.append(_issue("VISUAL_FACT_PROVENANCE_MISSING",
@@ -161,7 +134,66 @@ def _looks_like_exact_fact(content: str, object_type: str) -> bool:
         return True
     if re.search(r"\d+(?:\.\d+)?%|\b20\d{2}年?\b", content):
         return True
-    return any(token in content for token in ("BEA", "World Bank", "美国实际GDP增长率", "四舍五入到一位小数"))
+    return False
+
+
+def _looks_like_legacy_gdp_fact(content: str) -> bool:
+    return any(token in content for token in (
+        "BEA", "World Bank", "美国实际GDP增长率", "四舍五入到一位小数",
+    ))
+
+
+def lint_legacy_gdp_calibration_storyboard(
+    storyboard: Storyboard, script: dict[str, Any], facts: dict[str, Any]
+) -> StoryboardGateResult:
+    """Apply historical GDP-rounding visual checks only to its named fixture path."""
+    result = _lint_storyboard(storyboard, script, facts, include_legacy_gdp_text=True)
+    issues = list(result.issues)
+    for scene in storyboard.scenes:
+        current = {obj.object_id for obj in scene.objects}
+        micro_steps = scene.renderer_directives.micro_animation_sequence
+        if scene.renderer_directives.structure == "numeric_animation" and any(
+            obj.object_id == "rounding_arrow" for obj in scene.objects
+        ):
+            source_badges = {"bea_label", "world_bank_label"}
+            if not source_badges.issubset(current) or not source_badges.issubset(set(scene.inherited_objects)):
+                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_MISSING",
+                                     "source badges must persist through the rounding merge",
+                                     scene.scene_id))
+            merge_index = next((i for i, step in enumerate(micro_steps)
+                                if "merge" in step.actions), None)
+            fade_index = next((i for i, step in enumerate(micro_steps)
+                               if "fade_out" in step.actions and
+                               source_badges == set(step.target_object_ids)), None)
+            if merge_index is None or fade_index is None or fade_index <= merge_index:
+                issues.append(_issue("ROUNDING_SOURCE_CONTEXT_SEQUENCE_INVALID",
+                                     "source badges may fade only after the numeric merge",
+                                     scene.scene_id))
+        if scene.renderer_directives.structure == "process_flow":
+            node_ids = ["source_check", "indicator_check", "year_check", "precision_check"]
+            valid_sequence = len(micro_steps) == len(node_ids) + 1
+            if valid_sequence:
+                for index, (step, node_id) in enumerate(zip(micro_steps[:4], node_ids)):
+                    expected_actions = ["appear", "focus", "check"] + (
+                        ["move_focus_next"] if index < len(node_ids) - 1 else []
+                    )
+                    if step.target_object_ids != [node_id] or step.actions != expected_actions:
+                        valid_sequence = False
+                        break
+            if valid_sequence:
+                connect_step = micro_steps[-1]
+                valid_sequence = (
+                    connect_step.target_object_ids == node_ids + ["check_flow"]
+                    and connect_step.actions == ["connect_complete_flow"]
+                )
+            if not valid_sequence:
+                issues.append(_issue("PROCESS_FLOW_SEQUENCE_INVALID",
+                                     "process flow must animate source, indicator, year, then precision",
+                                     scene.scene_id))
+    return result.model_copy(update={
+        "passed": not any(issue.severity == "error" for issue in issues),
+        "issues": issues,
+    })
 
 
 def _issue(code: str, message: str, scene_id: str | None = None,

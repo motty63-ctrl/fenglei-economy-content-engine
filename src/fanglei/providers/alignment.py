@@ -53,7 +53,7 @@ class FakeAlignmentProvider:
         self.name = name
 
     def align(self, request: AlignmentRequest) -> AlignmentResult:
-        weights = [max(1, len(row.narration_text.strip())) for row in request.narration.sentences]
+        weights = [max(1, len(row.spoken_text.strip())) for row in request.narration.sentences]
         total_weight = sum(weights)
         elapsed = 0
         consumed_weight = 0
@@ -96,7 +96,7 @@ class ProportionalSentenceAlignmentProvider:
         duration_ms = int(request.audio_duration_ms or 0)
         if not rows or duration_ms < len(rows):
             raise ValueError("PROPORTIONAL_ALIGNMENT_DURATION_TOO_SHORT")
-        weights = [max(1, sum(not char.isspace() for char in row.narration_text))
+        weights = [max(1, sum(not char.isspace() for char in row.spoken_text))
                    for row in rows]
         total_weight = sum(weights)
         elapsed = 0
@@ -112,7 +112,7 @@ class ProportionalSentenceAlignmentProvider:
             sentences.append(AlignedSentence(
                 sentence_id=row.sentence_id, start_ms=elapsed, end_ms=end,
                 confidence=0.0, timing_source="proportional_sentence",
-                text=row.narration_text,
+                text=row.spoken_text,
                 confidence_source="proportional_char_count_estimate_not_measured",
                 provider=self.name, method=self.method,
                 audio_sha256=request.audio_sha256,

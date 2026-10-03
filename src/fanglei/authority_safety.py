@@ -7,7 +7,13 @@ survive angle/script projection.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Iterable
+
+from fanglei.evidence_targets import (
+    atomic_proposition_spans,
+    is_atomic_narrative_proposition,
+    validate_proposition_span,
+)
 
 
 _ATTRIBUTION_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -121,15 +127,189 @@ def _scope_term_present(text: str, term: str) -> bool:
     return True
 
 
+_ATOMIC_LOCATOR_FIELDS = (
+    "paragraph_locator", "source_section_locator", "json_pointer", "page_number", "table_locator",
+)
+
+
+def _has_atomic_proposition_contract(claim: dict[str, Any]) -> bool:
+    evidence = claim.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and ("evidence_target_id" in item or "proposition_span" in item)
+        for item in evidence
+    )
+
+
+def _valid_authority_scope(scope: Any) -> bool:
+    if not isinstance(scope, dict):
+        return False
+    for key in ("subject", "measure", "period", "certainty"):
+        if not isinstance(scope.get(key), str) or not scope[key].strip():
+            return False
+    return all(scope.get(key) is None or isinstance(scope.get(key), str)
+               for key in ("unit", "statistic"))
+
+
+def _atomic_evidence_rows(
+    claim: dict[str, Any], attestation: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Return validated atomic evidence rows, or None when an atom is malformed."""
+    if (claim.get("verification_status") != "verified"
+            or claim.get("verification_basis") != "authoritative_primary_attestation"
+            or claim.get("allowed_downstream") is not True):
+        return None
+
+    raw_attested_ids = attestation.get("source_ids")
+    raw_claim_ids = claim.get("source_ids")
+    if (not isinstance(raw_attested_ids, list) or not raw_attested_ids
+            or not all(isinstance(value, str) and value.strip() for value in raw_attested_ids)
+            or len(set(raw_attested_ids)) != len(raw_attested_ids)
+            or not isinstance(raw_claim_ids, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw_claim_ids)):
+        return None
+    attested_ids = set(raw_attested_ids)
+    if set(raw_claim_ids) != attested_ids or not _valid_authority_scope(attestation.get("scope")):
+        return None
+
+    evidence = claim.get("evidence")
+    if not isinstance(evidence, list) or not all(isinstance(item, dict) for item in evidence):
+        return None
+    eligible = [item for item in evidence
+                if item.get("evidence_eligible") is True
+                and isinstance(item.get("source_id"), str)
+                and item.get("source_id") in attested_ids]
+    if not eligible or {item.get("source_id") for item in eligible} != attested_ids:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for item in eligible:
+        evidence_text = item.get("evidence_text")
+        source_id = item.get("source_id")
+        span = validate_proposition_span(evidence_text, item.get("proposition_span"))
+        locator = tuple((key, item.get(key)) for key in _ATOMIC_LOCATOR_FIELDS
+                        if isinstance(item.get(key), str) and item[key].strip())
+        scope_candidate = item.get("authority_scope_candidate")
+        if (not isinstance(evidence_text, str) or not evidence_text
+                or not isinstance(source_id, str) or not source_id
+                or not isinstance(item.get("document_hash"), str) or not item["document_hash"].strip()
+                or not isinstance(item.get("original_url"), str)
+                or not item["original_url"].startswith("https://")
+                or not locator or span is None
+                or scope_candidate != attestation.get("scope")):
+            return None
+        target_id = item.get("evidence_target_id")
+        if target_id is not None and (not isinstance(target_id, str) or not target_id.strip()):
+            return None
+        if item.get("evidence_kind") not in {"narrative_sentence", "table_cell", "revision"}:
+            return None
+        if (item.get("evidence_kind") in {"narrative_sentence", "revision"}
+                and not is_atomic_narrative_proposition(evidence_text, span)):
+            return None
+        rows.append({
+            "source_id": source_id,
+            "document_hash": item["document_hash"],
+            "evidence_text": evidence_text,
+            "locator": locator,
+            "proposition_span": span,
+        })
+    return rows
+
+
+def _normalized_contains(text: str, excerpt: str) -> bool:
+    normalized_text = " ".join(text.split()).casefold()
+    normalized_excerpt = " ".join(excerpt.split()).casefold()
+    return bool(normalized_excerpt) and normalized_excerpt in normalized_text
+
+
+def _same_proposition(left: str, right: str) -> bool:
+    return " ".join(left.split()).casefold() == " ".join(right.split()).casefold()
+
+
+def _uncovered_evidence_segments(evidence_text: str, spans: list[dict[str, Any]]) -> list[str]:
+    intervals = sorted((int(item["start"]), int(item["end"])) for item in spans)
+    segments: list[str] = []
+    cursor = 0
+    for start, end in intervals:
+        if start > cursor:
+            segments.append(evidence_text[cursor:start])
+        cursor = max(cursor, end)
+    if cursor < len(evidence_text):
+        segments.append(evidence_text[cursor:])
+    return [segment.strip(" \t\r\n,;:") for segment in segments
+            if len(" ".join(segment.split())) >= 16]
+
+
+def _atomic_scope_issues(
+    text: str,
+    claim: dict[str, Any],
+    attestation: dict[str, Any],
+    related_claims: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]] | None, bool]:
+    """Validate atom bindings and reject unapproved neighboring evidence text."""
+    own_rows = _atomic_evidence_rows(claim, attestation)
+    if own_rows is None:
+        return None, True
+
+    authorized_claims = [claim]
+    authorized_claims.extend(item for item in related_claims if isinstance(item, dict) and item is not claim)
+    authorized_propositions: list[str] = []
+    for related in authorized_claims:
+        related_attestation = related.get("authority_attestation")
+        if not isinstance(related_attestation, dict):
+            continue
+        related_rows = _atomic_evidence_rows(related, related_attestation)
+        if related_rows is None:
+            continue
+        for row in related_rows:
+            authorized_propositions.append(row["proposition_span"]["text"])
+
+    for row in own_rows:
+        all_spans = atomic_proposition_spans(row["evidence_text"])
+        own_span = row["proposition_span"]
+        for candidate in all_spans:
+            if candidate["start"] == own_span["start"] and candidate["end"] == own_span["end"]:
+                continue
+            candidate_text = str(candidate["text"])
+            independently_attested = any(
+                _same_proposition(candidate_text, approved) for approved in authorized_propositions
+            )
+            if not independently_attested and _normalized_contains(text, candidate_text):
+                return own_rows, True
+
+        residual_spans = [own_span]
+        for candidate in all_spans:
+            if candidate["start"] == own_span["start"] and candidate["end"] == own_span["end"]:
+                continue
+            if any(_same_proposition(str(candidate["text"]), approved)
+                   for approved in authorized_propositions):
+                residual_spans.append(candidate)
+        for segment in _uncovered_evidence_segments(row["evidence_text"], residual_spans):
+            if _normalized_contains(text, segment):
+                return own_rows, True
+    return own_rows, False
+
+
 def _comparison_evidence_values(claim: dict[str, Any], attestation: dict[str, Any]) -> list[tuple[str, str]]:
-    approved_ids = set(attestation.get("source_ids", []))
+    raw_approved_ids = attestation.get("source_ids")
+    raw_evidence = claim.get("evidence")
+    if (not isinstance(raw_approved_ids, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw_approved_ids)
+            or not isinstance(raw_evidence, list)
+            or not all(isinstance(item, dict) for item in raw_evidence)):
+        return []
+    approved_ids = set(raw_approved_ids)
     values: list[tuple[str, str]] = []
-    for item in claim.get("evidence", []):
+    for item in raw_evidence:
         source_id = item.get("source_id")
         if (source_id not in approved_ids or item.get("evidence_eligible") is not True
                 or not isinstance(item.get("evidence_text"), str)):
             continue
-        matches = _NUMBER_RE.findall(item["evidence_text"])
+        span = validate_proposition_span(item["evidence_text"], item.get("proposition_span"))
+        value_text = span["text"] if span is not None else item["evidence_text"]
+        matches = _NUMBER_RE.findall(value_text)
         if matches:
             values.append((source_id, matches[-1].replace(",", "")))
     return values
@@ -151,31 +331,60 @@ def _authority_expansion(text: str, exact_evidence: list[str], *, comparison: bo
     return bool(_EXPANSION_RE.search(remainder))
 
 
-def authority_text_issues(text: str, claim: dict[str, Any]) -> tuple[str, ...]:
+def authority_text_issues(
+    text: str,
+    claim: dict[str, Any],
+    *,
+    related_claims: Iterable[dict[str, Any]] = (),
+) -> tuple[str, ...]:
     """Return fail-closed eligibility issue codes for one downstream text."""
+    if not isinstance(text, str):
+        return ("AUTHORITY_SCOPE_MISMATCH",)
     attestation = claim.get("authority_attestation")
     if not isinstance(attestation, dict):
         return ("AUTHORITY_SCOPE_MISMATCH",)
 
     issues: set[str] = set()
+    atomic = _has_atomic_proposition_contract(claim)
     attribution = attestation.get("attribution")
     if not _attribution_preserved(text, attribution):
         issues.add("AUTHORITY_ATTRIBUTION_MISSING")
 
     kind = attestation.get("kind")
-    attested_ids = set(attestation.get("source_ids", []))
-    eligible = [item for item in claim.get("evidence", [])
+    raw_attested_ids = attestation.get("source_ids")
+    raw_claim_ids = claim.get("source_ids")
+    raw_evidence = claim.get("evidence")
+    if (not isinstance(raw_attested_ids, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw_attested_ids)
+            or not isinstance(raw_claim_ids, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw_claim_ids)
+            or not isinstance(raw_evidence, list)
+            or not all(isinstance(item, dict) for item in raw_evidence)):
+        return tuple(sorted(issues | {"AUTHORITY_SCOPE_MISMATCH"}))
+    attested_ids = set(raw_attested_ids)
+    eligible = [item for item in raw_evidence
                 if item.get("evidence_eligible") is True
                 and item.get("source_id") in attested_ids
                 and isinstance(item.get("evidence_text"), str)]
-    exact_evidence = [item["evidence_text"] for item in eligible]
-    claim_source_ids = set(claim.get("source_ids", []))
+    atomic_rows: list[dict[str, Any]] | None = None
+    if atomic:
+        atomic_rows, unsafe_neighbor = _atomic_scope_issues(text, claim, attestation, related_claims)
+        if atomic_rows is None:
+            issues.add("AUTHORITY_SCOPE_MISMATCH")
+        if unsafe_neighbor:
+            issues.add("AUTHORITY_SCOPE_MISMATCH")
+    exact_evidence = ([row["proposition_span"]["text"] for row in atomic_rows]
+                      if atomic_rows is not None else [item["evidence_text"] for item in eligible])
+    claim_source_ids = set(raw_claim_ids)
     eligible_source_ids = {item.get("source_id") for item in eligible}
     if not attested_ids or claim_source_ids != attested_ids or eligible_source_ids != attested_ids:
         issues.add("AUTHORITY_SCOPE_MISMATCH")
 
     if kind == "document_report":
-        if not eligible or not any(excerpt and excerpt in text for excerpt in exact_evidence):
+        if not eligible or not any(
+            excerpt and (_normalized_contains(text, excerpt) if atomic else excerpt in text)
+            for excerpt in exact_evidence
+        ):
             issues.add("AUTHORITY_SCOPE_MISMATCH")
     elif kind == "deterministic_document_comparison":
         scope = attestation.get("scope")

@@ -1,6 +1,7 @@
 import pytest
 
 from fanglei.content_models import AngleCandidate, ScriptDraft, ScriptSentence
+from fanglei.evidence_targets import atomic_proposition_spans
 from fanglei.script_lint import lint_script
 from fanglei.content_render import render_script_json, render_script_markdown
 
@@ -83,6 +84,41 @@ def _statement_authority_facts() -> dict:
     }]}
 
 
+def _atomic_report_claim(claim_id: str, proposition_index: int, scope: dict) -> dict:
+    evidence_text = (
+        "Retail sales rose by 2.4 percent in June, and inventory declined by 0.7 percent in June."
+    )
+    proposition_span = atomic_proposition_spans(evidence_text)[proposition_index]
+    return {
+        "claim_id": claim_id,
+        "claim_text": f'National Statistical Office: "{proposition_span["text"]}"',
+        "claim_type": "fact",
+        "verification_status": "verified",
+        "verification_basis": "authoritative_primary_attestation",
+        "allowed_downstream": True,
+        "source_ids": ["src_release"],
+        "authority_attestation": {
+            "kind": "document_report",
+            "source_ids": ["src_release"],
+            "attribution": "National Statistical Office",
+            "scope": scope,
+        },
+        "evidence": [{
+            "evidence_eligible": True,
+            "evidence_text": evidence_text,
+            "proposition_span": proposition_span,
+            "evidence_target_id": claim_id,
+            "evidence_kind": "narrative_sentence",
+            "authority_scope_candidate": scope,
+            "source_id": "src_release",
+            "document_hash": "a" * 64,
+            "paragraph_locator": "line:12-13",
+            "source_section_locator": "line:12",
+            "original_url": "https://example.test/release",
+        }],
+    }
+
+
 def _draft(extra: str = "") -> ScriptDraft:
     sentences = [
         ScriptSentence(sentence_id="sentence_001", section="hook", sentence_type="interpretation", text="同一个增长率，为什么有两个数字？"),
@@ -132,6 +168,27 @@ def test_authority_script_preserves_attribution_projection_statistic_and_scope()
         "AUTHORITY_SCOPE_MISMATCH",
         "AUTHORITY_SCOPE_EXPANSION",
     })
+
+
+def test_script_sentence_can_reference_two_verified_atomic_neighbors() -> None:
+    retail_scope = {
+        "subject": "retail sales", "measure": "sales", "period": "June",
+        "unit": "percent", "statistic": None, "certainty": "rose",
+    }
+    inventory_scope = {
+        "subject": "inventory", "measure": "inventory", "period": "June",
+        "unit": "percent", "statistic": None, "certainty": "declined",
+    }
+    retail = _atomic_report_claim("claim_retail", 0, retail_scope)
+    inventory = _atomic_report_claim("claim_inventory", 1, inventory_scope)
+    facts = {"claims": [retail, inventory]}
+    draft = _draft()
+    draft.sentences[1].text = f'{retail["claim_text"]}; {inventory["claim_text"]}.'
+    draft.sentences[1].claim_ids = ["claim_retail", "claim_inventory"]
+
+    result = lint_script(draft, _angle(), facts, "unrelated source", speaking_rate=4.0)
+
+    assert "AUTHORITY_SCOPE_MISMATCH" not in {issue.code for issue in result.issues}
 
 
 def test_statement_authority_fact_keeps_attribution_and_exact_attested_text() -> None:

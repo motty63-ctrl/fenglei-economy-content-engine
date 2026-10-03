@@ -162,7 +162,7 @@ class LocalWhisperXAlignmentProvider:
     def align(self, request: AlignmentRequest) -> AlignmentResult:
         engine = self._engine or self._load_engine()
         references = [
-            {"sentence_id": row.sentence_id, "text": row.narration_text}
+            {"sentence_id": row.sentence_id, "text": row.spoken_text}
             for row in request.narration.sentences
         ]
         payload = engine.align(
@@ -194,7 +194,7 @@ class LocalWhisperXAlignmentProvider:
             aligned_text = measured.get("aligned_text")
             if not isinstance(aligned_text, str) or not aligned_text:
                 raise WhisperXAlignmentError("ALIGNMENT_TEXT_UNALIGNED")
-            text_match = compare_alignment_text(reference.narration_text, aligned_text)
+            text_match = compare_alignment_text(reference.spoken_text, aligned_text)
             if not text_match.matched:
                 raise WhisperXAlignmentError("ALIGNMENT_TEXT_UNALIGNED")
             try:
@@ -204,7 +204,7 @@ class LocalWhisperXAlignmentProvider:
                     end_ms=measured["end_ms"],
                     confidence=measured["confidence"],
                     timing_source="forced_alignment",
-                    text=reference.narration_text,
+                    text=reference.spoken_text,
                     confidence_source=measured["confidence_source"],
                     provider=self.name,
                     method=self.method,

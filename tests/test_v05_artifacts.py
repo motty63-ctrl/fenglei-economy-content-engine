@@ -58,6 +58,27 @@ def test_v05_artifacts_have_unique_owners_and_dependencies() -> None:
     assert ARTIFACT_GRAPH["render_qa.json"][0] == "render_preflight"
 
 
+def test_playback_preview_graph_adds_candidate_two_without_rewiring_approved_timeline(tmp_path) -> None:
+    (tmp_path / "human_visual_asset_review_candidate_3.json").write_text("{}", encoding="utf-8")
+    manifest = RunManifest(
+        run_id="synthetic-preview-run",
+        created_at="2026-09-14T00:00:00+08:00",
+        updated_at="2026-09-14T00:00:00+08:00",
+    )
+    registry = ArtifactRegistry(tmp_path, manifest, playback_preview_mode=True)
+
+    assert "playback_timing_refinement.json" not in registry.graph["timeline.json"][1]
+    assert "preview_subtitle_track_candidate_2.json" not in registry.graph["subtitle_track.json"][1]
+    assert set(registry.graph["timeline_candidate_2.json"][1]) >= {
+        "timeline.json", "human_preview_review_candidate_1.json",
+        "visual_assets_candidate_3", "human_visual_asset_review_candidate_3.json",
+        "audio/narration.wav", "alignment.json", "playback_timing_refinement.json",
+        "subtitle_track.json", "preview_subtitle_track_candidate_2.json",
+        "human_storyboard_candidate.json", "human_storyboard_approval.json",
+        "script.json", "human_script_approval.json", "audio/review.json",
+    }
+
+
 def test_registry_validates_binary_audio_hash(tmp_path) -> None:
     registry = _registry(tmp_path)
     _mark_text_valid(registry, "narration.json")

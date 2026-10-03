@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from fanglei.artifacts import sha256_bytes
 from fanglei.audio_quality import AudioQualityThresholds, analyze_audio_quality
+from fanglei.narration_normalization import render_tts_payload, validate_narration_semantics
 from fanglei.providers.narration import NarrationProvider, NarrationRequest
 from fanglei.v05_models import (
     AudioMetadata, AudioQualityDocument, NarrationDocument, NarrationSynthesisConfig,
@@ -36,9 +37,13 @@ def generate_audio(document: NarrationDocument, provider: NarrationProvider,
     provider_type = getattr(provider, "provider_type", "fake")
     if production and provider_type != "real":
         raise ValueError("AUDIO_PROVIDER_NOT_REAL")
+    if not validate_narration_semantics(document).passed:
+        raise ValueError("NARRATION_SEMANTIC_CHANGE")
+    if config.language.casefold().replace("_", "-") != document.language.casefold().replace("_", "-"):
+        raise ValueError("NARRATION_LANGUAGE_MISMATCH")
     request = NarrationRequest(
         run_id=document.run_id,
-        narration_text="\n".join(row.narration_text for row in document.sentences),
+        narration_text=render_tts_payload(document),
         sentences=document.sentences,
     )
     result = provider.synthesize(request, config)

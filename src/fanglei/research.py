@@ -270,7 +270,15 @@ def deduplicate_sources(documents: list[FetchedDocument]) -> list[dict[str, Any]
 class RuleBasedEvidenceExtractor:
     _markers = re.compile(r"(?:GDP|国内生产总值|通胀|inflation|CPI|利率|interest rate|就业|employment|汇率|exchange rate|政策|policy)", re.I)
 
-    def extract(self, documents: list[FetchedDocument], questions: list[str]) -> list[dict[str, Any]]:
+    def extract(
+        self,
+        documents: list[FetchedDocument],
+        questions: list[str],
+        *,
+        evidence_targets: Any | None = None,
+        document_roles: dict[str, str] | None = None,
+        target_set_sha256: str | None = None,
+    ) -> list[dict[str, Any]]:
         evidence: list[dict[str, Any]] = []
         question_context = " ".join(questions).lower()
         target_years = set(re.findall(r"(?:19|20)\d{2}", question_context))
@@ -351,6 +359,19 @@ class RuleBasedEvidenceExtractor:
                         else:
                             evidence.append({**base, "claim_key": None, "claim_values": None})
             evidence.extend(_structured_table_evidence(doc))
+        if evidence_targets is not None:
+            if document_roles is None:
+                raise ValueError("document_roles are required when evidence_targets are supplied")
+            from fanglei.evidence_targets import extract_targeted_evidence
+
+            evidence.extend(
+                extract_targeted_evidence(
+                    documents,
+                    evidence_targets,
+                    document_roles=document_roles,
+                    target_set_sha256=target_set_sha256,
+                )
+            )
         return evidence
 
 
@@ -550,14 +571,49 @@ def _authority_evidence_matches(
         return False
     table_context = item.get("table_context")
     if table_context is not None:
-        reparsed = _structured_table_evidence(document)
-        if not any(
-            row["paragraph_locator"] == item.get("paragraph_locator")
-            and row["evidence_text"] == item.get("evidence_text")
-            and row["claim_key"] == item.get("claim_key")
-            and row["claim_values"] == item.get("claim_values")
-            and row["table_context"] == table_context
-            for row in reparsed
+        if table_context.get("table_contract") == "generic-table/1.0":
+            from fanglei.evidence_targets import extract_generic_table_evidence
+
+            reparsed = extract_generic_table_evidence(document)
+            expected_rows = (
+                row for row in reparsed
+                if row["paragraph_locator"] == item.get("paragraph_locator")
+                and row["evidence_text"] == item.get("evidence_text")
+                and row["table_context"] == table_context
+            )
+        else:
+            reparsed = _structured_table_evidence(document)
+            expected_rows = (
+                row for row in reparsed
+                if row["paragraph_locator"] == item.get("paragraph_locator")
+                and row["evidence_text"] == item.get("evidence_text")
+                and row["claim_key"] == item.get("claim_key")
+                and row["claim_values"] == item.get("claim_values")
+                and row["table_context"] == table_context
+            )
+        if not any(expected_rows):
+            return False
+    elif item.get("evidence_target_id") is not None:
+        from fanglei.evidence_targets import (
+            is_atomic_narrative_proposition,
+            resolve_text_locator,
+            validate_proposition_span,
+        )
+
+        if resolve_text_locator(document.text, str(item.get("paragraph_locator", ""))) != item["evidence_text"]:
+            return False
+        proposition = validate_proposition_span(item["evidence_text"], item.get("proposition_span"))
+        if proposition is None:
+            return False
+        if table_context is not None:
+            if proposition["text"] != table_context.get("value"):
+                return False
+        elif not is_atomic_narrative_proposition(item["evidence_text"], item.get("proposition_span")):
+            return False
+        section_locator = item.get("source_section_locator")
+        if section_locator is not None and (
+            not isinstance(item.get("source_section"), str)
+            or resolve_text_locator(document.text, str(section_locator)) != item["source_section"]
         ):
             return False
     has_locator = any(
@@ -569,8 +625,17 @@ def _authority_evidence_matches(
 
 def _authority_scope_matches(scope: Any, item: dict[str, Any], approved: Any) -> bool:
     context = item.get("table_context")
+    if item.get("evidence_target_id") is not None:
+        expected_scope = item.get("authority_scope_candidate")
+        actual_scope = scope.model_dump(mode="json") if hasattr(scope, "model_dump") else None
+        if expected_scope != actual_scope:
+            return False
     if context is None:
-        folded = " ".join(item["evidence_text"].casefold().split())
+        proposition = item.get("proposition_span")
+        text = proposition.get("text") if isinstance(proposition, dict) else item["evidence_text"]
+        if not isinstance(text, str):
+            return False
+        folded = " ".join(text.casefold().split())
         required = [scope.subject, scope.measure, scope.certainty]
         required.extend(value for value in (scope.unit, scope.statistic) if value is not None)
         if not all(" ".join(value.casefold().split()) in folded for value in required):
@@ -587,6 +652,26 @@ def _authority_scope_matches(scope: Any, item: dict[str, Any], approved: Any) ->
             and isinstance(published_at, str)
             and published_at[:10] == approved.release_date
         )
+    if context.get("table_contract") == "generic-table/1.0":
+        row_path = " ".join(str(part) for part in context.get("row_path", []))
+        heading = " ".join(
+            f"{context.get('table_title', '')} {context.get('header_excerpt', '')} "
+            f"{context.get('source_section', '')} {row_path}".casefold().split()
+        )
+        if (
+            scope.subject.casefold().strip() not in row_path.casefold()
+            or scope.period.casefold().strip() != str(context.get("period", "")).casefold().strip()
+            or (scope.unit or "").casefold().strip() != str(context.get("unit") or "").casefold().strip()
+            or (scope.statistic or "").casefold().strip() != str(context.get("statistic") or "").casefold().strip()
+        ):
+            return False
+        for term in (scope.measure, scope.certainty):
+            folded = " ".join(term.casefold().split())
+            if term == scope.certainty and folded in {"reported", "published"}:
+                continue
+            if folded not in heading:
+                return False
+        return True
     if (
         scope.subject.casefold().strip() != context["row_label"].casefold().strip()
         or scope.period.casefold().strip() != context["period"].casefold().strip()
@@ -644,7 +729,9 @@ def _verify_authority_candidate(
         source_id not in documents
         or not _authority_evidence_matches(item, documents[source_id], approved_by_id[source_id])
         or not _authority_scope_matches(attestation.scope, item, approved_by_id[source_id])
-        or _AUTHORITY_SCOPE_EXPANSION.search(item["evidence_text"])
+        or _AUTHORITY_SCOPE_EXPANSION.search(
+            str(item.get("proposition_span", {}).get("text", item["evidence_text"]))
+        )
         for item, source_id in zip(items, item_ids)
     ):
         return None
@@ -652,7 +739,23 @@ def _verify_authority_candidate(
     if attestation.kind == "document_report":
         if len(items) != 1 or len(attestation.source_ids) != 1 or "comparison" in candidate:
             return None
-        exact_proposition = f'{attestation.attribution}: "{items[0]["evidence_text"]}"'
+        item = items[0]
+        proposition_span = item.get("proposition_span")
+        if isinstance(item.get("table_context"), dict) and isinstance(proposition_span, dict):
+            from fanglei.evidence_targets import canonical_table_proposition
+
+            exact_proposition = canonical_table_proposition(
+                attestation.attribution,
+                attestation.scope,
+                item["table_context"],
+            )
+        else:
+            proposition_text = (
+                proposition_span.get("text")
+                if isinstance(proposition_span, dict)
+                else item["evidence_text"]
+            )
+            exact_proposition = f'{attestation.attribution}: "{proposition_text}"'
         if candidate["claim_text"] != exact_proposition:
             return None
         return candidate["claim_text"], attestation.model_dump(mode="json")
@@ -685,7 +788,12 @@ def _verify_authority_candidate(
         return None
     item_by_id = {item["source_id"]: item for item in items}
     if any(
-        not _value_appears(values[source_id], item_by_id[source_id]["evidence_text"])
+        not _value_appears(
+            values[source_id],
+            str(item_by_id[source_id].get("proposition_span", {}).get(
+                "text", item_by_id[source_id]["evidence_text"]
+            )),
+        )
         for source_id in ordered
     ):
         return None
