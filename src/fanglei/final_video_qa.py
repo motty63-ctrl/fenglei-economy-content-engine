@@ -21,7 +21,10 @@ from fanglei.final_render import (
 from fanglei.v05_models import TimelineDocument
 
 
-QA_OWNER_VERSION = "1.1"
+QA_OWNER_VERSION = "1.2"
+IMPLEMENTATION_CONTRACT_VERSION = "final-video-qa-implementation/2.0"
+# Ordered relative text participants; no runtime Git or checkout metadata.
+IMPLEMENTATION_SOURCES = ("final_video_qa.py", "final_video_probe.mjs")
 MINIMUM_FRAME_SIMILARITY = 0.94
 
 
@@ -73,7 +76,7 @@ class FinalVideoQAReportV1(_Contract):
 class FinalVideoQAReportV2(FinalVideoQAReportV1):
     """A new immutable evaluation, linked to the prior attempt when superseding."""
     schema_version: Literal["final-video-qa/1.1"] = "final-video-qa/1.1"
-    qa_owner_version: Literal["1.1"] = QA_OWNER_VERSION
+    qa_owner_version: Literal["1.1"] = "1.1"
     attempt_number: int = Field(ge=1)
     previous_qa: ArtifactBinding | None
     implementation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -85,11 +88,60 @@ class FinalVideoQAReportV2(FinalVideoQAReportV1):
         return self
 
 
+class QAImplementationSourceV2(_Contract):
+    relative_source_path: str
+    canonical_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class QAImplementationIdentityV2(_Contract):
+    implementation_contract_version: Literal["final-video-qa-implementation/2.0"] = IMPLEMENTATION_CONTRACT_VERSION
+    sources: list[QAImplementationSourceV2]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def canonical_identity(self):
+        if tuple(row.relative_source_path for row in self.sources) != IMPLEMENTATION_SOURCES:
+            raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_PARTICIPANTS_INVALID")
+        if self.sha256 != _identity_digest(self.implementation_contract_version, self.sources):
+            raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_DIGEST_INVALID")
+        return self
+
+
+def _identity_digest(version, sources):
+    body = {"implementation_contract_version": version,
+            "sources": [row.model_dump(mode="json") for row in sources]}
+    return sha256_bytes(json.dumps(body, ensure_ascii=False, sort_keys=True,
+                                   separators=(",", ":")).encode("utf-8"))
+
+
+def qa_implementation_identity(source_root: Path | None = None) -> QAImplementationIdentityV2:
+    """Only CRLF/CR -> LF; preserve every other source byte, including final LF."""
+    root = Path(source_root) if source_root is not None else Path(__file__).parent
+    sources = []
+    for name in IMPLEMENTATION_SOURCES:
+        content = (root / name).read_bytes()
+        content.decode("utf-8", errors="strict")
+        canonical = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        sources.append(QAImplementationSourceV2(relative_source_path=name,
+                       canonical_source_sha256=sha256_bytes(canonical)))
+    return QAImplementationIdentityV2(sources=sources,
+        sha256=_identity_digest(IMPLEMENTATION_CONTRACT_VERSION, sources))
+
+
+class FinalVideoQAReportV3(FinalVideoQAReportV2):
+    schema_version: Literal["final-video-qa/1.2"] = "final-video-qa/1.2"
+    qa_owner_version: Literal["1.2"] = QA_OWNER_VERSION
+    implementation_identity: QAImplementationIdentityV2
+
+    @model_validator(mode="after")
+    def digest_matches_identity(self):
+        if self.implementation_sha256 != self.implementation_identity.sha256:
+            raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_DIGEST_INVALID")
+        return self
+
+
 def _implementation_sha256():
-    root = Path(__file__).parent
-    return sha256_bytes(b"\0".join((root / name).read_bytes() for name in (
-        "final_video_qa.py", "final_video_probe.mjs",
-    )))
+    return qa_implementation_identity().sha256
 
 
 def _qa_report(path):
@@ -98,6 +150,8 @@ def _qa_report(path):
         return FinalVideoQAReportV1.model_validate_json(path.read_text(encoding="utf-8"))
     if raw.get("schema_version") == "final-video-qa/1.1":
         return FinalVideoQAReportV2.model_validate_json(path.read_text(encoding="utf-8"))
+    if raw.get("schema_version") == "final-video-qa/1.2":
+        return FinalVideoQAReportV3.model_validate_json(path.read_text(encoding="utf-8"))
     raise ValueError("FINAL_VIDEO_QA_VERSION_UNSUPPORTED")
 
 
@@ -514,20 +568,43 @@ def _qa_inputs_match(qa, registry, candidate, request, candidate_sha):
 
 
 def _current_qa(registry, name):
+    """Validate historical attempt links, independently of implementation upgrades."""
     qa = _qa_report(_path(registry, name))
+    number = 1 if name == "final_video_qa.json" else int(name.removeprefix("final_video_qa_attempt_").removesuffix(".json"))
     if isinstance(qa, FinalVideoQAReportV2):
-        number = _latest_qa_number(registry)
         if qa.attempt_number != number:
             raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
-        if qa.implementation_sha256 != _implementation_sha256():
-            raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_STALE")
         if number > 1:
             expected_path = _qa_name(number - 1)
             if qa.previous_qa.path != expected_path or qa.previous_qa.sha256 != registry.manifest.artifacts[expected_path].content_hash:
                 raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
-    elif _latest_qa_number(registry) != 1:
+    elif number != 1:
         raise ValueError("FINAL_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
     return qa
+
+
+def _implementation_status(qa) -> Literal["current", "superseded", "unknown"]:
+    if isinstance(qa, FinalVideoQAReportV3):
+        return "current" if qa.implementation_sha256 == _implementation_sha256() else "superseded"
+    if isinstance(qa, FinalVideoQAReportV2):
+        return "superseded"
+    return "unknown"
+
+
+def qa_execution_identity(qa_path: Path) -> dict:
+    qa = _qa_report(Path(qa_path))
+    if isinstance(qa, FinalVideoQAReportV3):
+        return qa.implementation_identity.model_dump(mode="json")
+    return {"implementation_contract_version": "final-video-qa-implementation/1.0",
+            "sha256": getattr(qa, "implementation_sha256", None)}
+
+
+def derive_final_video_qa_implementation_status(run_dir: Path) -> Literal["current", "superseded", "unknown"]:
+    registry = _registry(Path(run_dir))
+    try:
+        return _implementation_status(_current_qa(registry, _qa_name(_latest_qa_number(registry))))
+    except (ValueError, OSError):
+        return "unknown"
 
 
 def _node_tools(node_path=None, puppeteer_module=None, browser_path=None):
@@ -565,8 +642,7 @@ def run_final_video_qa(
             raise ArtifactConflictError("FINAL_VIDEO_QA_EXPECTED_PREVIOUS_HASH_MISMATCH")
         if not _qa_inputs_match(old, registry, candidate, request, candidate_sha):
             raise ArtifactConflictError("FINAL_VIDEO_QA_PREVIOUS_INPUT_BINDING_MISMATCH")
-        if old.result != "failed" or (isinstance(old, FinalVideoQAReportV2)
-                                     and old.implementation_sha256 == _implementation_sha256()):
+        if old.result != "failed" or _implementation_status(old) == "current":
             raise ArtifactConflictError("FINAL_VIDEO_QA_ALREADY_EXISTS")
         if registry.manifest.artifacts["human_final_video_review.json"].status != "missing":
             raise ArtifactConflictError("FINAL_VIDEO_QA_HUMAN_REVIEW_ALREADY_EXISTS")
@@ -589,7 +665,8 @@ def run_final_video_qa(
     )
     node, puppeteer, browser = _node_tools(node_path, puppeteer_module, browser_path)
     ffprobe = _ffprobe_tool(node, ffprobe_path)
-    implementation_sha = _implementation_sha256()
+    implementation_identity = qa_implementation_identity()
+    implementation_sha = implementation_identity.sha256
     with tempfile.TemporaryDirectory(prefix="fanglei-final-video-qa-") as temporary:
         sample_path = Path(temporary) / "samples.json"
         sample_path.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
@@ -693,8 +770,9 @@ def run_final_video_qa(
         checks.append(_check("browser_media_load", False, "Browser could not load a media candidate.", {"final": final_probe.get("error"), "preview": preview_probe.get("error")}))
     else:
         checks.append(_check("browser_media_load", True, "Browser loaded both media candidates.", {"final": final_probe, "preview": preview_probe}))
-    report = FinalVideoQAReportV2(
+    report = FinalVideoQAReportV3(
         attempt_number=number, previous_qa=previous, implementation_sha256=implementation_sha,
+        implementation_identity=implementation_identity,
         run_id=candidate.run_id, case_id=candidate.case_id,
         media=ArtifactBinding(path="final.mp4", sha256=registry.manifest.artifacts["final.mp4"].content_hash),
         candidate=ArtifactBinding(path="final_video_candidate.json", sha256=candidate_sha),
@@ -771,11 +849,35 @@ def validate_human_final_video_review_entry(run_dir: Path) -> HumanFinalVideoRev
         raise ValueError("FINAL_VIDEO_QA_NOT_PASSED")
     if not _qa_inputs_match(qa, registry, candidate, request, candidate_sha):
         raise ValueError("FINAL_VIDEO_QA_APPROVED_INPUT_BINDING_MISMATCH")
+    if _implementation_status(qa) != "current":
+        raise ValueError("FINAL_VIDEO_QA_IMPLEMENTATION_NOT_CURRENT")
     return HumanFinalVideoReviewEntryV1(
         run_id=candidate.run_id, case_id=candidate.case_id, candidate_sha256=candidate_sha,
         qa_sha256=qa_state.content_hash,
         request_sha256=registry.manifest.artifacts["final_render_request.json"].content_hash,
     )
+
+
+def validate_existing_human_final_video_approval(run_dir: Path) -> HumanFinalVideoReviewV1:
+    """Validate the exact recorded decision, never reopen it against newer code."""
+    registry, candidate, request, candidate_sha = _registry_candidate(Path(run_dir).resolve())
+    name = "human_final_video_review.json"
+    registry.validate(name)
+    review = HumanFinalVideoReviewV1.model_validate_json(_path(registry, name).read_text(encoding="utf-8"))
+    qa_names = [dep for dep in registry.manifest.artifacts[name].dependencies
+                if dep == "final_video_qa.json" or dep.startswith("final_video_qa_attempt_")]
+    if len(qa_names) != 1:
+        raise ValueError("HUMAN_FINAL_VIDEO_REVIEW_QA_BINDING_INVALID")
+    qa_name = qa_names[0]
+    registry.validate(qa_name)
+    qa = _current_qa(registry, qa_name)
+    if (review.decision != "approved" or review.run_id != candidate.run_id
+        or review.case_id != candidate.case_id or review.candidate_sha256 != candidate_sha
+        or review.request_sha256 != registry.manifest.artifacts["final_render_request.json"].content_hash
+        or review.qa_sha256 != registry.manifest.artifacts[qa_name].content_hash
+        or qa.result != "passed" or not _qa_inputs_match(qa, registry, candidate, request, candidate_sha)):
+        raise ValueError("HUMAN_FINAL_VIDEO_REVIEW_APPROVED_BINDING_INVALID")
+    return review
 
 
 def record_human_final_video_review(

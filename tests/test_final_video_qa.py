@@ -182,6 +182,9 @@ def test_real_synthetic_media_passes_qa_without_mutating_candidate(source_run, s
     qa_path = run_final_video_qa(source_run)
     qa = json.loads(qa_path.read_text(encoding="utf-8"))
     assert qa["result"] == "passed"
+    assert qa["schema_version"] == "final-video-qa/1.2"
+    assert qa["implementation_identity"]["implementation_contract_version"] == "final-video-qa-implementation/2.0"
+    assert qa["implementation_identity"]["sha256"] == qa["implementation_sha256"]
     assert qa["candidate"]["sha256"] == candidate_sha
     assert {row["check_id"] for row in qa["checks"]} >= {
         "full_media_decode", "video_stream", "audio_stream", "scene_coverage",
@@ -394,6 +397,7 @@ def test_changed_qa_implementation_closes_current_review_gate(source_run, synthe
     _ready_candidate(source_run, synthetic_media['matching'], synthetic_media['preview'])
     owner.run_final_video_qa(source_run)
     monkeypatch.setattr(owner, '_implementation_sha256', lambda: 'f' * 64)
-    assert owner.derive_final_video_qa_status(source_run) == 'stale'
-    with pytest.raises(ValueError, match='IMPLEMENTATION_STALE'):
+    assert owner.derive_final_video_qa_status(source_run) == 'passed'
+    assert owner.derive_final_video_qa_implementation_status(source_run) == 'superseded'
+    with pytest.raises(ValueError, match='IMPLEMENTATION_NOT_CURRENT'):
         owner.validate_human_final_video_review_entry(source_run)
