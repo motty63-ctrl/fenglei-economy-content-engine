@@ -1,6 +1,6 @@
 # Project State
 
-## 当前状态 — V0.2_ACCEPTED
+## 当前状态 — V0.2_ACCEPTED · MERGED_TO_MAIN
 
 **Case 2 production COMPLETE · Human Final Video Review APPROVED · Public packaging complete**
 
@@ -8,7 +8,8 @@ V0.2 已在 BLS August 2026 Employment Situation 第二真实案例上完成通�
 
 | 当前验收对象 | 状态 / 身份 |
 |---|---|
-| 分支与验收基线 | `v0.2/generalize-video-workflow`；`6a697d9c7d7790daf1da2fd0b02d6460487900bb`，不是后续包装 commit 的 HEAD |
+| 当前分支与合并身份 | `main`；[PR #2](https://github.com/motty63-ctrl/fenglei-economy-content-engine/pull/2) 以 Create a merge commit 合并，merge commit：`ee4c20c0eb0317a94ef09856afa2c1ecd63d185c` |
+| 历史开发与验收基线 | 保留 `v0.2/generalize-video-workflow`；原 head：`0b1f9c253236ff121f63ab01b09ed979b8746a64`；验收基线：`6a697d9c7d7790daf1da2fd0b02d6460487900bb`，不作为当前 HEAD |
 | BLS Final Media | `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`；58.710s、1080×1920、30 FPS、H.264/AAC、9 scenes、12 cues |
 | Immutable Final Candidate | `52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`；不覆写创建快照中的 pending 字段 |
 | 独立 Final QA Attempt 2 | `ab520249af764b3f8823bee8aea066e22b152309785e06379205ca4acb1746ce`；PASSED、20/20；失败 Attempt 1 保留 |
@@ -21,7 +22,7 @@ V0.2 已在 BLS August 2026 Employment Situation 第二真实案例上完成通�
 
 当前限制：pause-refined sentence timing，不是词级强制对齐；静态 SVG + programmatic motion；在线 providers / 媒体工具需配置；需要人工内容决策；无社交自动发布。Final media 保留获批 renderer 的审阅标识，未借包装阶段改写视频。完整限制保留在验收材料中。
 
-公开包装已更新 [README](../README.md)、当前状态与 [发布准备清单](v0.2/RELEASE_READINESS.md)。本次 docs 路径可正常安全写入，状态 reconciliation 已完成。V0.2 分支尚未合并到 main，尚未创建 tag / Release 或发布 BLS MP4；本次包装 commit 不 push。V0.1.0 Release 与既有媒体保持不变。下一步是人工 merge 决策，不是继续开发或重新生成视频。
+公开包装已更新 [README](../README.md)、当前状态与 [发布准备清单](v0.2/RELEASE_READINESS.md)。2026-10-03，V0.2 已通过 PR #2 合并到 main；post-merge 文档 reconciliation 已完成。尚未创建 `v0.2.0` tag / Release 或发布 BLS MP4；本次文档 commit 不 push。V0.1.0 Release 与既有媒体保持不变，accepted Case 2 Final Media / Candidate 继续冻结。下一步是 **V0.2.0 Release Packaging**，不是继续开发或重新生成 accepted 视频。
 
 ## Historical Phase 3C.6A — Final Render contract ready, export not started
 

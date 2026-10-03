@@ -7,7 +7,7 @@
 
 **AI 可以参与研究、表达和创意，但不能自己决定未经验证的事实是否可以进入最终内容。** 系统在下游使用事实前检查资格，在关键制作节点记录人工决定，并用内容 hash 和依赖关系检查批准是否仍然有效。
 
-**V0.2 已验证：**在 Federal Reserve 首个视频 MVP 的基础上，同一套通用工作流完成了 BLS 第二个真实经济案例，没有新增 BLS 专用生产分支。BLS 最终视频已获人工批准，工作流已验收；分支尚未合并，V0.2 尚未公开发布。
+**V0.2 已验证：**在 Federal Reserve 首个视频 MVP 的基础上，同一套通用工作流完成了 BLS 第二个真实经济案例，没有新增 BLS 专用生产分支。V0.2 已通过 PR #2 合并到 main；BLS 最终视频已获人工批准并完成工作流验收，但 v0.2.0 tag / Release 与 BLS 视频公开发布尚未执行。
 
 ▶ [查看 / 下载 Fed 视频（v0.1.0 Release）](https://github.com/motty63-ctrl/fenglei-economy-content-engine/releases/tag/v0.1.0)
 📋 [BLS V0.2 验收记录](cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md) · [最终视频审阅记录](cases/bls-aug-2026-employment/FINAL_VIDEO_REVIEW.md)

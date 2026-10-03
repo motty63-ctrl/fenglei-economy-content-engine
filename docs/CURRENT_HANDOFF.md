@@ -1,18 +1,18 @@
 # Current Handoff
 
-## 当前交接 — V0.2 已验收，公开包装完成
+## 当前交接 — V0.2 已验收并合并到 main
 
-**`V0.2_ACCEPTED` · Case 2 production COMPLETE · Human Final Video Review APPROVED**
+**`V0.2_ACCEPTED` · `MERGED_TO_MAIN` · Case 2 production COMPLETE · Human Final Video Review APPROVED**
 
 截至 2026-10-02，BLS 第二真实案例已完成 canonical Final Render、immutable Final Candidate、独立 Final Video QA 与人工终审。正式验收记录在 [V0_2_ACCEPTANCE_REVIEW.md](../cases/bls-aug-2026-employment/V0_2_ACCEPTANCE_REVIEW.md)，视频审阅记录在 [FINAL_VIDEO_REVIEW.md](../cases/bls-aug-2026-employment/FINAL_VIDEO_REVIEW.md)。下面的 Phase 3C.6A / 3C.5 等记录描述当时状态，不再是当前下一步。
 
-- 当前分支：`v0.2/generalize-video-workflow`；验收基线 commit：`6a697d9c7d7790daf1da2fd0b02d6460487900bb`。包装前与远端同分支同步，相对 `main` 为 ahead 47 / behind 0；包装 commit 仅在本地，具体 HEAD 以 Git 为准。
+- 当前分支：`main`。2026-10-03 已通过 [PR #2](https://github.com/motty63-ctrl/fenglei-economy-content-engine/pull/2) 以 Create a merge commit 合并；merge commit：`ee4c20c0eb0317a94ef09856afa2c1ecd63d185c`，原 V0.2 head：`0b1f9c253236ff121f63ab01b09ed979b8746a64`。验收基线 `6a697d9c7d7790daf1da2fd0b02d6460487900bb` 保留为历史身份，不是当前 HEAD；开发分支保留。具体 HEAD / ahead-behind 以 Git 为准。
 - BLS Final：58.710s、1080×1920、30 FPS、H.264/AAC、9 scenes、12 subtitle cues；SHA-256 `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`。Final QA Attempt 2 为 PASSED、20/20，失败 Attempt 1 保留；人工终审 APPROVED。
 - 最新已记录验证：相关 MP4/QA focused **57 passed**；safe non-integration **1018 passed、3 skipped、0 failures/errors**。3 个 renderer-level 配置相关 skips 不算通过，不包含 integration suite。
 - [README](../README.md) 已展示 Fed/BLS 两案例、V0.2 门禁、真实测试边界与当前限制。docs 路径在本次环境可正常安全写入，当前状态已同步；此前 deferred 记录仍保留在历史审计材料中。
-- V0.1.0 Fed Release 保持冻结且公开；BLS 视频仍是本地 ignored 产物，尚未合并、tag、创建 V0.2 Release 或发布 BLS 媒体。本次没有 push。
+- V0.1.0 Fed Release 保持冻结且公开；V0.2 已合并到 main，BLS 视频仍是本地 ignored 产物，尚未创建 `v0.2.0` tag / Release 或发布 BLS 媒体。本次仅做 post-merge 文档协调，不 push。
 
-**Exact next action：人工决定是否将包装完成的 V0.2 分支合并到 main。** 之后再单独决定 `v0.2.0` tag、Release 和 BLS asset 发布；本次验收和包装不授权这些操作。准备清单见 [RELEASE_READINESS.md](v0.2/RELEASE_READINESS.md)。
+**Exact next action：V0.2.0 Release Packaging。** 单独决定 BLS 视频发布形式、是否原样发布或制作去除审阅标签的 publication-only copy，以及 `v0.2.0` tag、Release 和 asset 范围；本次文档协调不授权这些操作。准备清单见 [RELEASE_READINESS.md](v0.2/RELEASE_READINESS.md)。
 
 ## Historical Phase 3C.6A — Final Render contract ready, export not started
 

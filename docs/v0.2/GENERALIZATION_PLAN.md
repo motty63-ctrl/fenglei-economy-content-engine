@@ -1,6 +1,6 @@
 # V0.2 Workflow Generalization Plan
 
-## Current closeout — V0.2_ACCEPTED
+## Current closeout — V0.2_ACCEPTED · MERGED_TO_MAIN
 
 **Case 2 production COMPLETE · Human Final Video Review APPROVED · Public packaging complete**
 
@@ -16,9 +16,9 @@
 | Legacy / Fed 兼容及测试 | V0.1.0 Release 冻结；最新 MP4/QA focused 57 passed，safe non-integration 1018 passed / 3 skipped / 0 failures/errors，skips 不算通过且不含 integration |
 | 真实限制公开 | pause-refined sentence timing；静态 SVG + motion；provider / 媒体工具配置；人工门禁；无自动社交发布 |
 
-当前分支为 `v0.2/generalize-video-workflow`，验收基线 `6a697d9c7d7790daf1da2fd0b02d6460487900bb`。README 已由 Fed-only MVP 展示更新为两个真实案例验证；docs 当前状态已通过正常安全写入同步，未改历史审批/验收 packets。准备状态见 [RELEASE_READINESS.md](RELEASE_READINESS.md)。
+当前分支为 `main`；2026-10-03 已通过 [PR #2](https://github.com/motty63-ctrl/fenglei-economy-content-engine/pull/2) 合并，merge commit：`ee4c20c0eb0317a94ef09856afa2c1ecd63d185c`。原 V0.2 head `0b1f9c253236ff121f63ab01b09ed979b8746a64` 与验收基线 `6a697d9c7d7790daf1da2fd0b02d6460487900bb` 保留为历史身份；开发分支保留。README 已展示两个真实案例，docs 当前状态已同步，未改历史审批/验收 packets。准备状态见 [RELEASE_READINESS.md](RELEASE_READINESS.md)。
 
-**Next action：human merge decision。** V0.2 acceptance 不等于发布；尚未 merge / tag / 创建 V0.2 Release / 发布 BLS 视频，本次不 push。Phase 4/5 的视觉升级与词级对齐保留为未来选项，不是当前 V0.2 的阻塞项或已交付能力。
+**Next action：V0.2.0 Release Packaging。** V0.2 acceptance 和 main 合并均已完成，accepted Case 2 Final Media / Candidate 保持冻结；尚无 `v0.2.0` tag / Release，BLS 媒体尚未公开发布，本次文档协调不 push。Phase 4/5 的视觉升级与词级对齐保留为未来选项，不是当前 V0.2 的阻塞项或已交付能力。
 
 ## Historical Phase 0 purpose and scope
 
