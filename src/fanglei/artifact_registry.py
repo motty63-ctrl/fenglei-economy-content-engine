@@ -500,6 +500,7 @@ class ArtifactRegistry:
         final_render_mode: bool = False,
         final_preview_candidate_id: int | None = None,
         final_qa_attempt: int | None = None,
+        publication_package_mode: bool = False,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -658,6 +659,22 @@ class ArtifactRegistry:
                         raise ArtifactConflictError("FINAL_VIDEO_QA_ATTEMPT_SEQUENCE_INVALID")
                     latest = final_qa_attempt
                 self.graph = _final_render_graph(self.graph, candidate_id, latest)
+                if publication_package_mode or any(
+                    name in manifest.artifacts or (self.run_dir / name).exists()
+                    for name in ("renderer_project_publication", "publication_renderer_package.json")
+                ):
+                    # Only new descendants; accepted Final history never depends on publication.
+                    dependencies = tuple(dict.fromkeys((
+                        "final_video_candidate.json", "final.mp4", "human_final_video_review.json",
+                        "final_render_request.json", "renderer_project_final", "render_manifest_final.json",
+                        *self.graph["final_render_request.json"][1],
+                    )))
+                    self.graph["renderer_project_publication"] = ("publication_package", dependencies)
+                    self.graph["publication_renderer_package.json"] = (
+                        "publication_package", ("renderer_project_publication", *dependencies),
+                    )
+            elif publication_package_mode:
+                raise ArtifactConflictError("PUBLICATION_REQUIRES_FINAL_RENDER_GRAPH")
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})

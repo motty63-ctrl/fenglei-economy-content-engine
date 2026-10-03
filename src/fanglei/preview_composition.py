@@ -2,6 +2,27 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
+
+
+REVIEW_OVERLAYS = (
+    '<div class="preview-label">PREVIEW · NOT FINAL</div>',
+    '<div id="review-required">HUMAN REVIEW REQUIRED</div>',
+)
+
+
+def apply_presentation_mode(html: str, presentation_mode: Literal["review", "publication"] = "review") -> str:
+    """Change only owner-defined review overlay nodes in a frozen composition."""
+    if presentation_mode not in ("review", "publication"):
+        raise ValueError("PRESENTATION_MODE_UNSUPPORTED")
+    if presentation_mode == "review":
+        return html
+    for overlay in REVIEW_OVERLAYS:
+        if html.count(overlay) != 1:
+            raise ValueError("PUBLICATION_REVIEW_OVERLAY_STRUCTURE_INVALID")
+    for overlay in REVIEW_OVERLAYS:
+        html = html.replace(overlay, "", 1)
+    return html
 
 
 REVIEW_RENDER_SCRIPT = r"""(() => {
@@ -121,11 +142,12 @@ REVIEW_RENDER_SCRIPT = r"""(() => {
 """
 
 
-def review_composition_html(scene_markup: list[str], data: dict, layout: dict, timing_status: str) -> str:
+def review_composition_html(scene_markup: list[str], data: dict, layout: dict, timing_status: str,
+                           *, presentation_mode: Literal["review", "publication"] = "review") -> str:
     """Use one canvas/timebase; measure full canonical text after browser fonts resolve."""
     width,height=layout["canvas_width"],layout["canvas_height"]
     payload=json.dumps({**data,"layout":layout},ensure_ascii=False,separators=(",", ":")).replace("</","<\\/")
-    return (
+    html = (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width={width},height={height}"><title>Local Review Preview</title><style>'
         '*{box-sizing:border-box}html,body{margin:0;padding:0;background:#171717;'
@@ -154,3 +176,4 @@ def review_composition_html(scene_markup: list[str], data: dict, layout: dict, t
         + f'<div id="status">{timing_status}</div><script type="application/json" id="preview-data">{payload}</script>'
         + '<script>'+REVIEW_RENDER_SCRIPT+'</script></body></html>\n'
     )
+    return apply_presentation_mode(html, presentation_mode)
