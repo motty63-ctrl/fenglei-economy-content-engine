@@ -91,6 +91,21 @@ Release Infra implementation 已通过验证，可进入 Publication Render 阶�
 
 **下一阶段：V0.2.0 Publication Render → Publication QA → Human Publication Review。**
 
+## Release Infrastructure Phase B — 通用 Publication lifecycle
+
+通用发布媒体基础设施已实现并通过验证。Publication 是已接受 Final 的单向下游副本，不是新的 Final Candidate，也不会改变 Final Candidate、Final Media、Final QA 或 Human Final Approval。
+
+- `publication-render-request/1.0` 将 publication package、renderer package、Accepted Final Candidate/Media、Human Final Approval、Final Render Request、画布/帧率/renderer 配置、媒体工具链 lock hash 和输出目标绑定在一起。输出只接受显式输入的 `release/<version>/<asset>.mp4`；Final、Preview、路径逃逸和已有输出文件均 fail closed。
+- 独立 Publication Render owner 先验证 package、Final 授权链、request、工具链与 manifest，再将渲染写入临时文件并一次性注册 Publication Media。媒体记录保存文件 SHA、长度、Publication/Final 来源身份与技术参数；媒体文件和 `publication_media.json` 均为独立注册物，重复写入会被拒绝。
+- `publication-video-qa/1.0` 是独立 QA owner，按 immutable attempt 记录结果，失败历史保留；它验证容器和完整音视频解码、格式/时长/帧数、场景/字幕、音频等价、source footer、开头结尾、字幕布局与溢出、黑帧、overlay 去除及 Accepted Final → Publication 的区域比较。当前唯一授权差异为 `review_overlay_removal`；比较区域从 source renderer composition 的 review-overlay 节点计算，并记录实际渲染帧的像素比较结果。
+- Human Publication Review 入口只在 Publication Media、当前 QA attempt、package/request 和 Accepted Final 授权链均 current 且 QA passed 时开放。review record 需要显式人工提供 `approved_for_release` 或 `changes_required`；它不记录 `published` / `released`。
+- ArtifactRegistry 的 publication 分支只依赖已接受 Final 与 publication 上游；Final 图中没有反向 publication 依赖。当前启用 Publication 模式的 registry 为 **79 nodes / acyclic**；request 指定唯一输出路径后会增加该媒体路径节点（80 nodes）。最终 graph 也由 synthetic DAG 测试覆盖。
+- Publication render / QA / human review 的逻辑使用 synthetic run 与 renderer/measurement stubs 验证。Focused：**65 passed**。短 basetemp safe non-integration regression：**1083 passed / 18 skipped / 0 failures / 0 errors**。跳过项为本机 Node/Chromium/HyperFrames 条件式 renderer/media 测试；integration suite 未纳入。
+
+当前真实 BLS run 的 publication renderer package 保持 `ready_for_publication_render`，但 **Phase B 未运行真实 Publication Render、未生成 Publication QA 或 Human Publication Review**。复核时 Accepted Final SHA 仍为 `5167703eeb0dd1855c30c2012ad0f1a44dbbed6617f27231b34332f93c723cdd`，Candidate SHA 为 `52f901cabf73ccee056a98d4a062c4412c2e82703e553ec01f66a81c4a386a93`，Final QA Attempt 2 和 Human Final Approval 也保持原 hash。没有创建 tag / GitHub Release 或上传媒体。
+
+**下一阶段：V0.2.0 BLS Publication Render → Publication QA → Human Publication Review。**
+
 ## GitHub metadata 建议（未修改设置）
 
 本轮提供的 repository description 为 `AI-powered economic explainer video workflow for Fenglei`，topics 与 LICENSE 均无。本清单记录建议，不声称重新查询远端，也不修改 GitHub 设置。
@@ -103,4 +118,4 @@ Release Infra implementation 已通过验证，可进入 Publication Render 阶�
 
 当前是经两个真实案例验证的工作流，不是任意主题的一键自动生产系统。计时为 pause-refined sentence-level，不是 word-level forced alignment；视觉为 static SVG + programmatic motion；在线服务和媒体工具需配置。规则验证与人工审核共同控制事实范围，不宣称通用自动语义证明。终审、验收、合并和公开发布是不同决定。
 
-下一步仅为 **V0.2.0 Release Packaging**。PR #2 的 main 合并已完成；本次文档协调没有 push、创建 tag / Release、BLS asset upload 或媒体重新生成。
+当前下一步仅为 **V0.2.0 BLS Publication Render → Publication QA → Human Publication Review**。人工发布审核完成后，再单独进入 V0.2.0 Release Packaging。PR #2 的 main 合并已完成；本阶段没有 push、创建 tag / Release、BLS asset upload 或真实 publication media 生成。

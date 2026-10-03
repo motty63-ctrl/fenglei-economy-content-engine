@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import json
+import re
 import shutil
 import tempfile
 
@@ -444,6 +445,99 @@ def _final_render_graph(base_graph, candidate_id: int, qa_attempt: int = 1):
     )
     return graph
 
+
+def _publication_render_graph(base_graph, manifest, run_dir: Path, qa_attempt: int | None = None):
+    """Add a one-way publication branch without making accepted Final depend on it."""
+    graph = dict(base_graph)
+    package_dependencies = (
+        "renderer_project_publication", "publication_renderer_package.json",
+        "final_video_candidate.json", "final.mp4", "human_final_video_review.json",
+        "final_render_request.json",
+    )
+    graph["publication_render_request.json"] = ("publication_render", package_dependencies)
+    graph["publication_render_manifest.json"] = (
+        "publication_render", ("publication_render_request.json", "renderer_project_publication",
+                               "publication_renderer_package.json"),
+    )
+    output_path = None
+    request_path = Path(run_dir) / "publication_render_request.json"
+    if request_path.is_file():
+        try:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            output_path = request.get("output_path")
+            parts = output_path.split("/") if isinstance(output_path, str) else []
+            if (not isinstance(output_path, str) or "\\" in output_path or ":" in output_path
+                or output_path.startswith("/") or len(parts) != 3 or parts[0] != "release"
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", parts[1])
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.mp4", parts[2])
+                or parts[2].lower() in {"final.mp4", "review-preview.mp4"}
+                or re.fullmatch(r"review-preview-candidate-\d+\.mp4", parts[2], re.I)
+                or any(part in {"", ".", ".."} for part in parts)):
+                raise ValueError
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            raise ArtifactConflictError("PUBLICATION_RENDER_OUTPUT_PATH_INVALID") from error
+        graph[output_path] = ("publication_render", (
+            "publication_render_request.json", "publication_render_manifest.json",
+            "renderer_project_publication", "publication_renderer_package.json",
+        ))
+    media_dependencies = (
+        "publication_render_request.json", "publication_render_manifest.json",
+        "publication_renderer_package.json", "final_video_candidate.json", "final.mp4",
+        "human_final_video_review.json", "final_render_request.json",
+    ) + ((output_path,) if output_path else ())
+    graph["publication_media.json"] = ("publication_render", media_dependencies)
+    timeline_path, subtitle_path, audio_path = "timeline_candidate_2.json", "subtitle_track.json", "audio/narration.wav"
+    package_path = Path(run_dir) / "publication_renderer_package.json"
+    if package_path.is_file():
+        try:
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            if not isinstance(package, dict):
+                raise ValueError
+            timeline_path = package.get("timeline", {}).get("path", timeline_path)
+            subtitle_path = package.get("subtitle", {}).get("path", subtitle_path)
+            audio_path = package.get("audio", {}).get("path", audio_path)
+            if any(not isinstance(package.get(key), dict) for key in ("timeline", "subtitle", "audio")):
+                raise ValueError
+            for item in (timeline_path, subtitle_path, audio_path):
+                if not isinstance(item, str) or "\\" in item or ":" in item or item.startswith("/") or any(
+                    part in {"", ".", ".."} for part in item.split("/")
+                ):
+                    raise ValueError
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            raise ArtifactConflictError("PUBLICATION_PACKAGE_BINDING_INVALID") from error
+    qa_inputs = tuple(dict.fromkeys((
+        "publication_media.json", "publication_render_request.json", "publication_render_manifest.json",
+        "publication_renderer_package.json", "renderer_project_publication", "final_video_candidate.json",
+        "final.mp4", "human_final_video_review.json", "final_render_request.json",
+        timeline_path, subtitle_path, audio_path,
+    ) + ((output_path,) if output_path else ())))
+    qa_names = [name for name in manifest.artifacts
+                if name == "publication_video_qa.json" or name.startswith("publication_video_qa_attempt_")]
+    attempts = sorted(
+        int(name.removeprefix("publication_video_qa_attempt_").removesuffix(".json"))
+        for name in qa_names if name.startswith("publication_video_qa_attempt_")
+        and name.removeprefix("publication_video_qa_attempt_").removesuffix(".json").isdigit()
+    )
+    if attempts and attempts != list(range(2, attempts[-1] + 1)):
+        raise ArtifactConflictError("PUBLICATION_VIDEO_QA_ATTEMPT_CHAIN_INVALID")
+    latest_number = attempts[-1] if attempts else 1
+    latest_name = "publication_video_qa.json" if latest_number == 1 else f"publication_video_qa_attempt_{latest_number}.json"
+    if qa_attempt is not None and qa_attempt not in (latest_number, latest_number + 1):
+        raise ArtifactConflictError("PUBLICATION_VIDEO_QA_ATTEMPT_SEQUENCE_INVALID")
+    target_attempt = latest_number if qa_attempt is None else qa_attempt
+    for number in range(1, max(latest_number, target_attempt) + 1):
+        name = "publication_video_qa.json" if number == 1 else f"publication_video_qa_attempt_{number}.json"
+        dependencies = qa_inputs if number == 1 else qa_inputs + (latest_name,)
+        graph[name] = ("publication_video_qa", dependencies)
+        latest_name = name
+    graph["human_publication_review.json"] = (
+        "human_publication_review", ("publication_media.json", latest_name,
+            "publication_render_request.json", "publication_renderer_package.json",
+            "final_video_candidate.json", "final.mp4", "human_final_video_review.json",
+            "final_render_request.json"),
+    )
+    return graph
+
 # Checkpoint imports enter the graph after research and script approval. Keep the
 # ordinary graph above byte-for-byte unchanged; the importer opts into this
 # separate profile through the checkpoint_import manifest stage.
@@ -501,6 +595,8 @@ class ArtifactRegistry:
         final_preview_candidate_id: int | None = None,
         final_qa_attempt: int | None = None,
         publication_package_mode: bool = False,
+        publication_render_mode: bool = False,
+        publication_qa_attempt: int | None = None,
     ):
         self.run_dir = Path(run_dir)
         self.manifest = manifest
@@ -675,6 +771,17 @@ class ArtifactRegistry:
                     )
             elif publication_package_mode:
                 raise ArtifactConflictError("PUBLICATION_REQUIRES_FINAL_RENDER_GRAPH")
+            publication_render_enabled = publication_render_mode or any(
+                name in manifest.artifacts or (self.run_dir / name).exists()
+                for name in ("publication_render_request.json", "publication_media.json",
+                             "publication_video_qa.json", "human_publication_review.json")
+            )
+            if publication_render_enabled:
+                if not final_enabled:
+                    raise ArtifactConflictError("PUBLICATION_REQUIRES_FINAL_RENDER_GRAPH")
+                self.graph = _publication_render_graph(
+                    self.graph, manifest, self.run_dir, publication_qa_attempt,
+                )
         for name, (owner, dependencies) in self.graph.items():
             state = self.manifest.artifacts.setdefault(
                 name, ArtifactState(owner=owner, dependencies={dep: "" for dep in dependencies})
